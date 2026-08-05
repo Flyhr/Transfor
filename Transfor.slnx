@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Transfor/Transfor.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Transfor.Tests/Transfor.Tests.csproj" />
+  </Folder>
+</Solution>
