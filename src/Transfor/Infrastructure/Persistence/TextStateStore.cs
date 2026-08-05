@@ -48,8 +48,31 @@ internal sealed class TextStateStore : ITextHistoryRepository
     // 清空指定工具的历史并立即落盘
     public void ClearHistory(TextToolId tool) { GetList(tool).Clear(); SaveHistory(); }
 
-    // 更新设置并立即落盘（同时按新上限重新裁剪历史）
-    public void UpdateSettings(AppSettings settings) { settings.Validate(); Settings = settings; Trim(); SaveSettings(); SaveHistory(); }
+    // 更新设置并立即落盘（同时按新上限重新裁剪历史）；
+    // 任一写入失败时恢复原内存设置与裁剪结果，并向调用方抛出原异常
+    public void UpdateSettings(AppSettings settings)
+    {
+        settings.Validate();
+        var previousSettings = Settings;
+        var previousQuote = quote.ToArray();
+        var previousSpace = space.ToArray();
+        Settings = settings;
+        Trim();
+        try
+        {
+            SaveSettings();
+            SaveHistory();
+        }
+        catch
+        {
+            Settings = previousSettings;
+            quote.Clear();
+            quote.AddRange(previousQuote);
+            space.Clear();
+            space.AddRange(previousSpace);
+            throw;
+        }
+    }
 
     // 记录最近查看的工具并立即落盘界面状态
     public void SetLastViewedTool(TextToolId tool) { var state = new TextUiState(tool); state.Validate(); UiState = state; SaveUiState(); }

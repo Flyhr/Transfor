@@ -192,11 +192,10 @@ internal sealed class SettingsForm : Form
                 return;
             }
 
-            // 持久化设置；失败时把热键回滚为旧值
+            // 持久化设置（UpdateSettings 内部已落盘）；失败时把热键回滚为旧值
             try
             {
                 historyStore.UpdateSettings(nextSettings);
-                historyStore.Save();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -222,10 +221,10 @@ internal sealed class SettingsForm : Form
             return;
         }
 
-        historyStore.ClearHistory(tool);
+        // 清空指定工具的历史（ClearHistory 内部已落盘）
         try
         {
-            historyStore.Save();
+            historyStore.ClearHistory(tool);
             errorLabel.Text = string.Empty;
         }
         catch (IOException ex)

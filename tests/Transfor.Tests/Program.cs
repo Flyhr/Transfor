@@ -52,8 +52,10 @@ TestTextToolDefinition();
 TestHotKeyBinding();
 TestHistoryStore();
 TestPasteCoordinator();
+TestMutationsPersistWithoutExplicitSave();
+TestUpdateSettingsRollsBackOnWriteFailure();
 
-Console.WriteLine($"All {quoteCases.Length + spaceCases.Length + 20} tests passed.");
+Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
 // 场景：迁移中断后恢复 —— 旧状态可读时重试迁移；新版状态完整时清除迁移标记
 static void TestPendingMigrationRecovery()
@@ -269,15 +271,75 @@ static void TestPasteCoordinator()
     AssertEqual(string.Empty, string.Join(",", noWindowCalls), "missing target window stops all operations");
 }
 
+// 场景：状态修改方法无需显式 Save 即持久化（UI 不再调用全量 Save）
+static void TestMutationsPersistWithoutExplicitSave()
+{
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var store = TextStateStore.Load(new AppPaths(root));
+        store.Add(new HistoryEntry(TextToolId.QuoteConversion, "in", "out", DateTimeOffset.UtcNow));
+        var reloaded = TextStateStore.Load(new AppPaths(root));
+        AssertEqual(1, reloaded.GetHistory(TextToolId.QuoteConversion).Count, "add persists without Save()");
+
+        reloaded.SetLastViewedTool(TextToolId.SpaceRemoval);
+        var reloaded2 = TextStateStore.Load(new AppPaths(root));
+        AssertEqual(TextToolId.SpaceRemoval, reloaded2.UiState.LastViewedTool, "set-last-viewed persists without Save()");
+
+        reloaded2.UpdateSettings(reloaded2.Settings with { QuoteHistoryLimit = 7 });
+        var reloaded3 = TextStateStore.Load(new AppPaths(root));
+        AssertEqual(7, reloaded3.Settings.QuoteHistoryLimit, "update-settings persists without Save()");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+// 场景：UpdateSettings 写入失败时回滚内存设置与裁剪结果
+static void TestUpdateSettingsRollsBackOnWriteFailure()
+{
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        // 用同名目录占位 settings.json，使 SaveSettings 的 File.Move 必然失败
+        Directory.CreateDirectory(Path.Combine(root, "settings.json"));
+
+        var store = TextStateStore.Load(new AppPaths(root));
+        for (var i = 0; i < 10; i++)
+        {
+            store.Add(new HistoryEntry(TextToolId.QuoteConversion, i.ToString(), i.ToString(), DateTimeOffset.UtcNow));
+        }
+
+        var oldSettings = store.Settings;
+        var writeFailed = false;
+        try
+        {
+            store.UpdateSettings(oldSettings with { QuoteHistoryLimit = 5 });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            writeFailed = true;
+        }
+        AssertEqual(true, writeFailed, "write failure propagates");
+        AssertEqual(oldSettings.QuoteHistoryLimit, store.Settings.QuoteHistoryLimit, "settings rolled back on write failure");
+        AssertEqual(10, store.GetHistory(TextToolId.QuoteConversion).Count, "history trim rolled back on write failure");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
 // 通用断言：相等则通过，否则抛出带用例名的异常
 static void AssertEqual<T>(T expected, T actual, string name)
 {
-    if (EqualityComparer<T>.Default.Equals(expected, actual))
-    {
-        return;
-    }
+    if (!EqualityComparer<T>.Default.Equals(expected, actual))
+        throw new InvalidOperationException($"{name}: expected={expected}, actual={actual}");
 
-    throw new InvalidOperationException($"{name} failed. Expected: {expected}; Actual: {actual}");
+    TestCounter.Passed++;
 }
 
 // 通用断言：期望 action 抛出指定类型的异常
@@ -290,10 +352,17 @@ static void AssertThrows<TException>(Action action, string name)
     }
     catch (TException)
     {
+        TestCounter.Passed++;
         return;
     }
 
     throw new InvalidOperationException($"{name} failed. Expected {typeof(TException).Name}.");
+}
+
+// 断言计数器（顶层语句中静态本地函数无法捕获局部变量，故用静态类承载）
+static class TestCounter
+{
+    public static int Passed;
 }
 
 // 测试辅助：按旧版 state.json 的格式写入测试数据

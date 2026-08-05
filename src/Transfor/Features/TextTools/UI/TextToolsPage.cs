@@ -69,14 +69,13 @@ internal sealed class TextToolsPage : UserControl, IFeaturePage
     // 用当前工具转换输入并刷新结果；有结果时启用复制按钮
     private void UpdateOutput() { outputTextBox.Text = currentTool.Convert(inputTextBox.Text); copyButton.Enabled = outputTextBox.TextLength > 0; }
 
-    // 复制结果到剪贴板，成功后把本次转换记入历史并保存
+    // 复制结果到剪贴板，成功后把本次转换记入历史（Add 内部已落盘）
     private void CopyButton_Click(object? sender, EventArgs e)
     {
         if (outputTextBox.TextLength == 0) return;
         try { Clipboard.SetText(outputTextBox.Text); }
         catch (Exception ex) when (ex is ExternalException or ThreadStateException or InvalidOperationException) { MessageBox.Show(this, $"写入系统剪贴板失败：{ex.Message}", "复制失败", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
-        historyStore.Add(new HistoryEntry(currentTool.Id, inputTextBox.Text, outputTextBox.Text, DateTimeOffset.UtcNow));
-        try { historyStore.Save(); }
+        try { historyStore.Add(new HistoryEntry(currentTool.Id, inputTextBox.Text, outputTextBox.Text, DateTimeOffset.UtcNow)); }
         catch (IOException ex) { MessageBox.Show(this, $"历史记录保存失败：{ex.Message}", "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
     }
 }

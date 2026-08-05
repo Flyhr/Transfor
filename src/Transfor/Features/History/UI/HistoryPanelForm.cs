@@ -130,10 +130,9 @@ internal sealed class HistoryPanelForm : Form
         RefreshHistory();
         if (historyStore.UiState.LastViewedTool != tool)
         {
-            historyStore.SetLastViewedTool(tool);
             try
             {
-                historyStore.Save();
+                historyStore.SetLastViewedTool(tool);
             }
             catch (IOException ex)
             {

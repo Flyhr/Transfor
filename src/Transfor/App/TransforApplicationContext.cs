@@ -21,7 +21,9 @@ internal sealed class TransforApplicationContext : ApplicationContext
         this.services = services;
         historyStore = services.State;
         hotKeyManager = services.HotKeys;
-        mainForm = new MainForm(historyStore);
+        // 由页面集合构造主窗口外壳（后续任务会加入媒体下载页）
+        var pages = new IFeaturePage[] { new TextToolsPage(services.State) };
+        mainForm = new MainForm(pages);
         historyPanel = new HistoryPanelForm(
             historyStore,
             services.PasteCoordinator);
@@ -71,7 +73,6 @@ internal sealed class TransforApplicationContext : ApplicationContext
             try
             {
                 historyStore.UpdateSettings(historyStore.Settings with { HistoryHotKey = HotKeyBinding.Default });
-                historyStore.Save();
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
