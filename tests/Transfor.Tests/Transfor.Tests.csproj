@@ -11,4 +11,8 @@
     <ProjectReference Include="..\..\src\Transfor\Transfor.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Fixtures\MediaDownload\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

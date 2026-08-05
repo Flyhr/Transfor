@@ -22,9 +22,10 @@ internal static class AppBootstrapper
         var browserSessions = new BrowserSessionAccessorProxy();
         // 下载服务：流式 + 安全链路；Cookie 源经代理（未启用浏览器时为空）
         var downloadService = new MediaDownloadService(requestSender, browserSessions);
-        // 解析器注册：Direct 兜底；专用解析器（抖音）由任务 11 接入
+        // 解析器注册：专用解析器（抖音）优先，Direct 最后兜底
         var registry = new MediaResolverRegistry(new IMediaResolver[]
         {
+            new DouyinMediaResolver(new DouyinHttpPageResolver(requestSender), browserSessions),
             new DirectMediaResolver(requestSender),
         });
         var resolveCoordinator = new MediaResolveCoordinator(registry);

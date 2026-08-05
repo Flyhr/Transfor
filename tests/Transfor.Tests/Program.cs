@@ -74,6 +74,9 @@ TestDirectMediaResolver();
 TestMediaDownloadPage();
 TestMediaServicesLifecycle();
 TestBrowserProxy();
+TestDouyinPageParser();
+TestDouyinMediaNormalizer();
+TestDouyinMediaResolver();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
@@ -1306,6 +1309,118 @@ static void TestBrowserProxy()
     AssertEqual(false, proxy.IsAvailable, "proxy unavailable after dispose");
 }
 
+// 场景：抖音页面解析（本地 fixture，不访问网络）
+static void TestDouyinPageParser()
+{
+    static string ReadFixture(string name) =>
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "MediaDownload", name));
+
+    var video = DouyinPageParser.Parse(ReadFixture("douyin-video-page.html"));
+    AssertEqual("7123456789012345678", video.PostId, "video post id");
+    AssertEqual("fixture 视频标题", video.Title, "video title");
+    AssertEqual("fixture 作者", video.AuthorName, "video author");
+    AssertEqual(true, !video.EmptyShell && !video.LoginRequired, "video page not shell or login");
+    AssertEqual(1, video.Assets.Count, "video single asset");
+    AssertEqual(MediaKind.Video, video.Assets[0].Kind, "video asset kind");
+    AssertEqual(4, video.Assets[0].Variants.Count, "video variants (high/low/dl/cover)");
+
+    var carousel = DouyinPageParser.Parse(ReadFixture("douyin-image-carousel-page.html"));
+    AssertEqual(9, carousel.Assets.Count, "nine image assets");
+    for (var i = 0; i < 9; i++)
+    {
+        AssertEqual(i, carousel.Assets[i].OrderIndex, $"image {i + 1} order");
+    }
+    AssertEqual(2, carousel.Assets[8].Variants.Count, "ninth image two variants");
+
+    var shell = DouyinPageParser.Parse(ReadFixture("douyin-empty-shell.html"));
+    AssertEqual(true, shell.EmptyShell, "empty shell detected");
+
+    var login = DouyinPageParser.Parse(ReadFixture("douyin-login-required.html"));
+    AssertEqual(true, login.LoginRequired, "login required detected");
+
+    var removed = DouyinPageParser.Parse(ReadFixture("douyin-removed-page.html"));
+    AssertEqual(true, removed.FailureReason is not null, "removed page failure reason");
+}
+
+// 场景：抖音候选归一化（顺序保持、去重、过滤非作品媒体）
+static void TestDouyinMediaNormalizer()
+{
+    static string ReadFixture(string name) =>
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "MediaDownload", name));
+
+    var videoSource = new Uri("https://www.douyin.com/video/7123456789012345678");
+    var video = DouyinMediaNormalizer.Normalize(videoSource, DouyinPageParser.Parse(ReadFixture("douyin-video-page.html")));
+    AssertEqual(MediaProviderId.Douyin, video.Provider, "provider douyin");
+    AssertEqual(1, video.Assets.Count, "single video asset after normalize");
+    AssertEqual(MediaKind.Video, video.Assets[0].Kind, "video kind");
+    // 头像/推荐被过滤，封面保留为缩略图变体
+    AssertEqual(true, video.Assets[0].Variants.All(v => !v.Uri.ToString().Contains("avatar") && !v.Uri.ToString().Contains("recommend")), "avatar and recommend filtered");
+    AssertEqual(true, video.Assets[0].Variants.Any(v => v.Source == MediaVariantSource.Thumbnail), "cover kept as thumbnail variant");
+    AssertEqual(videoSource.ToString(), video.Assets[0].Variants[0].RequestContext.Referer?.ToString(), "referer set to page uri");
+
+    var carouselSource = new Uri("https://www.douyin.com/note/7123456789012345000");
+    var carousel = DouyinMediaNormalizer.Normalize(carouselSource, DouyinPageParser.Parse(ReadFixture("douyin-image-carousel-page.html")));
+    AssertEqual(9, carousel.Assets.Count, "nine assets in order");
+    for (var i = 0; i < 9; i++)
+    {
+        AssertEqual(i, carousel.Assets[i].Index, $"asset index {i}");
+    }
+    AssertEqual(true, carousel.Assets.All(a => a.Variants.All(v => !v.Uri.ToString().Contains("logo"))), "logo filtered");
+    AssertEqual(2, carousel.Assets[8].Variants.Count, "same-image urls grouped as variants");
+}
+
+// 场景：抖音媒体解析器（Automatic 静态 + BrowserInteractive 浏览器）
+static void TestDouyinMediaResolver()
+{
+    static string ReadFixture(string name) =>
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "MediaDownload", name));
+
+    var validator = new SafeUriValidator(new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("8.8.8.8") })));
+    var proxy = new BrowserSessionAccessorProxy();
+    var resolver = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(), validator)), proxy);
+
+    // 域名匹配：边界正确
+    AssertEqual(true, resolver.CanResolve(new Uri("https://v.douyin.com/abc/")), "douyin subdomain resolves");
+    AssertEqual(true, resolver.CanResolve(new Uri("https://www.douyin.com/video/1")), "www.douyin resolves");
+    AssertEqual(true, resolver.CanResolve(new Uri("https://iesdouyin.com/x")), "iesdouyin resolves");
+    AssertEqual(false, resolver.CanResolve(new Uri("https://evildouyin.com/x")), "evildouyin not matched");
+    AssertEqual(false, resolver.CanResolve(new Uri("https://other.com/x")), "other domain not matched");
+
+    // BrowserInteractive：代理不可用 → RequiresUserInteraction
+    var noProxy = new BrowserSessionAccessorProxy();
+    var resolverNoProxy = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(), validator)), noProxy);
+    var unavailable = resolverNoProxy.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/abc/"), MediaResolveMode.BrowserInteractive, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.RequiresUserInteraction, unavailable.Status, "browser mode without session requires interaction");
+
+    // BrowserInteractive：捕获成功 → 成功并携带会话 ID（不携带 Cookie）
+    var captureSession = new CapturingBrowserSession(ReadFixture("douyin-structured-data.json"));
+    proxy.Attach(captureSession);
+    var captured = resolver.ResolveAsync(new MediaResolveRequest(new Uri("https://www.douyin.com/video/7000000000000000000"), MediaResolveMode.BrowserInteractive, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Succeeded, captured.Status, "browser capture succeeds");
+    AssertEqual("fixture 浏览器捕获样本", captured.Post!.Title, "browser capture title");
+    AssertEqual(1, captured.Post.Assets.Count, "browser capture asset count");
+    AssertEqual("session-1", captured.Post.Assets[0].Variants[0].RequestContext.BrowserSessionId, "session id carried, not cookies");
+
+    // Automatic：空壳/登录 → RequiresUserInteraction
+    var shellHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ReadFixture("douyin-empty-shell.html"), System.Text.Encoding.UTF8, "text/html") }; return r; });
+    var shellResolver = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(shellHandler), validator)), proxy);
+    var shellResult = shellResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/abc/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.RequiresUserInteraction, shellResult.Status, "empty shell requires interaction");
+
+    // Automatic：删除作品 → Failed
+    var removedHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ReadFixture("douyin-removed-page.html"), System.Text.Encoding.UTF8, "text/html") }; return r; });
+    var removedResolver = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(removedHandler), validator)), proxy);
+    var removedResult = removedResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/abc/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Failed, removedResult.Status, "removed work fails");
+
+    // Automatic：静态页面解析成功（fixture 页）
+    var pageHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ReadFixture("douyin-video-page.html"), System.Text.Encoding.UTF8, "text/html") }; return r; });
+    var pageResolver = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(pageHandler), validator)), proxy);
+    var pageResult = pageResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/abc/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Succeeded, pageResult.Status, "static page resolves");
+    AssertEqual(1, pageResult.Post!.Assets.Count, "static page single video asset");
+}
+
 // 通用断言：相等则通过，否则抛出带用例名的异常
 static void AssertEqual<T>(T expected, T actual, string name)
 {
@@ -1626,4 +1741,31 @@ file sealed class FakeFailDownloadService : IMediaDownloadService
 {
     public Task<MediaDownloadResult> DownloadAsync(MediaDownloadTask task, CancellationToken cancellationToken, IProgress<MediaDownloadProgress>? progress = null)
         => Task.FromResult(MediaDownloadResult.Failed(task.Id, "模拟失败"));
+}
+
+// 测试替身：返回固定结构化数据的浏览器会话
+file sealed class CapturingBrowserSession : IBrowserSessionAccessor
+{
+    private readonly string structuredDataJson;
+
+    public CapturingBrowserSession(string structuredDataJson)
+    {
+        this.structuredDataJson = structuredDataJson;
+    }
+
+    public bool IsAvailable => true;
+
+    public Task<BrowserCaptureResult> CaptureAsync(Uri pageUri, bool interactive, CancellationToken cancellationToken)
+        => Task.FromResult(new BrowserCaptureResult(
+            "session-1",
+            structuredDataJson,
+            null,
+            Array.Empty<BrowserCapturedCandidate>(),
+            BrowserCaptureStatus.Succeeded,
+            null));
+
+    public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
+        => Task.FromResult<IReadOnlyList<BrowserCookie>>(Array.Empty<BrowserCookie>());
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
