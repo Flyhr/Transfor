@@ -14,6 +14,7 @@ internal sealed class MediaServices : IDisposable, IAsyncDisposable
     public required MediaDownloadCoordinator DownloadCoordinator { get; init; }
     public required BrowserSessionAccessorProxy BrowserSessions { get; init; }
     public required HttpClient HttpClient { get; init; }
+    public required MediaPreviewService Preview { get; init; }
 
     // 浏览器会话工厂（Task 12 设置）；为空时浏览器能力不可用但 Direct 下载正常
     public Func<Control, IBrowserSessionAccessor>? BrowserSessionFactory { get; set; }

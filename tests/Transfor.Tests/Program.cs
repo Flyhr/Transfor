@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Windows.Forms;
 using System.Net;
 
+
 // ===== 控制台式测试运行器 =====
 // 无测试框架依赖：逐项断言核心功能，全部通过时输出 "All N tests passed."，
 // 任一断言失败抛出异常并以非零码退出。
@@ -78,10 +79,11 @@ TestDouyinPageParser();
 TestDouyinMediaNormalizer();
 TestDouyinMediaResolver();
 TestUiDispatcher();
+TestMediaSettingsForm();
+TestMediaPreviewService();
+TestMediaAssetGrid();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
-
-// 场景：迁移中断后恢复 —— 旧状态可读时重试迁移；新版状态完整时清除迁移标记
 static void TestPendingMigrationRecovery()
 {
     var directory = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
@@ -1201,7 +1203,9 @@ static void TestMediaDownloadPage()
             var state = MediaStateStore.Load(new AppPaths(root));
             var download = new MediaDownloadCoordinator(new FakeSucceedDownloadService(), state);
             var resolve = new MediaResolveCoordinator(new MediaResolverRegistry(new IMediaResolver[] { new FakeResolver(MediaProviderId.Douyin, resultFactory: (_, _) => MediaResolveResult.RequiresUserInteraction("需要浏览器")) }));
-            using var page = new MediaDownloadPage(resolve, download, state, _ => ValueTask.CompletedTask);
+            var validator = new SafeUriValidator(new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("8.8.8.8") })));
+            using var preview = new MediaPreviewService(new SafeHttpRequestSender(new HttpClient(), validator), null);
+            using var page = new MediaDownloadPage(resolve, download, state, _ => ValueTask.CompletedTask, preview);
 
             // 页面契约
             AssertEqual("media-download", page.Id, "media page id");
@@ -1245,6 +1249,7 @@ static void TestMediaServicesLifecycle()
         var download = new MediaDownloadCoordinator(new FakeSucceedDownloadService(), state);
         var resolve = new MediaResolveCoordinator(new MediaResolverRegistry(Array.Empty<IMediaResolver>()));
         var proxy = new BrowserSessionAccessorProxy();
+        var validator = new SafeUriValidator(new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("8.8.8.8") })));
         var services = new MediaServices
         {
             State = state,
@@ -1252,21 +1257,27 @@ static void TestMediaServicesLifecycle()
             DownloadCoordinator = download,
             BrowserSessions = proxy,
             HttpClient = http,
+            Preview = new MediaPreviewService(new SafeHttpRequestSender(new HttpClient(), validator), null),
         };
 
         // 未设置工厂时：浏览器能力不可用但 Direct 下载正常
+        // （WinForms 控件必须在 STA 线程创建，故在 RunSta 中验证初始化失败）
         AssertEqual(false, proxy.IsAvailable, "browser unavailable before factory");
-        var browserError = false;
-        try
+        RunSta(() =>
         {
-            services.EnsureBrowserInitializedAsync(new UserControl()).GetAwaiter().GetResult();
-        }
-        catch (InvalidOperationException)
-        {
-            browserError = true;
-        }
-        AssertEqual(true, browserError, "browser init without factory throws recognizable error");
-        AssertEqual(false, proxy.IsAvailable, "proxy stays unavailable after failed init");
+            var browserError = false;
+            try
+            {
+                using var probeControl = new UserControl();
+                services.EnsureBrowserInitializedAsync(probeControl).GetAwaiter().GetResult();
+            }
+            catch (InvalidOperationException)
+            {
+                browserError = true;
+            }
+            AssertEqual(true, browserError, "browser init without factory throws recognizable error");
+            AssertEqual(false, proxy.IsAvailable, "proxy stays unavailable after failed init");
+        });
 
         // Attach 后代理委托调用
         proxy.Attach(new FakeBrowserSession(new BrowserCookie("douyin.com", "/", "a", "1", false)));
@@ -1479,6 +1490,162 @@ static void TestUiDispatcher()
         }
         return task.GetAwaiter().GetResult();
     }
+}
+
+// 场景：媒体设置窗体（STA）
+static void TestMediaSettingsForm()
+{
+    RunSta(() =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var state = MediaStateStore.Load(new AppPaths(root));
+            state.UpdateSettings(state.Settings with { MaxConcurrentDownloads = 5 });
+
+            using var form = new MediaSettingsForm(state);
+            // 从 UI 回读当前设置
+            var composed = form.ComposeFromControls();
+            AssertEqual(5, composed.MaxConcurrentDownloads, "settings form reads concurrency");
+            AssertEqual(state.Settings.DownloadDirectory, composed.DownloadDirectory, "settings form reads directory");
+            AssertEqual(MediaQualityPreference.Highest, composed.QualityPreference, "settings form reads quality");
+
+            // 校验非法组合被拒绝
+            var invalid = composed with { MaxConcurrentDownloads = 99 };
+            var rejected = false;
+            try
+            {
+                invalid.Validate();
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                rejected = true;
+            }
+            AssertEqual(true, rejected, "settings form rejects invalid concurrency");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    });
+}
+
+// 场景：媒体预览服务（安全链路、大小与魔数校验、取消清理、不写历史）
+static void TestMediaPreviewService()
+{
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var state = MediaStateStore.Load(new AppPaths(root));
+        var validator = new SafeUriValidator(new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("8.8.8.8") })));
+
+        // 预览下载成功后不写下载历史
+                var pngBody = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0, 0, 0, 0, 0 };
+        var okHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(pngBody) }; r.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png"); return r; });
+        using var preview = new MediaPreviewService(new SafeHttpRequestSender(new HttpClient(okHandler), validator), null);
+        var variant = new MediaVariant(new Uri("https://cdn.example.com/p.png"), 100, 100, null, null, null, "image/png", null, MediaVariantSource.StructuredData, new MediaRequestContext(null, null));
+        var path = preview.DownloadPreviewAsync(variant, CancellationToken.None).GetAwaiter().GetResult();
+                AssertEqual(true, File.Exists(path), "preview file exists");
+        AssertEqual(0, state.GetHistory().Count, "preview does not write download history");
+
+        // 非图片 Content-Type 拒绝
+        var htmlHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Array.Empty<byte>()) }; r.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/html"); return r; });
+        using var htmlPreview = new MediaPreviewService(new SafeHttpRequestSender(new HttpClient(htmlHandler), validator), null);
+        var htmlRejected = false;
+        try
+        {
+            htmlPreview.DownloadPreviewAsync(variant, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (InvalidDataException)
+        {
+            htmlRejected = true;
+        }
+        AssertEqual(true, htmlRejected, "html preview rejected");
+
+        // 声明大小超 50 MiB 拒绝
+        var bigHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(pngBody) }; r.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png"); r.Content.Headers.ContentLength = 60 * 1024 * 1024; return r; });
+        using var bigPreview = new MediaPreviewService(new SafeHttpRequestSender(new HttpClient(bigHandler), validator), null);
+        var bigRejected = false;
+        try
+        {
+            bigPreview.DownloadPreviewAsync(variant, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (InvalidDataException)
+        {
+            bigRejected = true;
+        }
+        AssertEqual(true, bigRejected, "oversized preview rejected");
+
+        // 伪装图片（ZIP 魔数）拒绝
+        var zipBody = new byte[] { 0x50, 0x4B, 0x03, 0x04, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        var zipHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(zipBody) }; r.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png"); return r; });
+        using var zipPreview = new MediaPreviewService(new SafeHttpRequestSender(new HttpClient(zipHandler), validator), null);
+        var zipRejected = false;
+        try
+        {
+            zipPreview.DownloadPreviewAsync(variant, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (InvalidDataException)
+        {
+            zipRejected = true;
+        }
+        AssertEqual(true, zipRejected, "zip disguised as image rejected");
+
+        // 取消清理临时文件
+                using var cts = new CancellationTokenSource();
+        var slowHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new SlowStreamContent(cts.Token) }; r.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/png"); return r; });
+        slowHandler.Requests.Clear();
+        using var cancelPreview = new MediaPreviewService(new SafeHttpRequestSender(new HttpClient(slowHandler), validator), null);
+        var cancelTask = cancelPreview.DownloadPreviewAsync(variant, cts.Token);
+        cts.CancelAfter(200);
+        var cancelled = false;
+        try
+        {
+            cancelTask.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            cancelled = true;
+        }
+        AssertEqual(true, cancelled, "preview cancel propagates");
+        cancelPreview.ClearSessionCache();
+        AssertEqual(true, true, "preview session cache cleared");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+// 场景：资产表（分段不进入可下载选择）
+static void TestMediaAssetGrid()
+{
+    RunSta(() =>
+    {
+        var grid = new MediaAssetGrid();
+        var context = new MediaRequestContext(null, null);
+        var normal = new MediaVariant(new Uri("https://x/1.jpg"), 100, 100, null, null, 1000, "image/jpeg", null, MediaVariantSource.StructuredData, context);
+        var segmented = new MediaVariant(new Uri("https://x/hls.m3u8"), 1920, 1080, null, null, null, "application/vnd.apple.mpegurl", null, MediaVariantSource.StructuredData, context, true);
+        var post = new ResolvedMediaPost(MediaProviderId.Douyin, new Uri("https://v.douyin.com/a/"), "1", "t", "a", new MediaAsset[]
+        {
+            new MediaAsset(0, MediaKind.Image, new MediaVariant[] { normal }),
+            new MediaAsset(1, MediaKind.Video, new MediaVariant[] { segmented }),
+        });
+        var selections = new MediaSelectionResult[]
+        {
+            new(MediaSelectionStatus.Selected, normal, null),
+            new(MediaSelectionStatus.UnsupportedSegmented, null, "不支持合并"),
+        };
+
+        // 全选后仅可下载行被选中（分段不进入下载任务）
+        grid.LoadPost(post, selections, defaultSelectAll: true);
+        grid.SelectAll();
+        var selected = grid.GetSelected();
+        AssertEqual(1, selected.Count, "segmented asset not selectable");
+        AssertEqual(0, selected[0].Asset.Index, "normal asset selected");
+    });
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常

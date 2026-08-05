@@ -22,6 +22,7 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     private readonly MediaDownloadCoordinator downloadCoordinator;
     private readonly MediaStateStore stateStore;
     private readonly Func<Control, ValueTask> ensureBrowserInitializedAsync;
+    private readonly MediaPreviewService previewService;
     private readonly TextBox inputBox;
     private readonly Button pasteButton;
     private readonly Button parseButton;
@@ -30,26 +31,31 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     private readonly Label infoLabel;
     private readonly TextBox directoryBox;
     private readonly Button browseButton;
+    private readonly Button settingsButton;
     private readonly Button selectAllButton;
     private readonly Button unselectAllButton;
     private readonly Button downloadButton;
     private readonly Label errorLabel;
     private readonly MediaAssetGrid assetGrid;
     private readonly DownloadQueueGrid queueGrid;
+    private readonly MediaPreviewControl previewControl;
     private MediaPageState currentState = MediaPageState.Idle;
     private ResolvedMediaPost? currentPost;
     private string currentShareLink = string.Empty;
+    private bool directoryOverridden;
 
     public MediaDownloadPage(
         MediaResolveCoordinator resolveCoordinator,
         MediaDownloadCoordinator downloadCoordinator,
         MediaStateStore stateStore,
-        Func<Control, ValueTask> ensureBrowserInitializedAsync)
+        Func<Control, ValueTask> ensureBrowserInitializedAsync,
+        MediaPreviewService previewService)
     {
         this.resolveCoordinator = resolveCoordinator ?? throw new ArgumentNullException(nameof(resolveCoordinator));
         this.downloadCoordinator = downloadCoordinator ?? throw new ArgumentNullException(nameof(downloadCoordinator));
         this.stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         this.ensureBrowserInitializedAsync = ensureBrowserInitializedAsync ?? throw new ArgumentNullException(nameof(ensureBrowserInitializedAsync));
+        this.previewService = previewService ?? throw new ArgumentNullException(nameof(previewService));
 
         Dock = DockStyle.Fill;
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 6 };
@@ -82,17 +88,26 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         infoLabel = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true };
         root.Controls.Add(infoLabel, 0, 1);
 
-        // 资产表
+        // 资产表 + 预览区
         assetGrid = new MediaAssetGrid { Dock = DockStyle.Fill };
-        root.Controls.Add(assetGrid, 0, 2);
+        previewControl = new MediaPreviewControl { Dock = DockStyle.Fill };
+        var assetRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2 };
+        assetRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 62));
+        assetRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 38));
+        assetRow.Controls.Add(assetGrid, 0, 0);
+        assetRow.Controls.Add(previewControl, 1, 0);
+        assetGrid.PreviewRequested += AssetGrid_PreviewRequested;
+        root.Controls.Add(assetRow, 0, 2);
 
         // 保存目录行 + 批量操作
         directoryBox = new TextBox { Dock = DockStyle.Fill, ReadOnly = false };
         browseButton = new Button { AutoSize = true, Text = "选择目录" };
+        settingsButton = new Button { AutoSize = true, Text = "媒体设置" };
         selectAllButton = new Button { AutoSize = true, Text = "全选", Enabled = false };
         unselectAllButton = new Button { AutoSize = true, Text = "取消全选", Enabled = false };
         downloadButton = new Button { AutoSize = true, Text = "下载所选", Enabled = false };
         browseButton.Click += (_, _) => BrowseDirectory();
+        settingsButton.Click += (_, _) => OpenSettings();
         selectAllButton.Click += (_, _) => assetGrid.SelectAll();
         unselectAllButton.Click += (_, _) => assetGrid.UnselectAll();
         downloadButton.Click += (_, _) => _ = DownloadSelectedAsync();
@@ -101,7 +116,7 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionRow.Controls.Add(directoryBox, 0, 0);
         var actionButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        actionButtons.Controls.AddRange(new Control[] { browseButton, selectAllButton, unselectAllButton, downloadButton });
+        actionButtons.Controls.AddRange(new Control[] { browseButton, settingsButton, selectAllButton, unselectAllButton, downloadButton });
         actionRow.Controls.Add(actionButtons, 1, 0);
         root.Controls.Add(actionRow, 0, 3);
 
@@ -234,13 +249,64 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     {
         var post = currentPost!;
         var selections = new List<MediaSelectionResult>(post.Assets.Count);
+        var hasSegmented = false;
         foreach (var asset in post.Assets)
         {
-            selections.Add(MediaQualitySelector.SelectBest(asset, stateStore.Settings.QualityPreference));
+            var selection = MediaQualitySelector.SelectBest(asset, stateStore.Settings.QualityPreference);
+            selections.Add(selection);
+            if (selection.Status == MediaSelectionStatus.UnsupportedSegmented)
+            {
+                hasSegmented = true;
+            }
         }
 
         assetGrid.LoadPost(post, selections, stateStore.Settings.DefaultSelectAll);
         infoLabel.Text = $"平台：{(post.Provider == MediaProviderId.Douyin ? "抖音" : "直接链接")}    标题：{post.Title ?? "(无标题)"}    作者：{post.AuthorName ?? "-"}    共发现：{post.Assets.Count} 个媒体";
+        errorLabel.Text = hasSegmented
+            ? "已发现更高质量的分段媒体流，但当前版本暂不支持合并。"
+            : string.Empty;
+    }
+
+    // 预览请求：图片下载预览，视频显示元数据
+    private async Task ShowPreviewAsync(MediaAsset asset, MediaVariant variant)
+    {
+        if (asset.Kind == MediaKind.Video)
+        {
+            previewControl.ShowVideoInfo(variant);
+            return;
+        }
+
+        try
+        {
+            var path = await previewService.DownloadPreviewAsync(variant, CancellationToken.None);
+            previewControl.ShowImage(path);
+        }
+        catch (OperationCanceledException)
+        {
+            // 预览取消不提示
+        }
+        catch (Exception ex)
+        {
+            previewControl.ShowError($"预览失败：{ex.Message}");
+        }
+    }
+
+    private void AssetGrid_PreviewRequested(object? sender, (MediaAsset Asset, MediaVariant Variant) e)
+    {
+        _ = ShowPreviewAsync(e.Asset, e.Variant);
+    }
+
+    // 媒体设置：保存后若用户未在页面级覆盖目录，则同步刷新默认目录
+    private void OpenSettings()
+    {
+        using var form = new MediaSettingsForm(stateStore);
+        if (form.ShowDialog(this) == DialogResult.OK)
+        {
+            if (!directoryOverridden)
+            {
+                directoryBox.Text = stateStore.Settings.DownloadDirectory;
+            }
+        }
     }
 
     private async Task DownloadSelectedAsync()
@@ -311,6 +377,20 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
             return;
         }
 
+        // 浏览器会话失效时提示重新浏览器解析
+        if (!string.IsNullOrEmpty(original.SelectedVariant.RequestContext.BrowserSessionId))
+        {
+            try
+            {
+                await ensureBrowserInitializedAsync(this);
+            }
+            catch (Exception ex)
+            {
+                errorLabel.Text = $"浏览器会话失效，请重新浏览器解析：{ex.Message}";
+                return;
+            }
+        }
+
         var target = DownloadFileNameBuilder.BuildUniquePath(directoryBox.Text, Path.GetFileName(original.TargetPath));
         var retryTask = new MediaDownloadTask(Guid.NewGuid(), original.Asset, original.SelectedVariant, target);
         var batch = new MediaDownloadBatch(Guid.NewGuid(), currentShareLink, post, new MediaDownloadTask[] { retryTask });
@@ -333,6 +413,7 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
             directoryBox.Text = dialog.SelectedPath;
+            directoryOverridden = true;
             errorLabel.Text = string.Empty;
         }
         // 用户取消时保留原目录

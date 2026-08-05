@@ -24,10 +24,27 @@ internal sealed class MediaAssetGrid : UserControl
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "预计大小", FillWeight = 20 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "质量状态", FillWeight = 25 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "预览", FillWeight = 15 });
+        grid.CellContentClick += Grid_CellContentClick;
         Controls.Add(grid);
     }
 
+    // 预览请求：仅可下载（携带变体）的行触发
+    public event EventHandler<(MediaAsset Asset, MediaVariant Variant)>? PreviewRequested;
+
     public bool HasAssets => grid.Rows.Count > 0;
+
+    private void Grid_CellContentClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex != 6)
+        {
+            return;
+        }
+
+        if (grid.Rows[e.RowIndex].Tag is (MediaAsset asset, MediaVariant variant) && variant is not null)
+        {
+            PreviewRequested?.Invoke(this, (asset, variant));
+        }
+    }
 
     // 展示作品资产：每个资产一个行；仅 Selected 状态的行携带可下载变体并参与勾选
     public void LoadPost(ResolvedMediaPost post, IReadOnlyList<MediaSelectionResult> selections, bool defaultSelectAll)

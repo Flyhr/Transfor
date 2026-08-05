@@ -29,7 +29,8 @@ internal sealed class TransforApplicationContext : ApplicationContext
                 services.Media.ResolveCoordinator,
                 services.Media.DownloadCoordinator,
                 services.Media.State,
-                services.Media.EnsureBrowserInitializedAsync),
+                services.Media.EnsureBrowserInitializedAsync,
+                services.Media.Preview),
         };
         mainForm = new MainForm(pages);
         historyPanel = new HistoryPanelForm(
