@@ -1,3 +1,5 @@
+using System.Runtime.InteropServices;
+
 namespace Transfor;
 
 public sealed class MainForm : Form
@@ -15,16 +17,19 @@ public sealed class MainForm : Form
     private readonly Label titleLabel;
     private readonly ToolDefinition quoteTool;
     private readonly ToolDefinition spaceTool;
+    private readonly HistoryStore historyStore;
 
     private ToolDefinition currentTool;
+    private bool allowClose;
 
-    public MainForm()
+    internal MainForm(HistoryStore historyStore)
     {
-        quoteTool = new ToolDefinition("\u5F15\u53F7\u8F6C\u6362", QuoteConverter.Convert);
-        spaceTool = new ToolDefinition("\u53BB\u9664\u7A7A\u683C", SpaceRemover.Remove);
+        this.historyStore = historyStore;
+        quoteTool = new ToolDefinition(ToolId.QuoteConversion, "引号转换", QuoteConverter.Convert);
+        spaceTool = new ToolDefinition(ToolId.SpaceRemoval, "去除空格", SpaceRemover.Remove);
         currentTool = quoteTool;
 
-        Text = "\u6587\u672C\u8F6C\u6362\u5668";
+        Text = "文本转换器";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(900, 600);
         Size = new Size(980, 660);
@@ -77,21 +82,21 @@ public sealed class MainForm : Form
         inputTextBox = CreateTextBox(readOnly: false);
         outputTextBox = CreateTextBox(readOnly: true);
 
-        textGrid.Controls.Add(CreateTextPanel("\u8F93\u5165\u5185\u5BB9", inputTextBox), 0, 0);
-        textGrid.Controls.Add(CreateTextPanel("\u8F6C\u6362\u7ED3\u679C", outputTextBox), 1, 0);
+        textGrid.Controls.Add(CreateTextPanel("输入内容", inputTextBox), 0, 0);
+        textGrid.Controls.Add(CreateTextPanel("转换结果", outputTextBox), 1, 0);
 
         copyButton = new Button
         {
             AutoSize = true,
             Enabled = false,
-            Text = "\u590D\u5236\u7ED3\u679C",
+            Text = "复制结果",
         };
         copyButton.Click += CopyButton_Click;
 
         var clearButton = new Button
         {
             AutoSize = true,
-            Text = "\u6E05\u7A7A",
+            Text = "清空",
         };
         clearButton.Click += (_, _) =>
         {
@@ -116,7 +121,13 @@ public sealed class MainForm : Form
         Controls.Add(root);
 
         inputTextBox.TextChanged += (_, _) => UpdateOutput();
+        FormClosing += MainForm_FormClosing;
         SelectTool(quoteTool);
+    }
+    public void CloseForExit()
+    {
+        allowClose = true;
+        Close();
     }
 
     private static Button CreateNavButton(string text)
@@ -199,11 +210,46 @@ public sealed class MainForm : Form
 
     private void CopyButton_Click(object? sender, EventArgs e)
     {
-        if (outputTextBox.TextLength > 0)
+        if (outputTextBox.TextLength == 0)
+        {
+            return;
+        }
+
+        try
         {
             Clipboard.SetText(outputTextBox.Text);
         }
+        catch (Exception ex) when (ex is ExternalException or ThreadStateException or InvalidOperationException)
+        {
+            MessageBox.Show(this, $"写入系统剪贴板失败：{ex.Message}", "复制失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        historyStore.Add(new HistoryEntry(
+            currentTool.Id,
+            inputTextBox.Text,
+            outputTextBox.Text,
+            DateTimeOffset.UtcNow));
+        try
+        {
+            historyStore.Save();
+        }
+        catch (IOException ex)
+        {
+            MessageBox.Show(this, $"历史记录保存失败：{ex.Message}", "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
-    private sealed record ToolDefinition(string Name, Func<string?, string> Convert);
+    private void MainForm_FormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (allowClose || e.CloseReason != CloseReason.UserClosing)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        Hide();
+    }
+
+    private sealed record ToolDefinition(ToolId Id, string Name, Func<string?, string> Convert);
 }

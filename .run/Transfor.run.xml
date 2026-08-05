@@ -1,0 +1,12 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Transfor" type="DotNetProject" factoryName=".NET Project">
+    <option name="EXE_PATH" value="$PROJECT_DIR$/src/Transfor/bin/Debug/net10.0-windows/Transfor.exe" />
+    <option name="PROGRAM_PARAMETERS" value="" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="PASS_PARENT_ENVS_2" value="true" />
+    <option name="PROJECT_PATH" value="$PROJECT_DIR$/src/Transfor/Transfor.csproj" />
+    <option name="TARGET_FRAMEWORK" value="net10.0-windows" />
+    <option name="USE_EXTERNAL_CONSOLE" value="false" />
+    <method v="2" />
+  </configuration>
+</component>
