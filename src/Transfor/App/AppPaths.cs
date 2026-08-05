@@ -26,6 +26,15 @@ internal sealed class AppPaths
     // 迁移标记文件：迁移中途失败时保留，下次启动据此恢复或重试
     public string PendingMigrationFile => Path.Combine(ApplicationDirectory, "migration.v1.pending.json");
 
+    // 媒体下载设置（独立于文本设置）
+    public string MediaSettingsFile => Path.Combine(ApplicationDirectory, "media-settings.json");
+
+    // 媒体下载批次历史（独立于文本历史）
+    public string MediaDownloadHistoryFile => Path.Combine(ApplicationDirectory, "download-history.json");
+
+    // WebView2 独立用户数据目录（Cookie/权限/缓存只存于此，不写入普通 JSON）
+    public string WebView2Directory => Path.Combine(ApplicationDirectory, "WebView2", "Douyin");
+
     // 默认状态目录：%LOCALAPPDATA%\Transfor
     public static AppPaths Default => new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Transfor"));
 }

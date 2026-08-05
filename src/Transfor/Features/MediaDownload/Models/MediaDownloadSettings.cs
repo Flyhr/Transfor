@@ -54,6 +54,13 @@ internal sealed record MediaDownloadSettings(
                 nameof(DownloadDirectory));
         }
 
+        if (!Path.IsPathFullyQualified(DownloadDirectory))
+        {
+            throw new ArgumentException(
+                "下载目录必须是绝对路径。",
+                nameof(DownloadDirectory));
+        }
+
         if (!Enum.IsDefined(QualityPreference))
         {
             throw new ArgumentOutOfRangeException(

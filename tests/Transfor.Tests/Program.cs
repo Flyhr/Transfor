@@ -55,6 +55,8 @@ TestPasteCoordinator();
 TestMutationsPersistWithoutExplicitSave();
 TestUpdateSettingsRollsBackOnWriteFailure();
 TestMediaModels();
+TestMediaStateStore();
+TestMediaStateStoreConcurrency();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
@@ -426,6 +428,88 @@ static ResolvedMediaPost BuildValidPostForTest()
     var variant = new MediaVariant(new Uri("https://cdn.example.com/v.mp4"), 1920, 1080, 30, 2000, 1000, "video/mp4", "h264", MediaVariantSource.StructuredData, context);
     var asset = new MediaAsset(0, MediaKind.Video, new MediaVariant[] { variant });
     return new ResolvedMediaPost(MediaProviderId.Douyin, new Uri("https://www.douyin.com/video/1"), "1", "t", "a", new MediaAsset[] { asset });
+}
+
+// 场景：媒体独立持久化（设置与历史分开存储，串行写入，损坏回退）
+static void TestMediaStateStore()
+{
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var paths = new AppPaths(root);
+
+        // 缺失文件 -> 默认设置与空历史
+        var store = MediaStateStore.Load(paths);
+        AssertEqual(3, store.Settings.MaxConcurrentDownloads, "defaults when files missing");
+        AssertEqual(0, store.GetHistory().Count, "empty history when file missing");
+        AssertEqual(true, Path.IsPathFullyQualified(store.Settings.DownloadDirectory), "default directory is absolute");
+
+        // UpdateSettings / Add 无需额外 Save 即持久化
+        var downloadDir = Path.Combine(root, "dl");
+        Directory.CreateDirectory(downloadDir);
+        store.UpdateSettings(store.Settings with { MaxConcurrentDownloads = 5, DownloadDirectory = downloadDir });
+        store.Add(new MediaDownloadHistoryEntry(MediaProviderId.Douyin, "https://v.douyin.com/a/", "t", downloadDir, new[] { Path.Combine(downloadDir, "1.mp4") }, 2, 0, 0, DateTimeOffset.UtcNow));
+        var reloaded = MediaStateStore.Load(paths);
+        AssertEqual(5, reloaded.Settings.MaxConcurrentDownloads, "settings persisted without Save()");
+        AssertEqual(1, reloaded.GetHistory().Count, "history persisted without Save()");
+
+        // 原始 JSON 中不出现敏感字段名称
+        var raw = File.ReadAllText(paths.MediaDownloadHistoryFile).ToLowerInvariant();
+        AssertEqual(true, !raw.Contains("cookie") && !raw.Contains("token") && !raw.Contains("authorization"), "no credential fields serialized");
+
+        // 损坏 JSON -> 回退默认值
+        File.WriteAllText(paths.MediaSettingsFile, "not json");
+        AssertEqual(3, MediaStateStore.Load(paths).Settings.MaxConcurrentDownloads, "corrupt settings fallback to defaults");
+
+        // 未知 schemaVersion -> 不按版本 1 解析
+        File.WriteAllText(paths.MediaSettingsFile, "{\"SchemaVersion\":2,\"Value\":{}}");
+        AssertEqual(3, MediaStateStore.Load(paths).Settings.MaxConcurrentDownloads, "unknown schema version falls back");
+
+        // 相对下载目录被拒绝
+        AssertThrows<ArgumentException>(() => store.UpdateSettings(store.Settings with { DownloadDirectory = "relative" }), "relative directory rejected");
+
+        // 历史超过 200 条后仅保留最新 200 条
+        for (var i = 0; i < 205; i++)
+        {
+            store.Add(new MediaDownloadHistoryEntry(MediaProviderId.Direct, "u", $"t{i}", downloadDir, Array.Empty<string>(), 1, 0, 0, DateTimeOffset.UtcNow));
+        }
+        var capped = MediaStateStore.Load(paths).GetHistory();
+        AssertEqual(200, capped.Count, "history capped at 200");
+        AssertEqual("t204", capped[^1].Title, "latest history kept");
+        AssertEqual("t5", capped[0].Title, "oldest history trimmed");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+// 场景：并发 Add 与 UpdateSettings 后 JSON 仍是完整文档，历史不丢失
+static void TestMediaStateStoreConcurrency()
+{
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var store = MediaStateStore.Load(new AppPaths(root));
+        var tasks = new List<Task>();
+        for (var i = 0; i < 40; i++)
+        {
+            var captured = i;
+            tasks.Add(Task.Run(() => store.Add(new MediaDownloadHistoryEntry(MediaProviderId.Direct, "u", $"c{captured}", root, Array.Empty<string>(), 1, 0, 0, DateTimeOffset.UtcNow))));
+            tasks.Add(Task.Run(() => store.UpdateSettings(store.Settings with { MaxConcurrentDownloads = 1 + captured % 8 })));
+        }
+        Task.WaitAll(tasks.ToArray());
+
+        var reloaded = MediaStateStore.Load(new AppPaths(root));
+        AssertEqual(40, reloaded.GetHistory().Count, "concurrent adds all persisted");
+        AssertEqual(true, reloaded.Settings.MaxConcurrentDownloads is >= 1 and <= 8, "concurrent settings writes remain valid");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常
