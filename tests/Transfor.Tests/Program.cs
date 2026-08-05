@@ -63,6 +63,10 @@ TestMediaResolverRegistry();
 TestMediaResolveCoordinator();
 TestSafeUriValidator();
 TestSafeHttpRequestSender();
+TestMediaQualitySelector();
+TestMediaContentValidator();
+TestDownloadFileNameBuilder();
+TestMediaHashService();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
@@ -718,6 +722,148 @@ static void TestSafeHttpRequestSender()
         new(HttpStatusCode.Found) { Headers = { Location = new Uri(location, UriKind.RelativeOrAbsolute) } };
 }
 
+// 场景：质量选择器
+static void TestMediaQualitySelector()
+{
+    static MediaVariant V(string url, int? w, int? h, long? len, MediaVariantSource source, int? fps = null, long? bitrate = null, string? codec = null, bool segmented = false) =>
+        new(new Uri(url), w, h, fps, bitrate, len, null, codec, source, new MediaRequestContext(null, null), segmented);
+
+    // 超大缩略图不会压过真实作品候选
+    var small = V("https://x/1.jpg", 100, 100, 1000, MediaVariantSource.StructuredData);
+    var large = V("https://x/2.jpg", 2000, 2000, 5000, MediaVariantSource.StructuredData);
+    var thumb = V("https://x/thumb.jpg", 9000, 9000, 9999, MediaVariantSource.Thumbnail);
+    var imageAsset = new MediaAsset(0, MediaKind.Image, new[] { small, thumb, large });
+    var imageResult = MediaQualitySelector.SelectBest(imageAsset, MediaQualityPreference.Highest);
+    AssertEqual(MediaSelectionStatus.Selected, imageResult.Status, "image selection status");
+    AssertEqual("https://x/2.jpg", imageResult.Variant?.Uri.ToString(), "thumbnail never wins over real candidate");
+    AssertEqual(true, !imageResult.Variant!.Uri.ToString().Contains("thumb"), "thumbnail excluded when real candidates exist");
+
+    // 同分辨率视频按帧率/码率排序；分段候选不作为直接下载对象
+    var v720 = V("https://x/a.mp4", 1280, 720, 1000, MediaVariantSource.StructuredData, 30, 1000, "h264");
+    var v1080 = V("https://x/b.mp4", 1920, 1080, 2000, MediaVariantSource.StructuredData, 30, 2000, "h264");
+    var v1080f60 = V("https://x/c.mp4", 1920, 1080, 3000, MediaVariantSource.StructuredData, 60, 2000, "h264");
+    var videoAsset = new MediaAsset(0, MediaKind.Video, new[] { v720, v1080, v1080f60 });
+    var videoResult = MediaQualitySelector.SelectBest(videoAsset, MediaQualityPreference.Highest);
+    AssertEqual("https://x/c.mp4", videoResult.Variant?.Uri.ToString(), "higher fps wins on equal resolution");
+
+    // 只有分段候选：返回 UnsupportedSegmented，不伪装可下载
+    var segmentedOnly = new MediaAsset(0, MediaKind.Video, new[] { V("https://x/hls/master.m3u8", 1920, 1080, null, MediaVariantSource.StructuredData, segmented: true) });
+    var segmentedResult = MediaQualitySelector.SelectBest(segmentedOnly, MediaQualityPreference.Highest);
+    AssertEqual(MediaSelectionStatus.UnsupportedSegmented, segmentedResult.Status, "segmented-only reported");
+    AssertEqual(true, segmentedResult.Variant is null, "no fake downloadable variant for segmented");
+
+    // Balanced：优先至少 720p；没有 720p 时回退最高可用
+    var v480 = V("https://x/d.mp4", 854, 480, 800, MediaVariantSource.StructuredData, 30, 800, "h264");
+    var balancedWith720 = MediaQualitySelector.SelectBest(new MediaAsset(0, MediaKind.Video, new[] { v480, v1080 }), MediaQualityPreference.Balanced);
+    AssertEqual("https://x/b.mp4", balancedWith720.Variant?.Uri.ToString(), "balanced prefers 720p");
+    var balancedFallback = MediaQualitySelector.SelectBest(new MediaAsset(0, MediaKind.Video, new[] { v480 }), MediaQualityPreference.Balanced);
+    AssertEqual("https://x/d.mp4", balancedFallback.Variant?.Uri.ToString(), "balanced falls back below 720p");
+
+    // 空变体：NoUsableVariant
+    var empty = MediaQualitySelector.SelectBest(new MediaAsset(0, MediaKind.Image, Array.Empty<MediaVariant>()), MediaQualityPreference.Highest);
+    AssertEqual(MediaSelectionStatus.NoUsableVariant, empty.Status, "no variant reported");
+}
+
+// 场景：内容校验（魔数 + 响应合理性）
+static void TestMediaContentValidator()
+{
+    // 魔数识别 + 可 Seek 流位置恢复
+    var jpeg = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0 };
+    using var jpegStream = new MemoryStream(jpeg);
+    jpegStream.Position = 0;
+    AssertEqual(true, MediaContentValidator.HasValidMagicNumberAsync(jpegStream, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "jpeg magic ok");
+    AssertEqual(0, jpegStream.Position, "seekable stream position restored");
+
+    var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0 };
+    using var pngStream = new MemoryStream(png);
+    AssertEqual(true, MediaContentValidator.HasValidMagicNumberAsync(pngStream, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "png magic ok");
+
+    var mp4 = new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0, 0, 0, 0 };
+    using var mp4Stream = new MemoryStream(mp4);
+    AssertEqual(true, MediaContentValidator.HasValidMagicNumberAsync(mp4Stream, MediaKind.Video, CancellationToken.None).GetAwaiter().GetResult(), "mp4 magic ok");
+
+    // ZIP/HTML 伪装媒体被拒绝
+    var zip = new byte[] { 0x50, 0x4B, 0x03, 0x04, 0, 0, 0, 0, 0, 0, 0, 0 };
+    using var zipStream = new MemoryStream(zip);
+    AssertEqual(false, MediaContentValidator.HasValidMagicNumberAsync(zipStream, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "zip rejected as image");
+    using var htmlStream = new MemoryStream("<html></html>"u8.ToArray());
+    AssertEqual(false, MediaContentValidator.HasValidMagicNumberAsync(htmlStream, MediaKind.Video, CancellationToken.None).GetAwaiter().GetResult(), "html rejected as video");
+
+    // 不可 Seek 流不抛异常
+    var nonSeekable = new NonSeekableStream(jpeg);
+    AssertEqual(true, MediaContentValidator.HasValidMagicNumberAsync(nonSeekable, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "non-seekable stream ok");
+
+    // 响应合理性：Content-Type、声明长度
+    var okResponse = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Array.Empty<byte>()) };
+    okResponse.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/jpeg");
+    AssertEqual(true, MediaContentValidator.IsPlausibleResponse(okResponse, MediaKind.Image, 1024, out _), "plausible response ok");
+
+    var badStatus = new HttpResponseMessage(HttpStatusCode.NotFound);
+    AssertEqual(false, MediaContentValidator.IsPlausibleResponse(badStatus, MediaKind.Image, 1024, out _), "non-2xx rejected");
+
+    var wrongType = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Array.Empty<byte>()) };
+    wrongType.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/html");
+    AssertEqual(false, MediaContentValidator.IsPlausibleResponse(wrongType, MediaKind.Video, 1024, out _), "text/html rejected for video");
+
+    var oversized = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Array.Empty<byte>()) };
+    oversized.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("video/mp4");
+    oversized.Content.Headers.ContentLength = 2048;
+    AssertEqual(false, MediaContentValidator.IsPlausibleResponse(oversized, MediaKind.Video, 1024, out _), "declared length over limit rejected");
+}
+
+// 场景：文件名构建
+static void TestDownloadFileNameBuilder()
+{
+    AssertEqual("a_b_c.mp4", DownloadFileNameBuilder.SanitizeFileName("a:b\\c.mp4"), "invalid chars replaced");
+    AssertEqual("a_b_c", DownloadFileNameBuilder.SanitizeFileName("a:b\\c."), "trailing dot trimmed");
+    AssertEqual("download", DownloadFileNameBuilder.SanitizeFileName("...."), "empty name falls back");
+    AssertEqual(".jpg", DownloadFileNameBuilder.ResolveExtension("image/jpeg", MediaKind.Image), "jpeg extension");
+    AssertEqual(".webp", DownloadFileNameBuilder.ResolveExtension("image/webp", MediaKind.Image), "webp extension");
+    AssertEqual(".mp4", DownloadFileNameBuilder.ResolveExtension("video/mp4", MediaKind.Video), "mp4 extension");
+    AssertEqual(".img", DownloadFileNameBuilder.ResolveExtension(null, MediaKind.Image), "unknown image extension");
+    AssertEqual(".bin", DownloadFileNameBuilder.ResolveExtension(null, MediaKind.Video), "unknown video extension");
+
+    // 重名使用 (1)、(2)
+    var dir = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(dir);
+    try
+    {
+        var first = DownloadFileNameBuilder.BuildUniquePath(dir, "x.mp4");
+        File.WriteAllText(first, "1");
+        var second = DownloadFileNameBuilder.BuildUniquePath(dir, "x.mp4");
+        AssertEqual("x(1).mp4", Path.GetFileName(second), "duplicate gets suffix");
+        File.WriteAllText(second, "2");
+        var third = DownloadFileNameBuilder.BuildUniquePath(dir, "x.mp4");
+        AssertEqual("x(2).mp4", Path.GetFileName(third), "second duplicate gets next suffix");
+
+        // 绝对路径要求与 .. 越界拒绝
+        AssertThrows<ArgumentException>(() => DownloadFileNameBuilder.BuildUniquePath("relative", "x.mp4"), "relative directory rejected");
+        AssertThrows<ArgumentException>(() => DownloadFileNameBuilder.BuildUniquePath(dir, "../x.mp4"), "path separator in name rejected");
+
+        // 路径包含关系校验
+        AssertEqual(true, DownloadFileNameBuilder.IsWithinDirectory(dir, Path.Combine(dir, "x.mp4")), "path within directory");
+        AssertEqual(false, DownloadFileNameBuilder.IsWithinDirectory(dir, Path.Combine(Path.GetTempPath(), "evil", "x.mp4")), "path outside directory rejected");
+    }
+    finally
+    {
+        Directory.Delete(dir, recursive: true);
+    }
+}
+
+// 场景：哈希流式计算
+static void TestMediaHashService()
+{
+    var data = new byte[128 * 1024];
+    new Random(42).NextBytes(data);
+    using var stream = new MemoryStream(data);
+    var hash = MediaHashService.ComputeSha256Async(stream, CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(64, hash.Length, "sha256 hex length");
+
+    using var reference = new MemoryStream(data);
+    var expected = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(reference));
+    AssertEqual(expected, hash, "sha256 matches reference");
+}
+
 // 通用断言：相等则通过，否则抛出带用例名的异常
 static void AssertEqual<T>(T expected, T actual, string name)
 {
@@ -873,4 +1019,32 @@ file sealed class FakeDnsResolver : IDnsResolver
     }
 
     public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) => resolver(host);
+}
+
+// 测试替身：不可 Seek 的流
+file sealed class NonSeekableStream : Stream
+{
+    private readonly byte[] data;
+    private int position;
+
+    public NonSeekableStream(byte[] data) => this.data = data;
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => data.Length;
+    public override long Position { get => position; set => throw new NotSupportedException(); }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        var available = Math.Min(count, data.Length - position);
+        Array.Copy(data, position, buffer, offset, available);
+        position += available;
+        return available;
+    }
+
+    public override void Flush() { }
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+    public override void SetLength(long value) => throw new NotSupportedException();
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
 }

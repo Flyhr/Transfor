@@ -24,7 +24,7 @@ internal sealed class MediaResolveCoordinator
 
         try
         {
-            return await resolver.ResolveAsync(request, cancellationToken).ConfigureAwait(false);
+            return await resolver!.ResolveAsync(request, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
