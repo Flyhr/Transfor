@@ -54,6 +54,7 @@ TestHistoryStore();
 TestPasteCoordinator();
 TestMutationsPersistWithoutExplicitSave();
 TestUpdateSettingsRollsBackOnWriteFailure();
+TestMediaModels();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
@@ -331,6 +332,100 @@ static void TestUpdateSettingsRollsBackOnWriteFailure()
     {
         Directory.Delete(root, recursive: true);
     }
+}
+
+// 场景：统一媒体模型与解析契约
+static void TestMediaModels()
+{
+    // 枚举顺序
+    AssertEqual(0, (int)MediaKind.Image, "image kind order");
+    AssertEqual(1, (int)MediaKind.Video, "video kind order");
+    AssertEqual(0, (int)MediaProviderId.Direct, "direct provider order");
+    AssertEqual(1, (int)MediaProviderId.Douyin, "douyin provider order");
+
+    // MediaResolveResult：成功必须包含非空 Post，且拒绝不可下载状态
+    var post = BuildValidPostForTest();
+    var success = MediaResolveResult.Success(post);
+    AssertEqual(MediaResolveStatus.Succeeded, success.Status, "success status");
+    AssertEqual(true, success.Post is not null, "success carries post");
+    AssertThrows<ArgumentNullException>(() => MediaResolveResult.Success(null!), "success rejects null post");
+    AssertThrows<InvalidDataException>(() => MediaResolveResult.Success(post with { Assets = Array.Empty<MediaAsset>() }), "success rejects empty assets");
+    AssertThrows<InvalidDataException>(() => MediaResolveResult.Success(post with { Assets = new MediaAsset[] { post.Assets[0] with { Variants = Array.Empty<MediaVariant>() } } }), "success rejects empty variants");
+    AssertThrows<InvalidDataException>(() => MediaResolveResult.Success(post with { Assets = new MediaAsset[] { post.Assets[0] with { Variants = new MediaVariant[] { post.Assets[0].Variants[0] with { Uri = new Uri("ftp://x/y.mp4") } } } } }), "success rejects non-http variant");
+
+    // RequiresUserInteraction 的 Post 必须为空
+    var pending = MediaResolveResult.RequiresUserInteraction("需要浏览器");
+    AssertEqual(MediaResolveStatus.RequiresUserInteraction, pending.Status, "interaction status");
+    AssertEqual(true, pending.Post is null, "interaction carries no post");
+    AssertEqual(MediaResolveStatus.Unsupported, MediaResolveResult.Unsupported("x").Status, "unsupported status");
+    AssertEqual(MediaResolveStatus.Failed, MediaResolveResult.Failure("x").Status, "failed status");
+
+    // 可持久化记录 JSON 往返
+    var entry = new MediaDownloadHistoryEntry(MediaProviderId.Douyin, "https://v.douyin.com/abc/", "标题", @"C:\dl", new[] { @"C:\dl\1.mp4" }, 3, 1, 0, DateTimeOffset.UtcNow);
+    var entryJson = System.Text.Json.JsonSerializer.Serialize(entry);
+    var entryBack = System.Text.Json.JsonSerializer.Deserialize<MediaDownloadHistoryEntry>(entryJson);
+    AssertEqual("标题", entryBack!.Title, "history entry round trip title");
+    AssertEqual(1, entryBack.SavedFiles.Count, "history entry round trip files");
+    AssertEqual(true, entryJson.Contains("SavedFiles", StringComparison.Ordinal), "history serializes saved files");
+
+    // 请求上下文保存会话 ID，且序列化后不含 Cookie 字段
+    var context = new MediaRequestContext(new Uri("https://www.douyin.com/"), "session-1");
+    AssertEqual("session-1", context.BrowserSessionId, "session id in request context");
+    var variant = new MediaVariant(new Uri("https://cdn.example.com/v.mp4"), 1920, 1080, 30, 2000, 1000, "video/mp4", "h264", MediaVariantSource.StructuredData, context);
+    var variantJson = System.Text.Json.JsonSerializer.Serialize(variant).ToLowerInvariant();
+    AssertEqual(true, !variantJson.Contains("cookie"), "no cookie field in variant json");
+
+    // 分段变体通过 IsSegmented 表达
+    var segmented = variant with { IsSegmented = true };
+    AssertEqual(true, segmented.IsSegmented, "segmented variant flag");
+
+    // MediaDownloadSettings：默认值与 CreateDefault
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var existingDownloads = Path.Combine(root, "dl");
+        Directory.CreateDirectory(existingDownloads);
+        var withDownloads = MediaDownloadSettings.CreateDefault(root, existingDownloads);
+        AssertEqual(Path.GetFullPath(existingDownloads), withDownloads.DownloadDirectory, "create default prefers existing downloads dir");
+
+        var fallback = MediaDownloadSettings.CreateDefault(root, Path.Combine(root, "missing-dl"));
+        AssertEqual(Path.GetFullPath(root), fallback.DownloadDirectory, "create default falls back when downloads dir missing");
+
+        AssertEqual(3, fallback.MaxConcurrentDownloads, "default concurrency");
+        AssertEqual(true, fallback.DefaultSelectAll, "default select all");
+        AssertEqual(false, fallback.OpenFolderAfterDownload, "default open folder");
+        AssertEqual(MediaQualityPreference.Highest, fallback.QualityPreference, "default quality");
+
+        // 并发范围 1-8
+        AssertThrows<ArgumentOutOfRangeException>(() => (fallback with { MaxConcurrentDownloads = 0 }).Validate(), "concurrency lower bound");
+        AssertThrows<ArgumentOutOfRangeException>(() => (fallback with { MaxConcurrentDownloads = 9 }).Validate(), "concurrency upper bound");
+        AssertThrows<ArgumentException>(() => (fallback with { DownloadDirectory = "" }).Validate(), "empty directory rejected");
+        AssertThrows<ArgumentOutOfRangeException>(() => (fallback with { QualityPreference = (MediaQualityPreference)99 }).Validate(), "undefined quality rejected");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+
+    // MediaDownloadProgress：未知总大小不计算百分比，避免除零
+    AssertEqual(null, MediaDownloadProgress.Create(Guid.NewGuid(), 50, null).Percent, "percent null when total unknown");
+    AssertEqual(50d, MediaDownloadProgress.Create(Guid.NewGuid(), 50, 100).Percent, "percent computed");
+    AssertEqual(100d, MediaDownloadProgress.Create(Guid.NewGuid(), 200, 100).Percent, "percent capped at 100");
+
+    // MediaDownloadResult 工厂
+    AssertEqual(MediaDownloadStatus.Succeeded, MediaDownloadResult.Success(Guid.Empty, "x").Status, "result success factory");
+    AssertEqual(MediaDownloadStatus.Failed, MediaDownloadResult.Failed(Guid.Empty, "e").Status, "result failed factory");
+    AssertEqual(MediaDownloadStatus.Cancelled, MediaDownloadResult.Cancelled(Guid.Empty).Status, "result cancelled factory");
+}
+
+// 测试辅助：构造一个合法的作品
+static ResolvedMediaPost BuildValidPostForTest()
+{
+    var context = new MediaRequestContext(new Uri("https://www.douyin.com/video/1"), null);
+    var variant = new MediaVariant(new Uri("https://cdn.example.com/v.mp4"), 1920, 1080, 30, 2000, 1000, "video/mp4", "h264", MediaVariantSource.StructuredData, context);
+    var asset = new MediaAsset(0, MediaKind.Video, new MediaVariant[] { variant });
+    return new ResolvedMediaPost(MediaProviderId.Douyin, new Uri("https://www.douyin.com/video/1"), "1", "t", "a", new MediaAsset[] { asset });
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常
