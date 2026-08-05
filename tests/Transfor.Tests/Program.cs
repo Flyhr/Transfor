@@ -69,6 +69,7 @@ TestDownloadFileNameBuilder();
 TestMediaHashService();
 TestBrowserCookieMatcher();
 TestMediaDownloadService();
+TestDownloadCoordinator();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
@@ -1045,6 +1046,112 @@ static void TestMediaDownloadService()
     }
 }
 
+// 场景：下载队列协调器（串行批次 + 并发上限 + 取消 + 历史计数）
+static void TestDownloadCoordinator()
+{
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var state = MediaStateStore.Load(new AppPaths(root));
+
+        // 4 个任务、并发上限 3：峰值并发等于 3
+        var gated = new GateDownloadService();
+        using var coordinator = new MediaDownloadCoordinator(gated, state);
+        var post = BuildValidPostForTest();
+        var batch = BuildBatchForTest(post, 4, root);
+        var batchTask = coordinator.EnqueueBatchAsync(batch, CancellationToken.None);
+        Task.Delay(300).GetAwaiter().GetResult();
+        AssertEqual(3, gated.MaxConcurrent, "concurrency peak equals 3");
+        coordinator.CancelAllAsync().GetAwaiter().GetResult();
+        batchTask.GetAwaiter().GetResult();
+        AssertEqual(false, coordinator.HasActiveTasks, "no active tasks after cancel all");
+
+        // 单任务取消不影响其他任务（门控服务：取消的任务落定为 Cancelled，其余继续挂起）
+        var gatedCancel = new GateDownloadService();
+        using var coordinator2 = new MediaDownloadCoordinator(gatedCancel, state);
+        var batch2 = BuildBatchForTest(post, 3, root);
+        var batch2Task = coordinator2.EnqueueBatchAsync(batch2, CancellationToken.None);
+        Task.Delay(200).GetAwaiter().GetResult();
+        coordinator2.CancelTask(batch2.Tasks[0].Id);
+        Task.Delay(100).GetAwaiter().GetResult();
+        AssertEqual(1, gatedCancel.Completed.Count(r => r.Status == MediaDownloadStatus.Cancelled), "cancelled task settles as cancelled");
+        AssertEqual(2, gatedCancel.ActiveCount, "other tasks unaffected by single cancel");
+        coordinator2.CancelAllAsync().GetAwaiter().GetResult();
+        batch2Task.GetAwaiter().GetResult();
+
+        // 批次串行化：第二个批次排队，第一个批次结束后才开始（使用独立目录避免历史混入）
+        var serialRoot = Path.Combine(root, "serial");
+        Directory.CreateDirectory(serialRoot);
+        var serialState = MediaStateStore.Load(new AppPaths(serialRoot));
+        var gated2 = new GateDownloadService();
+        using var coordinator3 = new MediaDownloadCoordinator(gated2, serialState);
+        var batch3a = BuildBatchForTest(post, 1, serialRoot);
+        var batch3b = BuildBatchForTest(post, 1, serialRoot);
+        var taskA = coordinator3.EnqueueBatchAsync(batch3a, CancellationToken.None);
+        var taskB = coordinator3.EnqueueBatchAsync(batch3b, CancellationToken.None);
+        Task.Delay(200).GetAwaiter().GetResult();
+        AssertEqual(1, gated2.ActiveCount, "only first batch active while second queued");
+        coordinator3.CancelAllAsync().GetAwaiter().GetResult();
+        taskA.GetAwaiter().GetResult();
+        taskB.GetAwaiter().GetResult();
+        AssertEqual(2, serialState.GetHistory().Count, "both serialized batches write history");
+
+        // 全部失败：历史成功数为 0
+        var failState = MediaStateStore.Load(new AppPaths(root));
+        using var coordinator4 = new MediaDownloadCoordinator(new FakeFailDownloadService(), failState);
+        var batch4 = BuildBatchForTest(post, 2, root);
+        coordinator4.EnqueueBatchAsync(batch4, CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(0, failState.GetHistory().Last().SuccessCount, "all-failed batch records zero success");
+        AssertEqual(2, failState.GetHistory().Last().FailureCount, "all-failed batch counts failures");
+
+        // 设置并发数修改后下一个批次生效
+        state.UpdateSettings(state.Settings with { MaxConcurrentDownloads = 1 });
+        var gated3 = new GateDownloadService();
+        using var coordinator5 = new MediaDownloadCoordinator(gated3, state);
+        var batch5 = BuildBatchForTest(post, 3, root);
+        var batch5Task = coordinator5.EnqueueBatchAsync(batch5, CancellationToken.None);
+        Task.Delay(200).GetAwaiter().GetResult();
+        AssertEqual(1, gated3.MaxConcurrent, "concurrency setting honored on next batch");
+        coordinator5.CancelAllAsync().GetAwaiter().GetResult();
+        batch5Task.GetAwaiter().GetResult();
+
+        // 完成事件包含批次 ID 与最终 SavedPath
+        var eventState = MediaStateStore.Load(new AppPaths(root));
+        var succeed = new FakeSucceedDownloadService();
+        using var coordinator6 = new MediaDownloadCoordinator(succeed, eventState);
+        var eventBatch = BuildBatchForTest(post, 1, root);
+        MediaDownloadTaskCompleted? completedEvent = null;
+        coordinator6.TaskCompleted += (_, e) => completedEvent = e;
+        coordinator6.EnqueueBatchAsync(eventBatch, CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(true, completedEvent is not null, "completed event fired");
+        AssertEqual(eventBatch.Id, completedEvent!.BatchId, "completed event batch id");
+        AssertEqual(true, completedEvent.Result.SavedPath is not null, "completed event saved path");
+
+        // 空批次被拒绝
+        using var coordinator7 = new MediaDownloadCoordinator(new FakeSucceedDownloadService(), state);
+        var emptyBatch = new MediaDownloadBatch(Guid.NewGuid(), "u", post, Array.Empty<MediaDownloadTask>());
+        AssertThrows<ArgumentException>(() => coordinator7.EnqueueBatchAsync(emptyBatch, CancellationToken.None), "empty batch rejected");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+// 测试辅助：构造下载批次
+static MediaDownloadBatch BuildBatchForTest(ResolvedMediaPost post, int count, string directory)
+{
+    var tasks = new List<MediaDownloadTask>();
+    for (var i = 0; i < count; i++)
+    {
+        var variant = post.Assets[0].Variants[0];
+        var target = Path.Combine(directory, $"t{i}.mp4");
+        tasks.Add(new MediaDownloadTask(Guid.NewGuid(), post.Assets[0], variant, target));
+    }
+    return new MediaDownloadBatch(Guid.NewGuid(), "https://v.douyin.com/a/", post, tasks);
+}
+
 // 通用断言：相等则通过，否则抛出带用例名的异常
 static void AssertEqual<T>(T expected, T actual, string name)
 {
@@ -1295,4 +1402,74 @@ file sealed class SlowStreamContent : HttpContent
         length = 0;
         return false;
     }
+}
+
+// 测试替身：可门控的下载服务（控制并发观测）
+file sealed class GateDownloadService : IMediaDownloadService
+{
+    public List<MediaDownloadResult> Completed { get; } = new();
+    private readonly object sync = new();
+    private int active;
+    private readonly List<TaskCompletionSource<bool>> gates = new();
+
+    public int MaxConcurrent { get; private set; }
+    public int ActiveCount
+    {
+        get { lock (sync) { return active; } }
+    }
+
+    public async Task<MediaDownloadResult> DownloadAsync(MediaDownloadTask task, CancellationToken cancellationToken, IProgress<MediaDownloadProgress>? progress = null)
+    {
+        TaskCompletionSource<bool> gate;
+        lock (sync)
+        {
+            active++;
+            MaxConcurrent = Math.Max(MaxConcurrent, active);
+            gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            gates.Add(gate);
+        }
+
+        MediaDownloadResult? result = null;
+        try
+        {
+            using var registration = cancellationToken.Register(() => gate.TrySetResult(false));
+            await gate.Task.ConfigureAwait(false);
+            result = cancellationToken.IsCancellationRequested
+                ? MediaDownloadResult.Cancelled(task.Id)
+                : MediaDownloadResult.Success(task.Id, task.TargetPath);
+            return result;
+        }
+        finally
+        {
+            lock (sync)
+            {
+                active--;
+                if (result is not null)
+                {
+                    Completed.Add(result);
+                }
+            }
+        }
+    }
+}
+
+// 测试替身：立即成功
+file sealed class FakeSucceedDownloadService : IMediaDownloadService
+{
+    public Task<MediaDownloadResult> DownloadAsync(MediaDownloadTask task, CancellationToken cancellationToken, IProgress<MediaDownloadProgress>? progress = null)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Task.FromResult(MediaDownloadResult.Cancelled(task.Id));
+        }
+        File.WriteAllBytes(task.TargetPath, new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70 });
+        return Task.FromResult(MediaDownloadResult.Success(task.Id, task.TargetPath));
+    }
+}
+
+// 测试替身：立即失败
+file sealed class FakeFailDownloadService : IMediaDownloadService
+{
+    public Task<MediaDownloadResult> DownloadAsync(MediaDownloadTask task, CancellationToken cancellationToken, IProgress<MediaDownloadProgress>? progress = null)
+        => Task.FromResult(MediaDownloadResult.Failed(task.Id, "模拟失败"));
 }
