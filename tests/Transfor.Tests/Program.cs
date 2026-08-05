@@ -35,6 +35,7 @@ foreach (var testCase in spaceCases)
     AssertEqual(testCase.Expected, actual, testCase.Name);
 }
 
+TestAppPaths();
 TestTextToolsPageContract();
 TestTextToolDefinition();
 TestHotKeyBinding();
@@ -43,6 +44,13 @@ TestPasteCoordinator();
 
 Console.WriteLine($"All {quoteCases.Length + spaceCases.Length + 20} tests passed.");
 
+static void TestAppPaths()
+{
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    var paths = new AppPaths(root);
+    AssertEqual(Path.GetFullPath(root), paths.ApplicationDirectory, "application directory");
+    AssertEqual("state.json", Path.GetFileName(paths.LegacyStateFile), "legacy state file name");
+}
 static void TestTextToolsPageContract()
 {
     var path = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"), "state.json");
