@@ -5,7 +5,8 @@ internal static class AppBootstrapper
     public static AppServices Create()
     {
         var paths = AppPaths.Default;
-        var state = LegacyHistoryStore.Load(paths.LegacyStateFile);
+        StateMigrationService.EnsureMigrated(paths);
+        var state = TextStateStore.Load(paths);
         return new AppServices
         {
             State = state,

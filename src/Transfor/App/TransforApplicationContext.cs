@@ -2,7 +2,7 @@ namespace Transfor;
 
 internal sealed class TransforApplicationContext : ApplicationContext
 {
-    private readonly LegacyHistoryStore historyStore;
+    private readonly TextStateStore historyStore;
     private readonly AppServices services;
     private readonly MainForm mainForm;
     private readonly HistoryPanelForm historyPanel;

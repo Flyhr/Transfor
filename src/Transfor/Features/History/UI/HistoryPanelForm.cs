@@ -2,7 +2,7 @@ namespace Transfor;
 
 internal sealed class HistoryPanelForm : Form
 {
-    private readonly LegacyHistoryStore historyStore;
+    private readonly TextStateStore historyStore;
     private readonly PasteCoordinator pasteCoordinator;
     private readonly Button quoteButton;
     private readonly Button spaceButton;
@@ -12,11 +12,11 @@ internal sealed class HistoryPanelForm : Form
     private nint targetWindow;
     private bool allowClose;
 
-    public HistoryPanelForm(LegacyHistoryStore historyStore, PasteCoordinator pasteCoordinator)
+    public HistoryPanelForm(TextStateStore historyStore, PasteCoordinator pasteCoordinator)
     {
         this.historyStore = historyStore;
         this.pasteCoordinator = pasteCoordinator;
-        currentTool = historyStore.Settings.LastViewedTool;
+        currentTool = historyStore.UiState.LastViewedTool;
 
         Text = "Transfor 历史记录";
         StartPosition = FormStartPosition.Manual;
@@ -73,7 +73,7 @@ internal sealed class HistoryPanelForm : Form
     {
         targetWindow = foregroundWindow;
         errorLabel.Text = string.Empty;
-        SelectTool(historyStore.Settings.LastViewedTool);
+        SelectTool(historyStore.UiState.LastViewedTool);
         if (!Visible)
         {
             var cursor = Cursor.Position;
@@ -111,7 +111,7 @@ internal sealed class HistoryPanelForm : Form
         ApplyButtonState(quoteButton, tool == TextToolId.QuoteConversion);
         ApplyButtonState(spaceButton, tool == TextToolId.SpaceRemoval);
         RefreshHistory();
-        if (historyStore.Settings.LastViewedTool != tool)
+        if (historyStore.UiState.LastViewedTool != tool)
         {
             historyStore.SetLastViewedTool(tool);
             try

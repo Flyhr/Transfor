@@ -4,7 +4,7 @@ namespace Transfor;
 
 internal sealed class SettingsForm : Form
 {
-    private readonly LegacyHistoryStore historyStore;
+    private readonly TextStateStore historyStore;
     private readonly GlobalHotKeyManager hotKeyManager;
     private readonly CheckedListBox modifiersBox;
     private readonly ComboBox keyBox;
@@ -14,7 +14,7 @@ internal sealed class SettingsForm : Form
     private readonly TextToolId quoteTool = TextToolId.QuoteConversion;
     private readonly TextToolId spaceTool = TextToolId.SpaceRemoval;
 
-    public SettingsForm(LegacyHistoryStore historyStore, GlobalHotKeyManager hotKeyManager)
+    public SettingsForm(TextStateStore historyStore, GlobalHotKeyManager hotKeyManager)
     {
         this.historyStore = historyStore;
         this.hotKeyManager = hotKeyManager;

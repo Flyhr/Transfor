@@ -13,24 +13,20 @@ Windows 桌面文本转换工具。基于 .NET 10 + WinForms 构建，常驻系�
 
 ## 项目结构
 
-```
-Transfor/
-├── Transfor.slnx                  # 解决方案（XML 格式）
-├── src/Transfor/                  # 主程序（WinForms）
-│   ├── Program.cs                 # 入口，启动 ApplicationContext
-│   ├── TransforApplicationContext.cs  # 托盘、全局快捷键、窗口生命周期
-│   ├── MainForm.cs                # 主窗口：文本转换界面
-│   ├── HistoryPanelForm.cs        # 历史记录浮动面板（贴靠光标弹出）
-│   ├── SettingsForm.cs            # 设置窗口（快捷键、历史上限）
-│   ├── HistoryStore.cs            # 历史与设置的 JSON 持久化
-│   ├── QuoteConverter.cs          # 引号转换核心逻辑
-│   ├── SpaceRemover.cs            # 去空格核心逻辑
-│   ├── PasteCoordinator.cs        # 剪贴板 + SendInput 粘贴流程
-│   ├── GlobalHotKeyManager.cs     # RegisterHotKey 全局快捷键
-│   └── WindowsNative.cs           # Win32 P/Invoke 封装
-└── tests/Transfor.Tests/          # 无第三方依赖的控制台测试程序
+```text
+src/Transfor/
+├── App/                 # 入口、组合根、应用生命周期与路径
+├── Shell/               # 主窗口外壳与页面接口
+├── Features/
+│   ├── TextTools/       # 文本转换页面、模型与转换器
+│   ├── History/         # 文本历史、粘贴协调器与历史面板
+│   └── Settings/        # 设置模型与设置窗口
+├── Infrastructure/
+│   └── Persistence/     # JSON 状态存储与旧状态迁移
+└── Platform/Windows/    # 剪贴板、热键、输入与 Win32 封装
 ```
 
+应用状态位于 `%LOCALAPPDATA%\Transfor\`：`settings.json`、`ui-state.json` 与 `text-history.json` 分别保存设置、界面状态和文本历史。首次启动新版时会迁移旧 `state.json`，成功后备份为 `state.v1.backup.json`；迁移中断会优先使用仍可读取的旧状态恢复。
 ## 环境要求
 
 - Windows 10/11

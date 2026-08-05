@@ -12,10 +12,10 @@ internal sealed class TextToolsPage : UserControl, IFeaturePage
     private readonly Label titleLabel;
     private readonly TextToolDefinition quoteTool = new(TextToolId.QuoteConversion, "引号转换", QuoteConverter.Convert);
     private readonly TextToolDefinition spaceTool = new(TextToolId.SpaceRemoval, "去除空格", SpaceRemover.Remove);
-    private readonly LegacyHistoryStore historyStore;
+    private readonly TextStateStore historyStore;
     private TextToolDefinition currentTool;
 
-    public TextToolsPage(LegacyHistoryStore historyStore)
+    public TextToolsPage(TextStateStore historyStore)
     {
         this.historyStore = historyStore;
         currentTool = quoteTool;

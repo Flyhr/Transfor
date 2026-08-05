@@ -1,4 +1,5 @@
 using Transfor;
+using System.Text.Json;
 using System.Windows.Forms;
 
 var quoteCases = new (string Name, string? Input, string Expected)[]
@@ -35,6 +36,8 @@ foreach (var testCase in spaceCases)
     AssertEqual(testCase.Expected, actual, testCase.Name);
 }
 
+TestPendingMigrationRecovery();
+TestSplitStateMigration();
 TestAppPaths();
 TestTextToolsPageContract();
 TestTextToolDefinition();
@@ -44,6 +47,32 @@ TestPasteCoordinator();
 
 Console.WriteLine($"All {quoteCases.Length + spaceCases.Length + 20} tests passed.");
 
+static void TestPendingMigrationRecovery()
+{
+    var directory = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    var paths = new AppPaths(directory);
+    LegacyStateTestWriter.Write(paths.LegacyStateFile, TextToolId.SpaceRemoval);
+    Directory.CreateDirectory(directory);
+    File.WriteAllText(paths.PendingMigrationFile, "{\"schemaVersion\":1}");
+    File.WriteAllText(paths.SettingsFile, "not json");
+    StateMigrationService.EnsureMigrated(paths);
+    AssertEqual(false, File.Exists(paths.PendingMigrationFile), "readable legacy resolves pending migration");
+    AssertEqual(TextToolId.SpaceRemoval, TextStateStore.Load(paths).UiState.LastViewedTool, "pending migration restores legacy ui state");
+
+    File.WriteAllText(paths.PendingMigrationFile, "{\"schemaVersion\":1}");
+    StateMigrationService.EnsureMigrated(paths);
+    AssertEqual(false, File.Exists(paths.PendingMigrationFile), "complete new state resolves pending migration");
+}
+static void TestSplitStateMigration()
+{
+    var directory = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    var paths = new AppPaths(directory);
+    LegacyStateTestWriter.Write(paths.LegacyStateFile, TextToolId.SpaceRemoval);
+    StateMigrationService.EnsureMigrated(paths);
+    var state = TextStateStore.Load(paths);
+    AssertEqual(TextToolId.SpaceRemoval, state.UiState.LastViewedTool, "migrated ui state");
+    AssertEqual(true, File.Exists(paths.LegacyBackupFile), "legacy backup");
+}
 static void TestAppPaths()
 {
     var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
@@ -56,7 +85,7 @@ static void TestTextToolsPageContract()
     var path = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"), "state.json");
     RunSta(() =>
     {
-        using var page = new TextToolsPage(LegacyHistoryStore.Load(path));
+        using var page = new TextToolsPage(TextStateStore.Load(new AppPaths(Path.GetDirectoryName(path)!)));
         AssertEqual("text-tools", page.Id, "text page id");
         AssertEqual("文本转换", page.DisplayName, "text page display name");
         AssertEqual(true, page.View is UserControl, "text page view");
@@ -110,11 +139,11 @@ static void TestHistoryStore()
 
     try
     {
-        var store = LegacyHistoryStore.Load(path);
+        var store = TextStateStore.Load(new AppPaths(Path.GetDirectoryName(path)!));
         AssertEqual(HotKeyBinding.Default, store.Settings.HistoryHotKey, "default hotkey");
         AssertEqual(100, store.Settings.QuoteHistoryLimit, "default quote history limit");
         AssertEqual(100, store.Settings.SpaceHistoryLimit, "default space history limit");
-        AssertEqual(TextToolId.QuoteConversion, store.Settings.LastViewedTool, "default last viewed tool");
+        AssertEqual(TextToolId.QuoteConversion, store.UiState.LastViewedTool, "default last viewed tool");
 
         var original = "\"a\"\r\n b";
         var converted = "'a'\r\nb";
@@ -125,7 +154,7 @@ static void TestHistoryStore()
         store.UpdateSettings(store.Settings with { QuoteHistoryLimit = 1, SpaceHistoryLimit = 2 });
         store.Save();
 
-        var reloaded = LegacyHistoryStore.Load(path);
+        var reloaded = TextStateStore.Load(new AppPaths(Path.GetDirectoryName(path)!));
         var quote = reloaded.GetHistory(TextToolId.QuoteConversion);
         var space = reloaded.GetHistory(TextToolId.SpaceRemoval);
         AssertEqual(1, quote.Count, "quote history count");
@@ -133,7 +162,7 @@ static void TestHistoryStore()
         AssertEqual(original, quote[0].OriginalInput, "history original input");
         AssertEqual(converted, quote[0].ConvertedOutput, "history converted output");
         AssertEqual(createdAt, quote[0].CreatedAtUtc, "history timestamp");
-        AssertEqual(TextToolId.SpaceRemoval, reloaded.Settings.LastViewedTool, "last viewed persistence");
+        AssertEqual(TextToolId.SpaceRemoval, reloaded.UiState.LastViewedTool, "last viewed persistence");
 
         reloaded.UpdateSettings(reloaded.Settings with { QuoteHistoryLimit = 1, SpaceHistoryLimit = 1 });
         reloaded.Add(new HistoryEntry(TextToolId.QuoteConversion, "second", "second", createdAt.AddSeconds(2)));
@@ -149,9 +178,9 @@ static void TestHistoryStore()
         AssertThrows<ArgumentException>(() => reloaded.UpdateSettings(reloaded.Settings with { QuoteHistoryLimit = 0 }), "history limit lower bound");
         AssertThrows<ArgumentException>(() => reloaded.UpdateSettings(reloaded.Settings with { SpaceHistoryLimit = 501 }), "history limit upper bound");
 
-        File.WriteAllText(path, "not json");
-        var corrupt = LegacyHistoryStore.Load(path);
-        AssertEqual(AppSettings.Default, corrupt.Settings, "corrupt state fallback");
+        File.WriteAllText(Path.Combine(root, "text-history.json"), "not json");
+        var corrupt = TextStateStore.Load(new AppPaths(root));
+        AssertEqual(reloaded.Settings, corrupt.Settings, "corrupt history keeps settings");
         AssertEqual(0, corrupt.GetHistory(TextToolId.QuoteConversion).Count, "corrupt history fallback");
     }
     finally
@@ -230,6 +259,15 @@ static void AssertThrows<TException>(Action action, string name)
 }
 
 
+file static class LegacyStateTestWriter
+{
+    public static void Write(string path, TextToolId tool)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var data = new { Settings = new { HotKeyModifiers = (int)Keys.Alt, HotKeyKey = (int)Keys.Q, QuoteHistoryLimit = 100, SpaceHistoryLimit = 100, LastViewedTool = tool.ToString() }, History = Array.Empty<HistoryEntry>() };
+        File.WriteAllText(path, JsonSerializer.Serialize(data));
+    }
+}
 file sealed class FakeClipboard : IClipboardService
 {
     private readonly List<string> calls;
