@@ -45,6 +45,8 @@ internal static class AppBootstrapper
                 DownloadCoordinator = downloadCoordinator,
                 BrowserSessions = browserSessions,
                 HttpClient = httpClient,
+                // 浏览器会话工厂：延迟到首次浏览器解析时在 UI 线程创建
+                BrowserSessionFactory = owner => new WebView2BrowserSessionAccessor(owner, paths),
             },
         };
     }

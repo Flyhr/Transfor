@@ -77,6 +77,7 @@ TestBrowserProxy();
 TestDouyinPageParser();
 TestDouyinMediaNormalizer();
 TestDouyinMediaResolver();
+TestUiDispatcher();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
@@ -1419,6 +1420,65 @@ static void TestDouyinMediaResolver()
     var pageResult = pageResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/abc/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
     AssertEqual(MediaResolveStatus.Succeeded, pageResult.Status, "static page resolves");
     AssertEqual(1, pageResult.Post!.Assets.Count, "static page single video asset");
+}
+
+// 场景：UI 调度器（取消、投递失败均在超时内结束）
+static void TestUiDispatcher()
+{
+    RunSta(() =>
+    {
+        using var owner = new Form { ShowInTaskbar = false };
+        _ = owner.Handle; // 强制创建窗口句柄
+
+        // 正常调度：在 UI 线程执行并返回结果（轮询消息泵驱动 BeginInvoke）
+        var dispatcher = new WinFormsUiDispatcher(owner);
+        var normalTask = dispatcher.InvokeAsync(token => Task.FromResult(42), CancellationToken.None);
+        AssertEqual(42, PumpUi(normalTask, owner), "dispatcher invokes on ui thread");
+
+        // 取消：任务在有限时间内结束
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var cancelled = false;
+        try
+        {
+            var cancelTask = dispatcher.InvokeAsync(token => Task.FromResult(1), cts.Token);
+            PumpUi(cancelTask, owner);
+            cancelTask.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            cancelled = true;
+        }
+        AssertEqual(true, cancelled, "dispatcher honours cancellation");
+
+        // 控件销毁：返回明确错误而非无限等待
+        var disposedOwner = new Form { ShowInTaskbar = false };
+        _ = disposedOwner.Handle;
+        var disposedDispatcher = new WinFormsUiDispatcher(disposedOwner);
+        disposedOwner.Dispose();
+        var disposeFailed = false;
+        try
+        {
+            disposedDispatcher.InvokeAsync(token => Task.FromResult(1), CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (InvalidOperationException)
+        {
+            disposeFailed = true;
+        }
+        AssertEqual(true, disposeFailed, "disposed owner fails fast");
+    });
+
+    // 轮询消息泵直到任务完成或超时
+    static T PumpUi<T>(Task<T> task, Form owner)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!task.IsCompleted && DateTime.UtcNow < deadline)
+        {
+            Application.DoEvents();
+            Thread.Sleep(10);
+        }
+        return task.GetAwaiter().GetResult();
+    }
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常
