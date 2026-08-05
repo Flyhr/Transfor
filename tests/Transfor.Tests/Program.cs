@@ -70,6 +70,8 @@ TestMediaHashService();
 TestBrowserCookieMatcher();
 TestMediaDownloadService();
 TestDownloadCoordinator();
+TestDirectMediaResolver();
+TestMediaDownloadPage();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
@@ -1150,6 +1152,79 @@ static MediaDownloadBatch BuildBatchForTest(ResolvedMediaPost post, int count, s
         tasks.Add(new MediaDownloadTask(Guid.NewGuid(), post.Assets[0], variant, target));
     }
     return new MediaDownloadBatch(Guid.NewGuid(), "https://v.douyin.com/a/", post, tasks);
+}
+
+// 场景：直接媒体解析器
+static void TestDirectMediaResolver()
+{
+    var validator = new SafeUriValidator(new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("8.8.8.8") })));
+
+    // 图片直接 URL -> 单图片资产
+    var imageHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Array.Empty<byte>()) }; r.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/jpeg"); return r; });
+    var imageResolver = new DirectMediaResolver(new SafeHttpRequestSender(new HttpClient(imageHandler), validator));
+    AssertEqual(true, imageResolver.CanResolve(new Uri("https://cdn.example.com/1.jpg")), "direct can resolve http url");
+    AssertEqual(false, imageResolver.CanResolve(new Uri("https://v.douyin.com/abc/")), "douyin page domain not direct");
+    AssertEqual(false, imageResolver.CanResolve(new Uri("https://www.douyin.com/video/1")), "www.douyin.com not direct");
+    var imageResult = imageResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://cdn.example.com/1.jpg"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Succeeded, imageResult.Status, "direct image succeeds");
+    AssertEqual(1, imageResult.Post!.Assets.Count, "direct image single asset");
+    AssertEqual(MediaKind.Image, imageResult.Post.Assets[0].Kind, "direct image kind");
+
+    // 视频直接 URL -> 单视频资产
+    var videoHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Array.Empty<byte>()) }; r.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("video/mp4"); return r; });
+    var videoResolver = new DirectMediaResolver(new SafeHttpRequestSender(new HttpClient(videoHandler), validator));
+    var videoResult = videoResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://cdn.example.com/v.mp4"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaKind.Video, videoResult.Post!.Assets[0].Kind, "direct video kind");
+
+    // HTML -> Unsupported（业务结果，不抛异常）
+    var htmlHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(Array.Empty<byte>()) }; r.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/html"); return r; });
+    var htmlResolver = new DirectMediaResolver(new SafeHttpRequestSender(new HttpClient(htmlHandler), validator));
+    var htmlResult = htmlResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://cdn.example.com/page"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Unsupported, htmlResult.Status, "direct html unsupported");
+}
+
+// 场景：媒体下载页面 MVP（STA）
+static void TestMediaDownloadPage()
+{
+    RunSta(() =>
+    {
+        var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var state = MediaStateStore.Load(new AppPaths(root));
+            var download = new MediaDownloadCoordinator(new FakeSucceedDownloadService(), state);
+            var resolve = new MediaResolveCoordinator(new MediaResolverRegistry(new IMediaResolver[] { new FakeResolver(MediaProviderId.Douyin, resultFactory: (_, _) => MediaResolveResult.RequiresUserInteraction("需要浏览器")) }));
+            using var page = new MediaDownloadPage(resolve, download, state);
+
+            // 页面契约
+            AssertEqual("media-download", page.Id, "media page id");
+            AssertEqual("媒体下载", page.DisplayName, "media page display name");
+            AssertEqual(true, page.View is UserControl, "media page view");
+
+            // 保存目录初始值来自设置
+            AssertEqual(state.Settings.DownloadDirectory, page.DownloadDirectoryText, "directory initial from settings");
+
+            // 初始状态：解析可用、浏览器/下载禁用
+            AssertEqual(MediaPageState.Idle, page.CurrentState, "initial state idle");
+            AssertEqual(true, page.ParseButtonEnabled, "parse enabled initially");
+            AssertEqual(false, page.BrowserButtonEnabled, "browser disabled initially");
+            AssertEqual(false, page.DownloadButtonEnabled, "download disabled initially");
+
+            // WaitingForUser：浏览器按钮启用，普通解析与下载禁用
+            page.ResolveInputAsync("https://v.douyin.com/a/").GetAwaiter().GetResult();
+            AssertEqual(MediaPageState.WaitingForUser, page.CurrentState, "interaction state");
+            AssertEqual(true, page.BrowserButtonEnabled, "browser enabled in waiting state");
+            AssertEqual(false, page.ParseButtonEnabled, "parse disabled in waiting state");
+            AssertEqual(false, page.DownloadButtonEnabled, "download disabled in waiting state");
+
+            download.Dispose();
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    });
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常
