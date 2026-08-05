@@ -2,6 +2,7 @@ using System.Windows.Forms;
 
 namespace Transfor;
 
+// 设置窗口：配置全局快捷键、两功能的历史上限，并可清空对应历史
 internal sealed class SettingsForm : Form
 {
     private readonly TextStateStore historyStore;
@@ -19,6 +20,7 @@ internal sealed class SettingsForm : Form
         this.historyStore = historyStore;
         this.hotKeyManager = hotKeyManager;
 
+        // 固定大小的模态对话框
         Text = "设置";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -45,6 +47,7 @@ internal sealed class SettingsForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
 
+        // 快捷键区域：修饰键复选列表 + 主键下拉框
         root.Controls.Add(new Label { Text = "历史面板快捷键", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0);
 
         var hotKeyPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
@@ -63,6 +66,7 @@ internal sealed class SettingsForm : Form
         root.Controls.Add(hotKeyPanel, 1, 0);
         root.SetRowSpan(hotKeyPanel, 2);
 
+        // 两种工具的历史上限
         root.Controls.Add(new Label { Text = "引号转换历史上限", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 2);
         quoteLimitBox = CreateLimitBox(historyStore.Settings.QuoteHistoryLimit);
         root.Controls.Add(quoteLimitBox, 1, 2);
@@ -71,6 +75,7 @@ internal sealed class SettingsForm : Form
         spaceLimitBox = CreateLimitBox(historyStore.Settings.SpaceHistoryLimit);
         root.Controls.Add(spaceLimitBox, 1, 3);
 
+        // 清空历史按钮（各自独立，带确认提示）
         var clearPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         var clearQuoteButton = new Button { AutoSize = true, Text = "清空引号转换历史" };
         clearQuoteButton.Click += (_, _) => ClearHistory(quoteTool, "引号转换");
@@ -80,6 +85,7 @@ internal sealed class SettingsForm : Form
         clearPanel.Controls.Add(clearSpaceButton);
         root.Controls.Add(clearPanel, 1, 4);
 
+        // 校验/保存错误提示
         errorLabel = new Label
         {
             AutoSize = false,
@@ -90,6 +96,7 @@ internal sealed class SettingsForm : Form
         root.Controls.Add(errorLabel, 0, 5);
         root.SetColumnSpan(errorLabel, 2);
 
+        // 底部按钮：取消 / 保存
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
         var cancelButton = new Button { AutoSize = true, Text = "取消", DialogResult = DialogResult.Cancel };
         var saveButton = new Button { AutoSize = true, Text = "保存", DialogResult = DialogResult.None };
@@ -102,9 +109,11 @@ internal sealed class SettingsForm : Form
         Controls.Add(root);
         AcceptButton = saveButton;
         CancelButton = cancelButton;
+        // 打开时用当前设置填充快捷键控件
         Load += (_, _) => LoadHotKey(historyStore.Settings.HistoryHotKey);
     }
 
+    // 候选主键：排除修饰键、功能键区与组合键值，得到可选的普通按键列表
     private static IEnumerable<Keys> GetOrdinaryKeys()
     {
         return Enum.GetValues<Keys>()
@@ -118,6 +127,7 @@ internal sealed class SettingsForm : Form
             .OrderBy(key => key.ToString(), StringComparer.OrdinalIgnoreCase);
     }
 
+    // 创建历史上限输入框（1–500）
     private static NumericUpDown CreateLimitBox(int value)
     {
         return new NumericUpDown
@@ -130,6 +140,7 @@ internal sealed class SettingsForm : Form
         };
     }
 
+    // 把当前保存的快捷键回填到控件
     private void LoadHotKey(HotKeyBinding binding)
     {
         for (var i = 0; i < modifiersBox.Items.Count; i++)
@@ -139,17 +150,20 @@ internal sealed class SettingsForm : Form
         }
 
         keyBox.SelectedItem = binding.Key;
+        // 保存的键不在候选列表中时回退为 Q
         if (keyBox.SelectedIndex < 0)
         {
             keyBox.SelectedIndex = keyBox.Items.IndexOf(Keys.Q);
         }
     }
 
+    // 保存：先注册新热键成功，再持久化设置；保存失败则回滚热键
     private void SaveButton_Click(object? sender, EventArgs e)
     {
         errorLabel.Text = string.Empty;
         try
         {
+            // 收集勾选的修饰键
             var modifiers = Keys.None;
             foreach (ModifierOption option in modifiersBox.CheckedItems)
             {
@@ -161,6 +175,7 @@ internal sealed class SettingsForm : Form
                 throw new ArgumentException("请选择普通按键。", nameof(key));
             }
 
+            // 组装并校验新设置
             var hotKey = HotKeyBinding.Create(modifiers, key);
             var nextSettings = historyStore.Settings with
             {
@@ -170,12 +185,14 @@ internal sealed class SettingsForm : Form
             };
             nextSettings.Validate();
             var oldSettings = historyStore.Settings;
+            // 先替换系统级热键；被占用时提示错误并中止
             if (!hotKeyManager.TryReplace(hotKey, out var hotKeyError))
             {
                 errorLabel.Text = hotKeyError;
                 return;
             }
 
+            // 持久化设置；失败时把热键回滚为旧值
             try
             {
                 historyStore.UpdateSettings(nextSettings);
@@ -197,6 +214,7 @@ internal sealed class SettingsForm : Form
         }
     }
 
+    // 清空指定工具的历史：确认后清空并保存
     private void ClearHistory(TextToolId tool, string displayName)
     {
         if (MessageBox.Show(this, $"确定清空“{displayName}”的全部历史记录吗？", "确认清空", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
@@ -216,10 +234,9 @@ internal sealed class SettingsForm : Form
         }
     }
 
+    // 修饰键选项：显示名 + 对应的 Keys 值
     private sealed record ModifierOption(string Name, Keys Value)
     {
         public override string ToString() => Name;
     }
 }
-
-
