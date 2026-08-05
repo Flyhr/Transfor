@@ -35,6 +35,7 @@ foreach (var testCase in spaceCases)
     AssertEqual(testCase.Expected, actual, testCase.Name);
 }
 
+TestTextToolsPageContract();
 TestTextToolDefinition();
 TestHotKeyBinding();
 TestHistoryStore();
@@ -42,6 +43,31 @@ TestPasteCoordinator();
 
 Console.WriteLine($"All {quoteCases.Length + spaceCases.Length + 20} tests passed.");
 
+static void TestTextToolsPageContract()
+{
+    var path = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"), "state.json");
+    RunSta(() =>
+    {
+        using var page = new TextToolsPage(LegacyHistoryStore.Load(path));
+        AssertEqual("text-tools", page.Id, "text page id");
+        AssertEqual("文本转换", page.DisplayName, "text page display name");
+        AssertEqual(true, page.View is UserControl, "text page view");
+    });
+}
+
+static void RunSta(Action action)
+{
+    Exception? error = null;
+    var thread = new Thread(() =>
+    {
+        try { action(); }
+        catch (Exception exception) { error = exception; }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+    if (error is not null) throw error;
+}
 static void TestTextToolDefinition()
 {
     var definition = new TextToolDefinition(TextToolId.QuoteConversion, "引号转换", QuoteConverter.Convert);
