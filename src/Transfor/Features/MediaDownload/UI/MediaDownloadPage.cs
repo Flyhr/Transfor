@@ -21,6 +21,7 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     private readonly MediaResolveCoordinator resolveCoordinator;
     private readonly MediaDownloadCoordinator downloadCoordinator;
     private readonly MediaStateStore stateStore;
+    private readonly Func<Control, ValueTask> ensureBrowserInitializedAsync;
     private readonly TextBox inputBox;
     private readonly Button pasteButton;
     private readonly Button parseButton;
@@ -42,11 +43,13 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     public MediaDownloadPage(
         MediaResolveCoordinator resolveCoordinator,
         MediaDownloadCoordinator downloadCoordinator,
-        MediaStateStore stateStore)
+        MediaStateStore stateStore,
+        Func<Control, ValueTask> ensureBrowserInitializedAsync)
     {
         this.resolveCoordinator = resolveCoordinator ?? throw new ArgumentNullException(nameof(resolveCoordinator));
         this.downloadCoordinator = downloadCoordinator ?? throw new ArgumentNullException(nameof(downloadCoordinator));
         this.stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
+        this.ensureBrowserInitializedAsync = ensureBrowserInitializedAsync ?? throw new ArgumentNullException(nameof(ensureBrowserInitializedAsync));
 
         Dock = DockStyle.Fill;
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 6 };
@@ -180,6 +183,18 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         {
             SetState(MediaPageState.Failed);
             errorLabel.Text = parseError ?? "未在文本中找到链接。";
+            return;
+        }
+
+        // 首次进入浏览器流程：在 UI 线程初始化浏览器会话；失败转为 WaitingForUser 提示
+        try
+        {
+            await ensureBrowserInitializedAsync(this);
+        }
+        catch (Exception ex)
+        {
+            SetState(MediaPageState.WaitingForUser);
+            errorLabel.Text = $"浏览器不可用：{ex.Message}";
             return;
         }
 

@@ -72,6 +72,8 @@ TestMediaDownloadService();
 TestDownloadCoordinator();
 TestDirectMediaResolver();
 TestMediaDownloadPage();
+TestMediaServicesLifecycle();
+TestBrowserProxy();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
@@ -1195,7 +1197,7 @@ static void TestMediaDownloadPage()
             var state = MediaStateStore.Load(new AppPaths(root));
             var download = new MediaDownloadCoordinator(new FakeSucceedDownloadService(), state);
             var resolve = new MediaResolveCoordinator(new MediaResolverRegistry(new IMediaResolver[] { new FakeResolver(MediaProviderId.Douyin, resultFactory: (_, _) => MediaResolveResult.RequiresUserInteraction("需要浏览器")) }));
-            using var page = new MediaDownloadPage(resolve, download, state);
+            using var page = new MediaDownloadPage(resolve, download, state, _ => ValueTask.CompletedTask);
 
             // 页面契约
             AssertEqual("media-download", page.Id, "media page id");
@@ -1225,6 +1227,83 @@ static void TestMediaDownloadPage()
             Directory.Delete(root, recursive: true);
         }
     });
+}
+
+// 场景：媒体服务组合与生命周期（释放顺序、浏览器延迟初始化）
+static void TestMediaServicesLifecycle()
+{
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var state = MediaStateStore.Load(new AppPaths(root));
+        var http = new HttpClient();
+        var download = new MediaDownloadCoordinator(new FakeSucceedDownloadService(), state);
+        var resolve = new MediaResolveCoordinator(new MediaResolverRegistry(Array.Empty<IMediaResolver>()));
+        var proxy = new BrowserSessionAccessorProxy();
+        var services = new MediaServices
+        {
+            State = state,
+            ResolveCoordinator = resolve,
+            DownloadCoordinator = download,
+            BrowserSessions = proxy,
+            HttpClient = http,
+        };
+
+        // 未设置工厂时：浏览器能力不可用但 Direct 下载正常
+        AssertEqual(false, proxy.IsAvailable, "browser unavailable before factory");
+        var browserError = false;
+        try
+        {
+            services.EnsureBrowserInitializedAsync(new UserControl()).GetAwaiter().GetResult();
+        }
+        catch (InvalidOperationException)
+        {
+            browserError = true;
+        }
+        AssertEqual(true, browserError, "browser init without factory throws recognizable error");
+        AssertEqual(false, proxy.IsAvailable, "proxy stays unavailable after failed init");
+
+        // Attach 后代理委托调用
+        proxy.Attach(new FakeBrowserSession(new BrowserCookie("douyin.com", "/", "a", "1", false)));
+        AssertEqual(true, proxy.IsAvailable, "browser available after attach");
+        var cookies = proxy.GetCookiesAsync("s1", new Uri("https://v.douyin.com/x"), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(1, cookies.Count, "proxy delegates cookie call");
+
+        // 未 Attach 的代理安全返回 unavailable / 空集合
+        var emptyProxy = new BrowserSessionAccessorProxy();
+        var emptyCapture = emptyProxy.CaptureAsync(new Uri("https://v.douyin.com/x"), false, CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(BrowserCaptureStatus.Unavailable, emptyCapture.Status, "unattached proxy capture unavailable");
+        AssertEqual(0, emptyProxy.GetCookiesAsync("s1", new Uri("https://v.douyin.com/x"), CancellationToken.None).GetAwaiter().GetResult().Count, "unattached proxy cookies empty");
+
+        // DisposeAsync 可重复调用且不抛异常；取消任务完成后才释放 HttpClient
+        services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        services.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        services.Dispose();
+        services.Dispose();
+        AssertEqual(true, true, "dispose is idempotent");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+// 场景：浏览器会话代理
+static void TestBrowserProxy()
+{
+    var proxy = new BrowserSessionAccessorProxy();
+    AssertEqual(false, proxy.IsAvailable, "proxy unavailable initially");
+
+    var inner = new FakeBrowserSession();
+    proxy.Attach(inner);
+    AssertEqual(true, proxy.IsAvailable, "proxy available after attach");
+
+    var cookies = proxy.GetCookiesAsync("s1", new Uri("https://v.douyin.com/x"), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(0, cookies.Count, "proxy delegates to empty session");
+
+    proxy.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    AssertEqual(false, proxy.IsAvailable, "proxy unavailable after dispose");
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常

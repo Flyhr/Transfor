@@ -21,8 +21,16 @@ internal sealed class TransforApplicationContext : ApplicationContext
         this.services = services;
         historyStore = services.State;
         hotKeyManager = services.HotKeys;
-        // 由页面集合构造主窗口外壳（后续任务会加入媒体下载页）
-        var pages = new IFeaturePage[] { new TextToolsPage(services.State) };
+        // 由页面集合构造主窗口外壳：文本转换 + 媒体下载
+        var pages = new IFeaturePage[]
+        {
+            new TextToolsPage(services.State),
+            new MediaDownloadPage(
+                services.Media.ResolveCoordinator,
+                services.Media.DownloadCoordinator,
+                services.Media.State,
+                services.Media.EnsureBrowserInitializedAsync),
+        };
         mainForm = new MainForm(pages);
         historyPanel = new HistoryPanelForm(
             historyStore,
@@ -126,8 +134,10 @@ internal sealed class TransforApplicationContext : ApplicationContext
         historyPanel.ShowFor(targetWindow);
     }
 
-    // 退出应用：依次关闭历史面板、主窗口，释放服务与托盘图标，最后结束消息循环
-    private void ExitApplication()
+    // 退出应用：有活动任务时先确认，再取消任务并等待落定；
+    // 在主窗体与消息循环仍存活时释放服务（WebView2 在创建它的 STA 线程释放），
+    // 最后关闭窗口与托盘；释放异常转换为可见错误，不遗留半退出状态
+    private async void ExitApplication()
     {
         if (exiting)
         {
@@ -135,11 +145,34 @@ internal sealed class TransforApplicationContext : ApplicationContext
         }
 
         exiting = true;
-        historyPanel.CloseForExit();
-        mainForm.CloseForExit();
-        services.Dispose();
-        trayIcon.Visible = false;
-        trayIcon.Dispose();
-        ExitThread();
+        try
+        {
+            if (services.Media.DownloadCoordinator.HasActiveTasks)
+            {
+                var confirm = MessageBox.Show(mainForm, "仍有下载任务进行中，确定要退出并取消任务吗？", "退出确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (confirm != DialogResult.Yes)
+                {
+                    exiting = false;
+                    return;
+                }
+
+                await services.Media.DownloadCoordinator.CancelAllAsync();
+            }
+
+            // 主窗体仍存活：WebView2 在 UI 线程释放
+            await services.DisposeAsync();
+            historyPanel.CloseForExit();
+            mainForm.CloseForExit();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(mainForm, $"退出时发生错误：{ex.Message}", "退出错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            trayIcon.Visible = false;
+            trayIcon.Dispose();
+            ExitThread();
+        }
     }
 }
