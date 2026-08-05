@@ -4,17 +4,17 @@ namespace Transfor;
 
 internal sealed class SettingsForm : Form
 {
-    private readonly HistoryStore historyStore;
+    private readonly LegacyHistoryStore historyStore;
     private readonly GlobalHotKeyManager hotKeyManager;
     private readonly CheckedListBox modifiersBox;
     private readonly ComboBox keyBox;
     private readonly NumericUpDown quoteLimitBox;
     private readonly NumericUpDown spaceLimitBox;
     private readonly Label errorLabel;
-    private readonly ToolId quoteTool = ToolId.QuoteConversion;
-    private readonly ToolId spaceTool = ToolId.SpaceRemoval;
+    private readonly TextToolId quoteTool = TextToolId.QuoteConversion;
+    private readonly TextToolId spaceTool = TextToolId.SpaceRemoval;
 
-    public SettingsForm(HistoryStore historyStore, GlobalHotKeyManager hotKeyManager)
+    public SettingsForm(LegacyHistoryStore historyStore, GlobalHotKeyManager hotKeyManager)
     {
         this.historyStore = historyStore;
         this.hotKeyManager = hotKeyManager;
@@ -197,7 +197,7 @@ internal sealed class SettingsForm : Form
         }
     }
 
-    private void ClearHistory(ToolId tool, string displayName)
+    private void ClearHistory(TextToolId tool, string displayName)
     {
         if (MessageBox.Show(this, $"确定清空“{displayName}”的全部历史记录吗？", "确认清空", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
         {

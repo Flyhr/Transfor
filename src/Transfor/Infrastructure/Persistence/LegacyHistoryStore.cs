@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Transfor;
 
-internal sealed class HistoryStore
+internal sealed class LegacyHistoryStore : ITextHistoryRepository
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -16,7 +16,7 @@ internal sealed class HistoryStore
     private readonly List<HistoryEntry> quoteHistory = new();
     private readonly List<HistoryEntry> spaceHistory = new();
 
-    private HistoryStore(string stateFilePath)
+    private LegacyHistoryStore(string stateFilePath)
     {
         this.stateFilePath = Path.GetFullPath(stateFilePath);
         Settings = AppSettings.Default;
@@ -29,9 +29,9 @@ internal sealed class HistoryStore
         "Transfor",
         "state.json");
 
-    public static HistoryStore Load(string? stateFilePath = null)
+    public static LegacyHistoryStore Load(string? stateFilePath = null)
     {
-        var store = new HistoryStore(stateFilePath ?? DefaultPath);
+        var store = new LegacyHistoryStore(stateFilePath ?? DefaultPath);
         if (!File.Exists(store.stateFilePath))
         {
             return store;
@@ -52,7 +52,7 @@ internal sealed class HistoryStore
         return store;
     }
 
-    public IReadOnlyList<HistoryEntry> GetHistory(ToolId tool)
+    public IReadOnlyList<HistoryEntry> GetHistory(TextToolId tool)
     {
         return GetList(tool).AsReadOnly();
     }
@@ -69,12 +69,12 @@ internal sealed class HistoryStore
         Trim(entry.Tool);
     }
 
-    public void ClearHistory(ToolId tool)
+    public void ClearHistory(TextToolId tool)
     {
         GetList(tool).Clear();
     }
 
-    public void SetLastViewedTool(ToolId tool)
+    public void SetLastViewedTool(TextToolId tool)
     {
         if (!Enum.IsDefined(tool))
         {
@@ -88,8 +88,8 @@ internal sealed class HistoryStore
     {
         settings.Validate();
         Settings = settings;
-        Trim(ToolId.QuoteConversion);
-        Trim(ToolId.SpaceRemoval);
+        Trim(TextToolId.QuoteConversion);
+        Trim(TextToolId.SpaceRemoval);
     }
 
     public void Save()
@@ -130,20 +130,20 @@ internal sealed class HistoryStore
         }
     }
 
-    private List<HistoryEntry> GetList(ToolId tool)
+    private List<HistoryEntry> GetList(TextToolId tool)
     {
         return tool switch
         {
-            ToolId.QuoteConversion => quoteHistory,
-            ToolId.SpaceRemoval => spaceHistory,
+            TextToolId.QuoteConversion => quoteHistory,
+            TextToolId.SpaceRemoval => spaceHistory,
             _ => throw new ArgumentOutOfRangeException(nameof(tool)),
         };
     }
 
-    private void Trim(ToolId tool)
+    private void Trim(TextToolId tool)
     {
         var list = GetList(tool);
-        var limit = tool == ToolId.QuoteConversion ? Settings.QuoteHistoryLimit : Settings.SpaceHistoryLimit;
+        var limit = tool == TextToolId.QuoteConversion ? Settings.QuoteHistoryLimit : Settings.SpaceHistoryLimit;
         if (list.Count <= limit)
         {
             return;
@@ -182,8 +182,8 @@ internal sealed class HistoryStore
         }
 
         Settings = settings;
-        Trim(ToolId.QuoteConversion);
-        Trim(ToolId.SpaceRemoval);
+        Trim(TextToolId.QuoteConversion);
+        Trim(TextToolId.SpaceRemoval);
     }
 
     private void Reset()
@@ -210,6 +210,6 @@ internal sealed class HistoryStore
 
         public int SpaceHistoryLimit { get; set; }
 
-        public ToolId LastViewedTool { get; set; }
+        public TextToolId LastViewedTool { get; set; }
     }
 }

@@ -15,18 +15,18 @@ public sealed class MainForm : Form
     private readonly Button quoteButton;
     private readonly Button spaceButton;
     private readonly Label titleLabel;
-    private readonly ToolDefinition quoteTool;
-    private readonly ToolDefinition spaceTool;
-    private readonly HistoryStore historyStore;
+    private readonly TextToolDefinition quoteTool;
+    private readonly TextToolDefinition spaceTool;
+    private readonly LegacyHistoryStore historyStore;
 
-    private ToolDefinition currentTool;
+    private TextToolDefinition currentTool;
     private bool allowClose;
 
-    internal MainForm(HistoryStore historyStore)
+    internal MainForm(LegacyHistoryStore historyStore)
     {
         this.historyStore = historyStore;
-        quoteTool = new ToolDefinition(ToolId.QuoteConversion, "引号转换", QuoteConverter.Convert);
-        spaceTool = new ToolDefinition(ToolId.SpaceRemoval, "去除空格", SpaceRemover.Remove);
+        quoteTool = new TextToolDefinition(TextToolId.QuoteConversion, "引号转换", QuoteConverter.Convert);
+        spaceTool = new TextToolDefinition(TextToolId.SpaceRemoval, "去除空格", SpaceRemover.Remove);
         currentTool = quoteTool;
 
         Text = "文本转换器";
@@ -47,10 +47,10 @@ public sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
 
-        quoteButton = CreateNavButton(quoteTool.Name);
+        quoteButton = CreateNavButton(quoteTool.DisplayName);
         quoteButton.Click += (_, _) => SelectTool(quoteTool);
 
-        spaceButton = CreateNavButton(spaceTool.Name);
+        spaceButton = CreateNavButton(spaceTool.DisplayName);
         spaceButton.Click += (_, _) => SelectTool(spaceTool);
 
         var navRow = new FlowLayoutPanel
@@ -186,10 +186,10 @@ public sealed class MainForm : Form
         return panel;
     }
 
-    private void SelectTool(ToolDefinition tool)
+    private void SelectTool(TextToolDefinition tool)
     {
         currentTool = tool;
-        titleLabel.Text = tool.Name;
+        titleLabel.Text = tool.DisplayName;
         ApplyNavButtonState(quoteButton, tool == quoteTool);
         ApplyNavButtonState(spaceButton, tool == spaceTool);
         UpdateOutput();
@@ -251,5 +251,4 @@ public sealed class MainForm : Form
         Hide();
     }
 
-    private sealed record ToolDefinition(ToolId Id, string Name, Func<string?, string> Convert);
 }

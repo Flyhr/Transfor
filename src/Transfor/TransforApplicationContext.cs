@@ -2,7 +2,7 @@ namespace Transfor;
 
 internal sealed class TransforApplicationContext : ApplicationContext
 {
-    private readonly HistoryStore historyStore;
+    private readonly LegacyHistoryStore historyStore;
     private readonly MainForm mainForm;
     private readonly HistoryPanelForm historyPanel;
     private readonly GlobalHotKeyManager hotKeyManager;
@@ -12,7 +12,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
     public TransforApplicationContext()
     {
-        historyStore = HistoryStore.Load();
+        historyStore = LegacyHistoryStore.Load();
         hotKeyManager = new GlobalHotKeyManager();
         mainForm = new MainForm(historyStore);
         historyPanel = new HistoryPanelForm(

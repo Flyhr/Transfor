@@ -35,12 +35,21 @@ foreach (var testCase in spaceCases)
     AssertEqual(testCase.Expected, actual, testCase.Name);
 }
 
+TestTextToolDefinition();
 TestHotKeyBinding();
 TestHistoryStore();
 TestPasteCoordinator();
 
 Console.WriteLine($"All {quoteCases.Length + spaceCases.Length + 20} tests passed.");
 
+static void TestTextToolDefinition()
+{
+    var definition = new TextToolDefinition(TextToolId.QuoteConversion, "引号转换", QuoteConverter.Convert);
+
+    AssertEqual(TextToolId.QuoteConversion, definition.Id, "text tool id");
+    AssertEqual("引号转换", definition.DisplayName, "text tool display name");
+    AssertEqual("'x'", definition.Convert("\"x\""), "text tool converter");
+}
 static void TestHotKeyBinding()
 {
     var defaultBinding = HotKeyBinding.Default;
@@ -67,49 +76,49 @@ static void TestHistoryStore()
 
     try
     {
-        var store = HistoryStore.Load(path);
+        var store = LegacyHistoryStore.Load(path);
         AssertEqual(HotKeyBinding.Default, store.Settings.HistoryHotKey, "default hotkey");
         AssertEqual(100, store.Settings.QuoteHistoryLimit, "default quote history limit");
         AssertEqual(100, store.Settings.SpaceHistoryLimit, "default space history limit");
-        AssertEqual(ToolId.QuoteConversion, store.Settings.LastViewedTool, "default last viewed tool");
+        AssertEqual(TextToolId.QuoteConversion, store.Settings.LastViewedTool, "default last viewed tool");
 
         var original = "\"a\"\r\n b";
         var converted = "'a'\r\nb";
         var createdAt = DateTimeOffset.UtcNow.AddMinutes(-1);
-        store.Add(new HistoryEntry(ToolId.QuoteConversion, original, converted, createdAt));
-        store.Add(new HistoryEntry(ToolId.SpaceRemoval, "x y", "xy", createdAt.AddSeconds(1)));
-        store.SetLastViewedTool(ToolId.SpaceRemoval);
+        store.Add(new HistoryEntry(TextToolId.QuoteConversion, original, converted, createdAt));
+        store.Add(new HistoryEntry(TextToolId.SpaceRemoval, "x y", "xy", createdAt.AddSeconds(1)));
+        store.SetLastViewedTool(TextToolId.SpaceRemoval);
         store.UpdateSettings(store.Settings with { QuoteHistoryLimit = 1, SpaceHistoryLimit = 2 });
         store.Save();
 
-        var reloaded = HistoryStore.Load(path);
-        var quote = reloaded.GetHistory(ToolId.QuoteConversion);
-        var space = reloaded.GetHistory(ToolId.SpaceRemoval);
+        var reloaded = LegacyHistoryStore.Load(path);
+        var quote = reloaded.GetHistory(TextToolId.QuoteConversion);
+        var space = reloaded.GetHistory(TextToolId.SpaceRemoval);
         AssertEqual(1, quote.Count, "quote history count");
         AssertEqual(1, space.Count, "space history count");
         AssertEqual(original, quote[0].OriginalInput, "history original input");
         AssertEqual(converted, quote[0].ConvertedOutput, "history converted output");
         AssertEqual(createdAt, quote[0].CreatedAtUtc, "history timestamp");
-        AssertEqual(ToolId.SpaceRemoval, reloaded.Settings.LastViewedTool, "last viewed persistence");
+        AssertEqual(TextToolId.SpaceRemoval, reloaded.Settings.LastViewedTool, "last viewed persistence");
 
         reloaded.UpdateSettings(reloaded.Settings with { QuoteHistoryLimit = 1, SpaceHistoryLimit = 1 });
-        reloaded.Add(new HistoryEntry(ToolId.QuoteConversion, "second", "second", createdAt.AddSeconds(2)));
-        reloaded.Add(new HistoryEntry(ToolId.QuoteConversion, "third", "third", createdAt.AddSeconds(3)));
-        reloaded.Add(new HistoryEntry(ToolId.SpaceRemoval, "second", "second", createdAt.AddSeconds(4)));
-        AssertEqual("third", reloaded.GetHistory(ToolId.QuoteConversion)[0].OriginalInput, "quote limit trims oldest");
-        AssertEqual("second", reloaded.GetHistory(ToolId.SpaceRemoval)[0].OriginalInput, "space history independent");
+        reloaded.Add(new HistoryEntry(TextToolId.QuoteConversion, "second", "second", createdAt.AddSeconds(2)));
+        reloaded.Add(new HistoryEntry(TextToolId.QuoteConversion, "third", "third", createdAt.AddSeconds(3)));
+        reloaded.Add(new HistoryEntry(TextToolId.SpaceRemoval, "second", "second", createdAt.AddSeconds(4)));
+        AssertEqual("third", reloaded.GetHistory(TextToolId.QuoteConversion)[0].OriginalInput, "quote limit trims oldest");
+        AssertEqual("second", reloaded.GetHistory(TextToolId.SpaceRemoval)[0].OriginalInput, "space history independent");
 
-        reloaded.ClearHistory(ToolId.QuoteConversion);
-        AssertEqual(0, reloaded.GetHistory(ToolId.QuoteConversion).Count, "clear quote history");
-        AssertEqual(1, reloaded.GetHistory(ToolId.SpaceRemoval).Count, "clear keeps space history");
+        reloaded.ClearHistory(TextToolId.QuoteConversion);
+        AssertEqual(0, reloaded.GetHistory(TextToolId.QuoteConversion).Count, "clear quote history");
+        AssertEqual(1, reloaded.GetHistory(TextToolId.SpaceRemoval).Count, "clear keeps space history");
 
         AssertThrows<ArgumentException>(() => reloaded.UpdateSettings(reloaded.Settings with { QuoteHistoryLimit = 0 }), "history limit lower bound");
         AssertThrows<ArgumentException>(() => reloaded.UpdateSettings(reloaded.Settings with { SpaceHistoryLimit = 501 }), "history limit upper bound");
 
         File.WriteAllText(path, "not json");
-        var corrupt = HistoryStore.Load(path);
+        var corrupt = LegacyHistoryStore.Load(path);
         AssertEqual(AppSettings.Default, corrupt.Settings, "corrupt state fallback");
-        AssertEqual(0, corrupt.GetHistory(ToolId.QuoteConversion).Count, "corrupt history fallback");
+        AssertEqual(0, corrupt.GetHistory(TextToolId.QuoteConversion).Count, "corrupt history fallback");
     }
     finally
     {
@@ -120,7 +129,7 @@ static void TestHistoryStore()
 
 static void TestPasteCoordinator()
 {
-    var entry = new HistoryEntry(ToolId.QuoteConversion, "input", "result", DateTimeOffset.UtcNow);
+    var entry = new HistoryEntry(TextToolId.QuoteConversion, "input", "result", DateTimeOffset.UtcNow);
 
     var successCalls = new List<string>();
     var success = new PasteCoordinator(
@@ -233,6 +242,3 @@ file sealed class FakeWindowInput : IWindowInputService
         return pasteSucceeds;
     }
 }
-
-
-

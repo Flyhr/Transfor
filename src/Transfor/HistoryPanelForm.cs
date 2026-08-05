@@ -2,17 +2,17 @@ namespace Transfor;
 
 internal sealed class HistoryPanelForm : Form
 {
-    private readonly HistoryStore historyStore;
+    private readonly LegacyHistoryStore historyStore;
     private readonly PasteCoordinator pasteCoordinator;
     private readonly Button quoteButton;
     private readonly Button spaceButton;
     private readonly ListBox historyList;
     private readonly Label errorLabel;
-    private ToolId currentTool;
+    private TextToolId currentTool;
     private nint targetWindow;
     private bool allowClose;
 
-    public HistoryPanelForm(HistoryStore historyStore, PasteCoordinator pasteCoordinator)
+    public HistoryPanelForm(LegacyHistoryStore historyStore, PasteCoordinator pasteCoordinator)
     {
         this.historyStore = historyStore;
         this.pasteCoordinator = pasteCoordinator;
@@ -40,9 +40,9 @@ internal sealed class HistoryPanelForm : Form
 
         var nav = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         quoteButton = CreateToolButton("引号转换");
-        quoteButton.Click += (_, _) => SelectTool(ToolId.QuoteConversion);
+        quoteButton.Click += (_, _) => SelectTool(TextToolId.QuoteConversion);
         spaceButton = CreateToolButton("去除空格");
-        spaceButton.Click += (_, _) => SelectTool(ToolId.SpaceRemoval);
+        spaceButton.Click += (_, _) => SelectTool(TextToolId.SpaceRemoval);
         nav.Controls.Add(quoteButton);
         nav.Controls.Add(spaceButton);
 
@@ -105,11 +105,11 @@ internal sealed class HistoryPanelForm : Form
         };
     }
 
-    private void SelectTool(ToolId tool)
+    private void SelectTool(TextToolId tool)
     {
         currentTool = tool;
-        ApplyButtonState(quoteButton, tool == ToolId.QuoteConversion);
-        ApplyButtonState(spaceButton, tool == ToolId.SpaceRemoval);
+        ApplyButtonState(quoteButton, tool == TextToolId.QuoteConversion);
+        ApplyButtonState(spaceButton, tool == TextToolId.SpaceRemoval);
         RefreshHistory();
         if (historyStore.Settings.LastViewedTool != tool)
         {
