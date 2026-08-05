@@ -57,6 +57,9 @@ TestUpdateSettingsRollsBackOnWriteFailure();
 TestMediaModels();
 TestMediaStateStore();
 TestMediaStateStoreConcurrency();
+TestShareLinkParser();
+TestMediaResolverRegistry();
+TestMediaResolveCoordinator();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
@@ -512,6 +515,88 @@ static void TestMediaStateStoreConcurrency()
     }
 }
 
+// 场景：分享链接提取
+static void TestShareLinkParser()
+{
+    var link = ShareLinkParser.TryExtractFirstLink("3.28 复制打开抖音，看看【某用户的作品】 https://v.douyin.com/abc123/", out _);
+    AssertEqual("https://v.douyin.com/abc123/", link?.ToString(), "extract from share text");
+
+    var clean = ShareLinkParser.TryExtractFirstLink("https://v.douyin.com/abc123/。", out _);
+    AssertEqual("https://v.douyin.com/abc123/", clean?.ToString(), "trailing full-width period cleaned");
+
+    var cleanAscii = ShareLinkParser.TryExtractFirstLink("https://v.douyin.com/abc123/.", out _);
+    AssertEqual("https://v.douyin.com/abc123/", cleanAscii?.ToString(), "trailing ascii period cleaned");
+
+    var first = ShareLinkParser.TryExtractFirstLink("https://v.douyin.com/one/ 然后 https://v.douyin.com/two/", out _);
+    AssertEqual("https://v.douyin.com/one/", first?.ToString(), "only first valid link returned");
+
+    // 第一个候选无效时继续寻找下一个候选
+    var skipInvalid = ShareLinkParser.TryExtractFirstLink("看这里 https:// 然后 https://v.douyin.com/ok/", out _);
+    AssertEqual("https://v.douyin.com/ok/", skipInvalid?.ToString(), "skips invalid candidate and finds next");
+
+    AssertEqual(true, ShareLinkParser.TryExtractFirstLink("没有链接的文本", out var noLinkError) is null && noLinkError is not null, "no link returns error");
+    AssertEqual(true, ShareLinkParser.TryExtractFirstLink("", out _) is null, "empty text returns null");
+    AssertEqual(true, ShareLinkParser.TryExtractFirstLink("ftp://v.douyin.com/abc/", out _) is null, "non-http scheme rejected");
+}
+
+// 测试替身：可控的解析器（定义见文件末尾）
+// 场景：解析注册中心
+static void TestMediaResolverRegistry()
+{
+    var douyin = new FakeResolver(MediaProviderId.Douyin, uri => uri.Host.Equals("douyin.com", StringComparison.OrdinalIgnoreCase) || uri.Host.EndsWith(".douyin.com", StringComparison.OrdinalIgnoreCase));
+    var registry = new MediaResolverRegistry(new IMediaResolver[] { douyin });
+    AssertEqual(true, registry.TryGetResolver(new Uri("https://v.douyin.com/a/"), out var matched) && matched?.Provider == MediaProviderId.Douyin, "first matching resolver wins");
+    AssertEqual(false, registry.TryGetResolver(new Uri("https://other.com/x"), out _), "non-matching uri returns false");
+
+    var empty = new MediaResolverRegistry(Array.Empty<IMediaResolver>());
+    AssertEqual(false, empty.TryGetResolver(new Uri("https://v.douyin.com/a/"), out _), "empty registry returns false");
+
+    // 重复 Provider 被拒绝
+    AssertThrows<ArgumentException>(() => new MediaResolverRegistry(new IMediaResolver[] { new FakeResolver(MediaProviderId.Douyin), new FakeResolver(MediaProviderId.Douyin) }), "duplicate provider rejected");
+}
+
+// 场景：解析协调器
+static void TestMediaResolveCoordinator()
+{
+    // 找到解析器：原样返回成功结果
+    var ok = new MediaResolveCoordinator(new MediaResolverRegistry(new IMediaResolver[] { new FakeResolver(MediaProviderId.Douyin) }));
+    var result = ok.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/a/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Succeeded, result.Status, "resolves with resolver");
+
+    // 无解析器：Unsupported 而非异常
+    var unsupported = new MediaResolveCoordinator(new MediaResolverRegistry(Array.Empty<IMediaResolver>()));
+    var noMatch = unsupported.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/a/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Unsupported, noMatch.Status, "no resolver returns unsupported");
+
+    // 需要浏览器：原样透传
+    var pendingResolver = new FakeResolver(MediaProviderId.Douyin, resultFactory: (_, _) => MediaResolveResult.RequiresUserInteraction("需要浏览器"));
+    var pending = new MediaResolveCoordinator(new MediaResolverRegistry(new IMediaResolver[] { pendingResolver }));
+    var pendingResult = pending.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/a/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.RequiresUserInteraction, pendingResult.Status, "interaction result passed through");
+
+    // 未预期异常：转换为 Failure
+    var throwingResolver = new FakeResolver(MediaProviderId.Douyin, resultFactory: (_, _) => throw new InvalidOperationException("boom"));
+    var failure = new MediaResolveCoordinator(new MediaResolverRegistry(new IMediaResolver[] { throwingResolver }));
+    var failed = failure.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/a/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Failed, failed.Status, "unexpected exception becomes failure");
+
+    // 取消仍表现为取消，不转换为 Failed
+    var cancellingResolver = new FakeResolver(MediaProviderId.Douyin, resultFactory: (_, token) => throw new OperationCanceledException(token));
+    var cancel = new MediaResolveCoordinator(new MediaResolverRegistry(new IMediaResolver[] { cancellingResolver }));
+    using var cts = new CancellationTokenSource();
+    cts.Cancel();
+    var cancelled = false;
+    try
+    {
+        cancel.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/a/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), cts.Token).GetAwaiter().GetResult();
+    }
+    catch (OperationCanceledException)
+    {
+        cancelled = true;
+    }
+    AssertEqual(true, cancelled, "cancellation stays cancellation");
+}
+
 // 通用断言：相等则通过，否则抛出带用例名的异常
 static void AssertEqual<T>(T expected, T actual, string name)
 {
@@ -601,5 +686,36 @@ file sealed class FakeWindowInput : IWindowInputService
         calls.Add("paste");
         error = "paste failed";
         return pasteSucceeds;
+    }
+}
+
+// 测试替身：可控的解析器
+file sealed class FakeResolver : IMediaResolver
+{
+    private readonly Func<Uri, bool>? canResolve;
+    private readonly Func<MediaResolveRequest, CancellationToken, MediaResolveResult>? resultFactory;
+
+    public FakeResolver(MediaProviderId provider, Func<Uri, bool>? canResolve = null, Func<MediaResolveRequest, CancellationToken, MediaResolveResult>? resultFactory = null)
+    {
+        Provider = provider;
+        this.canResolve = canResolve;
+        this.resultFactory = resultFactory;
+    }
+
+    public MediaProviderId Provider { get; }
+    public bool CanResolve(Uri sourceUri) => canResolve?.Invoke(sourceUri) ?? true;
+
+    public Task<MediaResolveResult> ResolveAsync(MediaResolveRequest request, CancellationToken cancellationToken)
+    {
+        if (resultFactory is not null)
+        {
+            return Task.FromResult(resultFactory(request, cancellationToken));
+        }
+
+        var context = new MediaRequestContext(request.SourceUri, null);
+        var variant = new MediaVariant(new Uri("https://cdn.example.com/v.mp4"), 1920, 1080, 30, 2000, 1000, "video/mp4", "h264", MediaVariantSource.StructuredData, context);
+        var asset = new MediaAsset(0, MediaKind.Video, new MediaVariant[] { variant });
+        var post = new ResolvedMediaPost(MediaProviderId.Douyin, request.SourceUri, "1", "t", "a", new MediaAsset[] { asset });
+        return Task.FromResult(MediaResolveResult.Success(post));
     }
 }
