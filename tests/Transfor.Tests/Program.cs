@@ -67,6 +67,8 @@ TestMediaQualitySelector();
 TestMediaContentValidator();
 TestDownloadFileNameBuilder();
 TestMediaHashService();
+TestBrowserCookieMatcher();
+TestMediaDownloadService();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
@@ -864,6 +866,185 @@ static void TestMediaHashService()
     AssertEqual(expected, hash, "sha256 matches reference");
 }
 
+// 场景：Cookie 匹配规则
+static void TestBrowserCookieMatcher()
+{
+    var uri = new Uri("https://v.douyin.com/a/b");
+    var httpUri = new Uri("http://v.douyin.com/a/b");
+
+    // 域名匹配：完整相等与真实子域
+    AssertEqual(true, BrowserCookieMatcher.ShouldSend(new BrowserCookie("v.douyin.com", "/", "a", "1", false), "s1", uri, true), "exact domain match");
+    AssertEqual(true, BrowserCookieMatcher.ShouldSend(new BrowserCookie(".douyin.com", "/", "a", "1", false), "s1", uri, true), "leading dot domain parent matches subdomain");
+    AssertEqual(false, BrowserCookieMatcher.ShouldSend(new BrowserCookie("evil.com", "/", "a", "1", false), "s1", uri, true), "foreign domain never sent");
+    AssertEqual(false, BrowserCookieMatcher.ShouldSend(new BrowserCookie("douyin.com", "/", "a", "1", false), "s1", new Uri("https://cdn.example.com/x"), true), "douyin cookie not sent to cdn.example.com");
+    AssertEqual(false, BrowserCookieMatcher.ShouldSend(new BrowserCookie("evildouyin.com", "/", "a", "1", false), "s1", uri, true), "suffix-lookalike domain rejected");
+
+    // Secure 要求
+    AssertEqual(false, BrowserCookieMatcher.ShouldSend(new BrowserCookie("v.douyin.com", "/", "a", "1", true), "s1", httpUri, false), "secure cookie blocked on http");
+    AssertEqual(true, BrowserCookieMatcher.ShouldSend(new BrowserCookie("v.douyin.com", "/", "a", "1", true), "s1", uri, true), "secure cookie allowed on https");
+
+    // Path 目录边界
+    AssertEqual(true, BrowserCookieMatcher.ShouldSend(new BrowserCookie("v.douyin.com", "/a", "a", "1", false), "s1", uri, true), "path prefix match");
+    AssertEqual(false, BrowserCookieMatcher.ShouldSend(new BrowserCookie("v.douyin.com", "/a", "a", "1", false), "s1", new Uri("https://v.douyin.com/ab"), true), "path boundary enforced (/a != /ab)");
+
+    // BrowserSessionId 为空不发送
+    AssertEqual(false, BrowserCookieMatcher.ShouldSend(new BrowserCookie("v.douyin.com", "/", "a", "1", false), null, uri, true), "empty session blocks cookies");
+}
+
+// 场景：安全流式下载服务
+static void TestMediaDownloadService()
+{
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var validator = new SafeUriValidator(new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("8.8.8.8") })));
+
+        // 构造媒体内容（MP4 魔数）
+        var mp4Body = new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x63, 0x31, 0x00, 0x00, 0x00, 0x20 };
+
+        static MediaDownloadTask TaskFor(string target, MediaVariant variant, MediaAsset asset) =>
+            new(Guid.NewGuid(), asset, variant, target);
+
+        static MediaAsset Mp4Asset() =>
+            new(0, MediaKind.Video, new[] { new MediaVariant(new Uri("https://cdn.example.com/v.mp4"), 1920, 1080, null, null, null, "video/mp4", "h264", MediaVariantSource.StructuredData, new MediaRequestContext(null, null)) });
+
+        static MediaVariant VariantWith(Uri uri, MediaRequestContext context) =>
+            new(uri, 1920, 1080, null, null, null, "video/mp4", "h264", MediaVariantSource.StructuredData, context);
+
+        // 200 成功：文件存在、.part 删除、SavedPath 正确
+        var okTarget = Path.Combine(root, "ok.mp4");
+        var okHandler = new StubHttpHandler(_ => OkMediaResponse(mp4Body));
+        var okService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(okHandler), validator), null);
+        var okResult = okService.DownloadAsync(TaskFor(okTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Succeeded, okResult.Status, "download success");
+        AssertEqual(true, File.Exists(okTarget), "file exists");
+        AssertEqual(false, File.Exists(okTarget + ".part." + okResult.TaskId.ToString("N")), "part removed after success");
+        AssertEqual(okTarget, okResult.SavedPath, "saved path returned");
+
+        // 404/429/500 失败
+        foreach (var status in new[] { HttpStatusCode.NotFound, (HttpStatusCode)429, HttpStatusCode.InternalServerError })
+        {
+            var failTarget = Path.Combine(root, $"fail{(int)status}.mp4");
+            var failHandler = new StubHttpHandler(_ => new HttpResponseMessage(status) { Content = new ByteArrayContent(Array.Empty<byte>()) });
+            var failService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(failHandler), validator), null);
+            var failResult = failService.DownloadAsync(TaskFor(failTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+            AssertEqual(MediaDownloadStatus.Failed, failResult.Status, $"http {(int)status} fails");
+            AssertEqual(false, File.Exists(failTarget), "no file on status failure");
+        }
+
+        // 错误 Content-Type 失败
+        var htmlTarget = Path.Combine(root, "html.mp4");
+        var htmlHandler = new StubHttpHandler(_ => { var r = OkResponse(Array.Empty<byte>()); r.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/html"); return r; });
+        var htmlService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(htmlHandler), validator), null);
+        var htmlResult = htmlService.DownloadAsync(TaskFor(htmlTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Failed, htmlResult.Status, "text/html rejected");
+
+        // 声明长度超限失败
+        var bigTarget = Path.Combine(root, "big.mp4");
+        var bigHandler = new StubHttpHandler(_ => { var r = OkResponse(mp4Body); r.Content.Headers.ContentLength = 10 * 1024 * 1024; return r; });
+        var bigService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(bigHandler), validator), null, maxFileBytes: 1024);
+        var bigResult = bigService.DownloadAsync(TaskFor(bigTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Failed, bigResult.Status, "declared length over limit fails");
+
+        // chunked 实际读取超限：无 Content-Length 但流超限
+        var chunkedTarget = Path.Combine(root, "chunked.mp4");
+        var chunkedHandler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(new byte[2048]) });
+        chunkedHandler.Requests.Clear();
+        var chunkedService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(chunkedHandler), validator), null, maxFileBytes: 1024);
+        var chunkedResult = chunkedService.DownloadAsync(TaskFor(chunkedTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Failed, chunkedResult.Status, "actual read over limit fails");
+        AssertEqual(false, File.Exists(chunkedTarget), "no file on actual over limit");
+
+        // 流中途 IOException：.part 清理
+        var abortTarget = Path.Combine(root, "abort.mp4");
+        var abortHandler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new AbortedStreamContent() });
+        var abortService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(abortHandler), validator), null);
+        var abortResult = abortService.DownloadAsync(TaskFor(abortTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Failed, abortResult.Status, "aborted stream fails");
+        AssertEqual(false, File.Exists(abortTarget + ".part." + abortResult.TaskId.ToString("N")), "part cleaned after abort");
+
+        // 取消：.part 清理、无目标文件
+        var cancelTarget = Path.Combine(root, "cancel.mp4");
+        using var cts = new CancellationTokenSource();
+        var cancelHandler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new SlowStreamContent(cts.Token) });
+        var cancelService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(cancelHandler), validator), null);
+        var cancelTask = cancelService.DownloadAsync(TaskFor(cancelTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), cts.Token);
+        cts.CancelAfter(200);
+        var cancelResult = cancelTask.GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Cancelled, cancelResult.Status, "cancel returns cancelled");
+        AssertEqual(false, File.Exists(cancelTarget), "no target file after cancel");
+        AssertEqual(false, File.Exists(cancelTarget + ".part." + cancelResult.TaskId.ToString("N")), "part cleaned after cancel");
+
+        // Referer 正确 + Cookie 仅发送到匹配域 + 每跳重新获取 Cookie
+        var referer = new Uri("https://v.douyin.com/video/1");
+        var session = new FakeBrowserSession(
+            new BrowserCookie("douyin.com", "/", "sid", "abc", false),
+            new BrowserCookie("evil.com", "/", "sid", "stolen", false));
+        var cookieTarget = Path.Combine(root, "cookie.mp4");
+        var cookieHandler = new StubHttpHandler(
+            _ => RedirectResponseAbs("https://cdn.example.com/v.mp4"),
+            _ => OkMediaResponse(mp4Body));
+        var cookieService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(cookieHandler), validator), session);
+        var variant = VariantWith(new Uri("https://v.douyin.com/redirect"), new MediaRequestContext(referer, "session-1"));
+        var cookieResult = cookieService.DownloadAsync(TaskFor(cookieTarget, variant, Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Succeeded, cookieResult.Status, "cookie download success");
+        // 每跳都重新获取 Cookie
+        AssertEqual(2, session.CookieRequests.Count, "cookies re-fetched per hop");
+        // 第一跳 Referer 保留（同源 douyin）
+        AssertEqual(referer.ToString(), cookieHandler.Requests[0].Headers.Referrer?.ToString(), "referer sent on first hop");
+        // 跨源跳到 cdn.example.com：Referer 被清除
+        AssertEqual(true, cookieHandler.Requests[1].Headers.Referrer is null, "cross-origin referer cleared on redirect");
+        // 只有匹配域的 Cookie 被发送
+        var firstCookie = cookieHandler.Requests[0].Headers.TryGetValues("Cookie", out var firstCookieValues) ? string.Join(";", firstCookieValues) : string.Empty;
+        AssertEqual(true, firstCookie.Contains("sid=abc"), "matching domain cookie sent");
+        AssertEqual(true, !firstCookie.Contains("stolen"), "foreign cookie not sent");
+
+        // 相同目标内容：幂等成功
+        var dupeTarget = Path.Combine(root, "dupe.mp4");
+        File.WriteAllBytes(dupeTarget, mp4Body);
+        var dupeHandler = new StubHttpHandler(_ => OkMediaResponse(mp4Body));
+        var dupeService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(dupeHandler), validator), null);
+        var dupeResult = dupeService.DownloadAsync(TaskFor(dupeTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Succeeded, dupeResult.Status, "identical target idempotent success");
+        AssertEqual(dupeTarget, dupeResult.SavedPath, "identical target keeps path");
+
+        // 不同目标内容：生成唯一文件名，不覆盖
+        var diffTarget = Path.Combine(root, "diff.mp4");
+        File.WriteAllBytes(diffTarget, new byte[] { 1, 2, 3, 4 });
+        var diffHandler = new StubHttpHandler(_ => OkMediaResponse(mp4Body));
+        var diffService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(diffHandler), validator), null);
+        var diffResult = diffService.DownloadAsync(TaskFor(diffTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Succeeded, diffResult.Status, "different content still succeeds");
+        AssertEqual(Path.Combine(root, "diff(1).mp4"), diffResult.SavedPath, "unique path generated without overwrite");
+        AssertEqual(true, File.Exists(Path.Combine(root, "diff(1).mp4")), "unique file exists");
+        AssertEqual(true, File.Exists(diffTarget), "original file not overwritten");
+
+        // TargetPath 越出目录：拒绝
+        var escapeTarget = Path.Combine(root, "..", "escape.mp4");
+        var escapeService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(new StubHttpHandler(_ => OkMediaResponse(mp4Body))), validator), null);
+        var escapeResult = escapeService.DownloadAsync(TaskFor(escapeTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Failed, escapeResult.Status, "path escaping directory rejected");
+
+        static HttpResponseMessage OkMediaResponse(byte[] body)
+        {
+            var r = OkResponse(body);
+            r.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("video/mp4");
+            return r;
+        }
+
+        static HttpResponseMessage OkResponse(byte[] body) =>
+            new(HttpStatusCode.OK) { Content = new ByteArrayContent(body) };
+
+        static HttpResponseMessage RedirectResponseAbs(string location) =>
+            new(HttpStatusCode.Found) { Headers = { Location = new Uri(location, UriKind.Absolute) } };
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
 // 通用断言：相等则通过，否则抛出带用例名的异常
 static void AssertEqual<T>(T expected, T actual, string name)
 {
@@ -1047,4 +1228,71 @@ file sealed class NonSeekableStream : Stream
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
     public override void SetLength(long value) => throw new NotSupportedException();
     public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+}
+
+// 测试替身：可编程的浏览器会话（记录 Cookie 请求）
+file sealed class FakeBrowserSession : IBrowserSessionAccessor
+{
+    private readonly IReadOnlyList<BrowserCookie> cookies;
+
+    public FakeBrowserSession(params BrowserCookie[] cookies)
+    {
+        this.cookies = cookies;
+    }
+
+    public List<(string SessionId, Uri Uri)> CookieRequests { get; } = new();
+
+    public bool IsAvailable => true;
+
+    public Task<BrowserCaptureResult> CaptureAsync(Uri pageUri, bool interactive, CancellationToken cancellationToken)
+        => throw new NotSupportedException("测试替身不支持捕获。");
+
+    public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
+    {
+        CookieRequests.Add((browserSessionId, requestUri));
+        return Task.FromResult(cookies);
+    }
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
+// 测试替身：读取时抛 IOException 的流内容
+file sealed class AbortedStreamContent : HttpContent
+{
+    protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context)
+        => throw new IOException("模拟流中断");
+
+    protected override bool TryComputeLength(out long length)
+    {
+        length = 0;
+        return false;
+    }
+}
+
+// 测试替身：每次读取检查取消，取消时抛 OperationCanceledException 的流内容
+file sealed class SlowStreamContent : HttpContent
+{
+    private readonly CancellationToken token;
+
+    public SlowStreamContent(CancellationToken token)
+    {
+        this.token = token;
+    }
+
+    protected override async Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context)
+    {
+        var buffer = new byte[16];
+        while (true)
+        {
+            token.ThrowIfCancellationRequested();
+            await stream.WriteAsync(buffer, token);
+            await Task.Delay(50, token);
+        }
+    }
+
+    protected override bool TryComputeLength(out long length)
+    {
+        length = 0;
+        return false;
+    }
 }

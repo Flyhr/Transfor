@@ -83,12 +83,34 @@ internal static class DownloadFileNameBuilder
         return candidate;
     }
 
-    // 校验候选路径确实位于目标目录内（防 .. 越界）
+    // 校验候选路径确实位于目标目录内（拒绝含 .. 的父目录逃逸段）
     public static bool IsWithinDirectory(string directory, string path)
     {
+        if (!Path.IsPathFullyQualified(directory) || !Path.IsPathFullyQualified(path))
+        {
+            return false;
+        }
+
+        if (ContainsParentTraversal(directory) || ContainsParentTraversal(path))
+        {
+            return false;
+        }
+
         var dir = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar);
         var full = Path.GetFullPath(path);
         return full.Equals(dir, StringComparison.OrdinalIgnoreCase)
             || full.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsParentTraversal(string path)
+    {
+        foreach (var segment in path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            if (segment == "..")
+            {
+                return true;
+            }
+        }
+        return false;
     }
 }
