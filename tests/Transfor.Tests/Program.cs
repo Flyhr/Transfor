@@ -1,6 +1,7 @@
 using Transfor;
 using System.Text.Json;
 using System.Windows.Forms;
+using System.Net;
 
 // ===== 控制台式测试运行器 =====
 // 无测试框架依赖：逐项断言核心功能，全部通过时输出 "All N tests passed."，
@@ -60,6 +61,8 @@ TestMediaStateStoreConcurrency();
 TestShareLinkParser();
 TestMediaResolverRegistry();
 TestMediaResolveCoordinator();
+TestSafeUriValidator();
+TestSafeHttpRequestSender();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 
@@ -597,6 +600,124 @@ static void TestMediaResolveCoordinator()
     AssertEqual(true, cancelled, "cancellation stays cancellation");
 }
 
+// 场景：URI 安全校验（不查询真实 DNS）
+static void TestSafeUriValidator()
+{
+    var publicDns = new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("8.8.8.8") }));
+    var validator = new SafeUriValidator(publicDns);
+
+    AssertEqual(false, validator.ValidateAsync(new Uri("http://127.0.0.1/x"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "loopback rejected");
+    AssertEqual(false, validator.ValidateAsync(new Uri("http://10.1.2.3/x"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "private 10/8 rejected");
+    AssertEqual(false, validator.ValidateAsync(new Uri("http://172.20.0.1/x"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "private 172.16/12 rejected");
+    AssertEqual(false, validator.ValidateAsync(new Uri("http://192.168.1.1/x"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "private 192.168/16 rejected");
+    AssertEqual(false, validator.ValidateAsync(new Uri("http://169.254.0.1/x"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "link-local rejected");
+    AssertEqual(false, validator.ValidateAsync(new Uri("http://localhost/x"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "localhost rejected");
+    AssertEqual(false, validator.ValidateAsync(new Uri("file:///C:/x"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "file scheme rejected");
+    AssertEqual(false, validator.ValidateAsync(new Uri("javascript:alert(1)"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "javascript scheme rejected");
+    AssertEqual(false, validator.ValidateAsync(new Uri("http://user:pass@8.8.8.8/x"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "uri with userinfo rejected");
+    AssertEqual(true, validator.ValidateAsync(new Uri("https://www.douyin.com/video/1"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "public dns result allowed");
+
+    // Fake DNS 返回私网地址：域名被拒绝
+    var privateDns = new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("10.0.0.1") }));
+    AssertEqual(false, new SafeUriValidator(privateDns).ValidateAsync(new Uri("https://cdn.example.com/x"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "domain resolving to private ip rejected");
+
+    // DNS 解析失败：拒绝
+    var failingDns = new FakeDnsResolver(_ => throw new Exception("nxdomain"));
+    AssertEqual(false, new SafeUriValidator(failingDns).ValidateAsync(new Uri("https://cdn.example.com/x"), CancellationToken.None).GetAwaiter().GetResult().IsAllowed, "dns failure rejected");
+}
+
+// 场景：安全请求发送器（相对重定向合并、每跳校验、重定向上限、敏感头与跨源 Referer 处理）
+static void TestSafeHttpRequestSender()
+{
+    var validator = new SafeUriValidator(new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("8.8.8.8") })));
+
+    // 相对重定向正确合并并到达最终地址
+    var handler = new StubHttpHandler(
+        _ => RedirectResponse("/b"),
+        _ => new HttpResponseMessage(HttpStatusCode.OK));
+    var sender = new SafeHttpRequestSender(new HttpClient(handler) , validator);
+    using var response = sender.SendAsync(
+        new Uri("https://v.douyin.com/a"),
+        (uri, _) => Task.FromResult(new HttpRequestMessage(HttpMethod.Get, uri)),
+        HttpCompletionOption.ResponseHeadersRead,
+        CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(HttpStatusCode.OK, response.StatusCode, "follows redirect chain");
+    AssertEqual("https://v.douyin.com/b", handler.Requests[1].RequestUri?.ToString(), "relative redirect merged");
+
+    // 重定向到私网 IP：每跳校验生效
+    var evilHandler = new StubHttpHandler(_ => RedirectResponse("http://10.0.0.1/x"));
+    var evilSender = new SafeHttpRequestSender(new HttpClient(evilHandler), validator);
+    var evilRejected = false;
+    try
+    {
+        evilSender.SendAsync(
+            new Uri("https://v.douyin.com/a"),
+            (uri, _) => Task.FromResult(new HttpRequestMessage(HttpMethod.Get, uri)),
+            HttpCompletionOption.ResponseHeadersRead,
+            CancellationToken.None).GetAwaiter().GetResult();
+    }
+    catch (InvalidOperationException)
+    {
+        evilRejected = true;
+    }
+    AssertEqual(true, evilRejected, "redirect to private ip rejected");
+
+    // 超过重定向上限（默认 5）
+    var loopHandler = new StubHttpHandler(_ => RedirectResponse("/x"));
+    var loopSender = new SafeHttpRequestSender(new HttpClient(loopHandler), validator);
+    var loopRejected = false;
+    try
+    {
+        loopSender.SendAsync(
+            new Uri("https://v.douyin.com/a"),
+            (uri, _) => Task.FromResult(new HttpRequestMessage(HttpMethod.Get, uri)),
+            HttpCompletionOption.ResponseHeadersRead,
+            CancellationToken.None).GetAwaiter().GetResult();
+    }
+    catch (InvalidOperationException)
+    {
+        loopRejected = true;
+    }
+    AssertEqual(true, loopRejected, "redirect limit exceeded");
+
+    // 跨源 Referer 被清除；Authorization/Proxy-Authorization 被清除
+    var refHandler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+    var refSender = new SafeHttpRequestSender(new HttpClient(refHandler), validator);
+    using var refResponse = refSender.SendAsync(
+        new Uri("https://v.douyin.com/a"),
+        (uri, _) =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Referrer = new Uri("https://evil.com/steal");
+            request.Headers.TryAddWithoutValidation("Authorization", "Bearer secret");
+            request.Headers.TryAddWithoutValidation("Proxy-Authorization", "proxy secret");
+            return Task.FromResult(request);
+        },
+        HttpCompletionOption.ResponseHeadersRead,
+        CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(true, !refHandler.Requests[0].Headers.Contains("Authorization"), "authorization stripped");
+    AssertEqual(true, !refHandler.Requests[0].Headers.Contains("Proxy-Authorization"), "proxy authorization stripped");
+    AssertEqual(true, refHandler.Requests[0].Headers.Referrer is null, "cross-origin referer stripped");
+
+    // 同源 Referer 保留（host 完全一致）
+    var sameHandler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+    var sameSender = new SafeHttpRequestSender(new HttpClient(sameHandler), validator);
+    using var sameResponse = sameSender.SendAsync(
+        new Uri("https://v.douyin.com/a"),
+        (uri, _) =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.Referrer = new Uri("https://v.douyin.com/video/1");
+            return Task.FromResult(request);
+        },
+        HttpCompletionOption.ResponseHeadersRead,
+        CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual("https://v.douyin.com/video/1", sameHandler.Requests[0].Headers.Referrer?.ToString(), "same-origin referer kept");
+
+    static HttpResponseMessage RedirectResponse(string location) =>
+        new(HttpStatusCode.Found) { Headers = { Location = new Uri(location, UriKind.RelativeOrAbsolute) } };
+}
+
 // 通用断言：相等则通过，否则抛出带用例名的异常
 static void AssertEqual<T>(T expected, T actual, string name)
 {
@@ -718,4 +839,38 @@ file sealed class FakeResolver : IMediaResolver
         var post = new ResolvedMediaPost(MediaProviderId.Douyin, request.SourceUri, "1", "t", "a", new MediaAsset[] { asset });
         return Task.FromResult(MediaResolveResult.Success(post));
     }
+}
+
+// 测试替身：按队列返回响应的 HTTP handler（最后一个响应工厂复用）
+file sealed class StubHttpHandler : HttpMessageHandler
+{
+    private readonly Func<HttpRequestMessage, HttpResponseMessage>[] responses;
+    private int index;
+
+    public StubHttpHandler(params Func<HttpRequestMessage, HttpResponseMessage>[] responses)
+    {
+        this.responses = responses;
+    }
+
+    public List<HttpRequestMessage> Requests { get; } = new();
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Requests.Add(request);
+        var factory = responses[Math.Min(index++, responses.Length - 1)];
+        return Task.FromResult(factory(request));
+    }
+}
+
+// 测试替身：可编程的 DNS 解析结果（禁止查询真实 DNS）
+file sealed class FakeDnsResolver : IDnsResolver
+{
+    private readonly Func<string, Task<IPAddress[]>> resolver;
+
+    public FakeDnsResolver(Func<string, Task<IPAddress[]>> resolver)
+    {
+        this.resolver = resolver;
+    }
+
+    public Task<IPAddress[]> ResolveAsync(string host, CancellationToken cancellationToken) => resolver(host);
 }
