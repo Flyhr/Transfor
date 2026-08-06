@@ -167,18 +167,8 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
             await startGate.WaitAsync(CancellationToken.None);
             try
             {
-                if (process is not null && !process.HasExited)
-                {
-                    try
-                    {
-                        process.Kill();
-                        process.WaitForExit(5_000);
-                    }
-                    catch
-                    {
-                        // 进程已退出等场景忽略
-                    }
-                }
+                // 结束所有使用本应用 profile 的 msedge 主进程（覆盖句柄失效/复用实例未记录的情况）
+                KillAllByProfile();
                 process = null;
                 browserWsUrl = null;
             }
@@ -190,6 +180,38 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
         catch
         {
             // 释放失败不掩盖退出流程
+        }
+    }
+
+    // 结束所有使用本应用 profile 的 msedge 主进程；逐个 Kill 并确认退出，
+    // 失败时二次强制（避免 Kill 异常被吞后进程残留）
+    private void KillAllByProfile()
+    {
+        while (TryFindExistingProcess(out var existing, out _, out _, out _))
+        {
+            TryKill(existing);
+            existing?.Dispose();
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+            }
+            if (!process.WaitForExit(5_000))
+            {
+                // 一次 Kill 未落定：二次强制
+                process.Kill();
+                process.WaitForExit(3_000);
+            }
+        }
+        catch
+        {
+            // 进程已退出或权限受限等场景忽略
         }
     }
 
@@ -267,22 +289,6 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
             // WMI 不可用或进程已退出：回退到启动新实例
         }
         return false;
-    }
-
-    private static void TryKill(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill();
-                process.WaitForExit(5_000);
-            }
-        }
-        catch
-        {
-            // 进程已退出等场景忽略
-        }
     }
 
     private static int FindFreePort()
