@@ -23,7 +23,7 @@ internal sealed class MediaServices : IDisposable, IAsyncDisposable
     public ValueTask EnsureBrowserInitializedAsync(Control uiOwner)
     {
         ArgumentNullException.ThrowIfNull(uiOwner);
-        if (BrowserSessions.IsAvailable)
+        if (BrowserSessions.IsAttached)
         {
             return ValueTask.CompletedTask;
         }
@@ -31,7 +31,7 @@ internal sealed class MediaServices : IDisposable, IAsyncDisposable
         lock (sync)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            if (BrowserSessions.IsAvailable)
+            if (BrowserSessions.IsAttached)
             {
                 return ValueTask.CompletedTask;
             }

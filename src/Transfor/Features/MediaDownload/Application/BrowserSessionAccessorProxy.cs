@@ -18,6 +18,18 @@ internal sealed class BrowserSessionAccessorProxy : IBrowserSessionAccessor
         }
     }
 
+    // 是否已挂接具体浏览器实现（区别于 IsAvailable：挂接不等于已初始化完成）
+    public bool IsAttached
+    {
+        get
+        {
+            lock (sync)
+            {
+                return inner is not null;
+            }
+        }
+    }
+
     public void Attach(IBrowserSessionAccessor accessor)
     {
         lock (sync)
@@ -46,6 +58,29 @@ internal sealed class BrowserSessionAccessorProxy : IBrowserSessionAccessor
         }
 
         return current.CaptureAsync(pageUri, interactive, cancellationToken);
+    }
+
+    public Task<BrowserDownloadResult> DownloadAsync(
+        Uri mediaUri,
+        Guid taskId,
+        string targetPath,
+        MediaKind kind,
+        CancellationToken cancellationToken,
+        IProgress<MediaDownloadProgress>? progress = null,
+        long? maxBytes = null)
+    {
+        IBrowserSessionAccessor? current;
+        lock (sync)
+        {
+            current = inner;
+        }
+
+        if (current is null)
+        {
+            return Task.FromResult(BrowserDownloadResult.Failed("浏览器会话尚未启用。"));
+        }
+
+        return current.DownloadAsync(mediaUri, taskId, targetPath, kind, cancellationToken, progress, maxBytes);
     }
 
     public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(

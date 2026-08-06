@@ -37,6 +37,17 @@ internal sealed class TransforApplicationContext : ApplicationContext
             historyStore,
             services.PasteCoordinator);
 
+        // 启动即挂接浏览器会话（只挂接不初始化，首次捕获时在 UI 线程创建 WebView2），
+        // Automatic 解析的浏览器兜底无需用户先点击「浏览器登录」
+        try
+        {
+            services.Media.EnsureBrowserInitializedAsync(mainForm).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // 浏览器不可用不阻断应用启动；相关功能在解析时给出明确提示
+        }
+
         // 创建系统托盘图标：关闭主窗口后进程驻留托盘
         trayIcon = new NotifyIcon
         {

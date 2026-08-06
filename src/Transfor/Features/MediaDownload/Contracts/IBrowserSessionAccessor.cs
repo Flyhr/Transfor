@@ -11,6 +11,17 @@ internal interface IBrowserSessionAccessor : IAsyncDisposable
         bool interactive,
         CancellationToken cancellationToken);
 
+    // 浏览器网络栈下载：用于 HttpClient 被服务端 TLS 指纹拦截时的兜底；
+    // 内部串行执行（单 WebView2 实例），流式写入并校验后返回保存路径
+    Task<BrowserDownloadResult> DownloadAsync(
+        Uri mediaUri,
+        Guid taskId,
+        string targetPath,
+        MediaKind kind,
+        CancellationToken cancellationToken,
+        IProgress<MediaDownloadProgress>? progress = null,
+        long? maxBytes = null);
+
     Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(
         string browserSessionId,
         Uri requestUri,
