@@ -13,8 +13,10 @@ internal static class AppBootstrapper
         var textState = TextStateStore.Load(paths);
         // 媒体状态独立加载（media-settings.json 与 download-history.json）
         var mediaState = MediaStateStore.Load(paths);
+        // 代理开关：默认全面直连（抖音为 CN 服务，直连最优）；开启时走环境变量代理
+        var useProxy = mediaState.Settings.UseProxy;
         // 共享 HttpClient：禁用自动重定向与 Cookie 容器，由 SafeHttpRequestSender 逐跳处理
-        var httpClient = HttpClientProvider.Create();
+        var httpClient = HttpClientProvider.Create(useProxy);
         var dnsResolver = new SystemDnsResolver();
         var validator = new SafeUriValidator(dnsResolver);
         var requestSender = new SafeHttpRequestSender(httpClient, validator);
@@ -50,8 +52,9 @@ internal static class AppBootstrapper
                 BrowserSessions = browserSessions,
                 HttpClient = httpClient,
                 Preview = new MediaPreviewService(requestSender, browserSessions, mediaCache),
-                // 浏览器会话工厂：真实 Edge + CDP（独立持久化配置目录），首次使用时惰性启动
-                BrowserSessionFactory = owner => new EdgeCdpBrowserSessionAccessor(owner, paths),
+                // 浏览器会话工厂：真实 Edge + CDP（独立持久化配置目录），首次使用时惰性启动；
+                // 代理开关随设置（启动时读取，修改后重启生效）
+                BrowserSessionFactory = owner => new EdgeCdpBrowserSessionAccessor(owner, paths, useProxy),
             },
         };
     }

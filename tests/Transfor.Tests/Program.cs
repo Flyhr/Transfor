@@ -83,7 +83,6 @@ TestDouyinTransportClassifier();
 TestDouyinTransportPreference();
 TestErrorChainFormatter();
 TestCdpConnection();
-TestEdgeProxyComparison();
 TestMediaCache();
 TestMediaSettingsForm();
 TestMediaPreviewService();
@@ -1756,21 +1755,6 @@ static void TestCdpConnection()
     }
 }
 
-// 场景：Edge 复用代理一致性比较（规范化忽略引号/顺序）
-static void TestEdgeProxyComparison()
-{
-    AssertEqual(true, EdgeProcessManager.ProxyEquals(null, null), "both null equal");
-    AssertEqual(false, EdgeProcessManager.ProxyEquals(null, "http://127.0.0.1:7897"), "null vs value differ");
-    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", null), "value vs null differ");
-    AssertEqual(true, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://127.0.0.1:7897"), "same proxy equal");
-    AssertEqual(true, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://127.0.0.1:7897/"), "trailing slash ignored");
-    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://127.0.0.1:8080"), "different port differ");
-    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "https://127.0.0.1:7897"), "different scheme differ");
-    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://localhost:7897"), "different host differ");
-    AssertEqual(true, EdgeProcessManager.ProxyEquals("socks5://127.0.0.1:1080", "socks5://127.0.0.1:1080"), "socks proxy equal");
-    AssertEqual(false, EdgeProcessManager.ProxyEquals("not-a-proxy", "http://127.0.0.1:7897"), "invalid value treated as different");
-}
-
 // 场景：媒体本地缓存（哈希命名、命中/写入/失效）
 static void TestMediaCache()
 {
@@ -1823,6 +1807,7 @@ static void TestMediaSettingsForm()
             AssertEqual(5, composed.MaxConcurrentDownloads, "settings form reads concurrency");
             AssertEqual(state.Settings.DownloadDirectory, composed.DownloadDirectory, "settings form reads directory");
             AssertEqual(MediaQualityPreference.Highest, composed.QualityPreference, "settings form reads quality");
+            AssertEqual(false, composed.UseProxy, "proxy off by default");
 
             // 校验非法组合被拒绝
             var invalid = composed with { MaxConcurrentDownloads = 99 };

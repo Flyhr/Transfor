@@ -9,6 +9,7 @@ internal sealed class MediaSettingsForm : Form
     private readonly NumericUpDown concurrencyBox;
     private readonly CheckBox selectAllBox;
     private readonly CheckBox openFolderBox;
+    private readonly CheckBox useProxyBox;
     private readonly ComboBox qualityBox;
     private readonly Label errorLabel;
 
@@ -25,11 +26,12 @@ internal sealed class MediaSettingsForm : Form
         ClientSize = new Size(460, 320);
         Font = new Font("Microsoft YaHei UI", 10F);
 
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 2, RowCount = 6 };
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 2, RowCount = 7 };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -66,16 +68,20 @@ internal sealed class MediaSettingsForm : Form
         openFolderBox = new CheckBox { Text = "下载完成后打开目录", Checked = stateStore.Settings.OpenFolderAfterDownload, AutoSize = true };
         root.Controls.Add(openFolderBox, 1, 3);
 
+        // 启用代理（默认直连；代理节点不稳定时保持直连更稳）
+        useProxyBox = new CheckBox { Text = "启用代理（默认直连）", Checked = stateStore.Settings.UseProxy, AutoSize = true };
+        root.Controls.Add(useProxyBox, 1, 4);
+
         // 质量策略
-        root.Controls.Add(new Label { Text = "质量策略", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 4);
+        root.Controls.Add(new Label { Text = "质量策略", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 5);
         qualityBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
         qualityBox.Items.Add(new QualityOption("最高质量", MediaQualityPreference.Highest));
         qualityBox.Items.Add(new QualityOption("平衡（优先 720p）", MediaQualityPreference.Balanced));
         qualityBox.SelectedItem = qualityBox.Items.OfType<QualityOption>().First(o => o.Value == stateStore.Settings.QualityPreference);
-        root.Controls.Add(qualityBox, 1, 4);
+        root.Controls.Add(qualityBox, 1, 5);
 
         errorLabel = new Label { Dock = DockStyle.Fill, ForeColor = Color.Firebrick, AutoSize = false, TextAlign = ContentAlignment.TopLeft };
-        root.Controls.Add(errorLabel, 0, 5);
+        root.Controls.Add(errorLabel, 0, 6);
         root.SetColumnSpan(errorLabel, 2);
 
         Controls.Add(root);
@@ -97,7 +103,8 @@ internal sealed class MediaSettingsForm : Form
             (int)concurrencyBox.Value,
             selectAllBox.Checked,
             openFolderBox.Checked,
-            quality.Value);
+            quality.Value,
+            useProxyBox.Checked);
     }
 
     private void BrowseDirectory()

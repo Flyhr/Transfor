@@ -18,20 +18,20 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
     private CdpTargetSession? session;
     private volatile bool initialized;
 
-    public EdgeCdpBrowserSessionAccessor(Control uiOwner, AppPaths paths)
-        : this(paths.EdgeProfileDirectory, paths.MediaCacheDirectory)
+    public EdgeCdpBrowserSessionAccessor(Control uiOwner, AppPaths paths, bool useProxy = false)
+        : this(paths.EdgeProfileDirectory, paths.MediaCacheDirectory, useProxy)
     {
         ArgumentNullException.ThrowIfNull(uiOwner);
     }
 
     public EdgeCdpBrowserSessionAccessor(string edgeProfileDirectory)
-        : this(edgeProfileDirectory, Path.Combine(Path.GetTempPath(), "Transfor", "MediaCache"))
+        : this(edgeProfileDirectory, Path.Combine(Path.GetTempPath(), "Transfor", "MediaCache"), useProxy: false)
     {
     }
 
-    public EdgeCdpBrowserSessionAccessor(string edgeProfileDirectory, string mediaCacheDirectory)
+    public EdgeCdpBrowserSessionAccessor(string edgeProfileDirectory, string mediaCacheDirectory, bool useProxy = false)
     {
-        processManager = new EdgeProcessManager(edgeProfileDirectory);
+        processManager = new EdgeProcessManager(edgeProfileDirectory, useProxy);
         mediaCache = new MediaCache(mediaCacheDirectory);
     }
 

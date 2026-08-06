@@ -6,7 +6,8 @@ internal sealed record MediaDownloadSettings(
     int MaxConcurrentDownloads,
     bool DefaultSelectAll,
     bool OpenFolderAfterDownload,
-    MediaQualityPreference QualityPreference)
+    MediaQualityPreference QualityPreference,
+    bool UseProxy = false)
 {
     public const int MinimumConcurrency = 1;
     public const int MaximumConcurrency = 8;
@@ -14,6 +15,7 @@ internal sealed record MediaDownloadSettings(
     public const bool DefaultSelectAllValue = true;
     public const bool DefaultOpenFolderAfterDownload = false;
     public const MediaQualityPreference DefaultQualityPreference = MediaQualityPreference.Highest;
+    public const bool DefaultUseProxy = false;
 
     // 创建默认设置：优先使用用户 Downloads 目录，缺失时回退到 fallbackDirectory
     public static MediaDownloadSettings CreateDefault(
@@ -35,7 +37,8 @@ internal sealed record MediaDownloadSettings(
             DefaultConcurrency,
             DefaultSelectAllValue,
             DefaultOpenFolderAfterDownload,
-            DefaultQualityPreference);
+            DefaultQualityPreference,
+            DefaultUseProxy);
     }
 
     public void Validate()
