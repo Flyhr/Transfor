@@ -83,6 +83,8 @@ TestDouyinTransportClassifier();
 TestDouyinTransportPreference();
 TestErrorChainFormatter();
 TestCdpConnection();
+TestEdgeProxyComparison();
+TestMediaNetworkModeSettings();
 TestMediaCache();
 TestMediaSettingsForm();
 TestMediaPreviewService();
@@ -1755,6 +1757,55 @@ static void TestCdpConnection()
     }
 }
 
+// 场景：Edge 复用代理地址一致性比较（规范化忽略引号/顺序）
+static void TestEdgeProxyComparison()
+{
+    AssertEqual(true, EdgeProcessManager.ProxyEquals(null, null), "both null equal");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals(null, "http://127.0.0.1:7897"), "null vs value differ");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", null), "value vs null differ");
+    AssertEqual(true, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://127.0.0.1:7897"), "same proxy equal");
+    AssertEqual(true, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://127.0.0.1:7897/"), "trailing slash ignored");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://127.0.0.1:8080"), "different port differ");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "https://127.0.0.1:7897"), "different scheme differ");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://localhost:7897"), "different host differ");
+    AssertEqual(true, EdgeProcessManager.ProxyEquals("socks5://127.0.0.1:1080", "socks5://127.0.0.1:1080"), "socks proxy equal");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals("not-a-proxy", "http://127.0.0.1:7897"), "invalid value treated as different");
+}
+
+// 场景：网络模式设置校验（CustomProxy 需要有效代理地址）
+static void TestMediaNetworkModeSettings()
+{
+    var settings = new MediaDownloadSettings(@"C:\dl", 3, true, false, MediaQualityPreference.Highest);
+    AssertEqual(MediaNetworkMode.Direct, settings.NetworkMode, "network mode default direct");
+    AssertEqual(true, settings.ProxyAddress == string.Empty, "proxy address default empty");
+
+    // CustomProxy 无地址 → 校验拒绝
+    var noAddress = settings with { NetworkMode = MediaNetworkMode.CustomProxy, ProxyAddress = "" };
+    var rejected = false;
+    try { noAddress.Validate(); }
+    catch (ArgumentException) { rejected = true; }
+    AssertEqual(true, rejected, "custom proxy without address rejected");
+
+    // CustomProxy 非法地址 → 校验拒绝
+    var badAddress = settings with { NetworkMode = MediaNetworkMode.CustomProxy, ProxyAddress = "not-a-proxy" };
+    var rejectedBad = false;
+    try { badAddress.Validate(); }
+    catch (ArgumentException) { rejectedBad = true; }
+    AssertEqual(true, rejectedBad, "custom proxy with invalid address rejected");
+
+    // CustomProxy 有效地址 → 校验通过
+    var valid = settings with { NetworkMode = MediaNetworkMode.CustomProxy, ProxyAddress = "http://127.0.0.1:7897" };
+    valid.Validate();
+    AssertEqual(true, true, "custom proxy with valid address accepted");
+
+    // Direct/System 无需地址
+    var direct = settings with { NetworkMode = MediaNetworkMode.Direct, ProxyAddress = "" };
+    direct.Validate();
+    var system = settings with { NetworkMode = MediaNetworkMode.System, ProxyAddress = "" };
+    system.Validate();
+    AssertEqual(true, true, "direct and system modes validate without address");
+}
+
 // 场景：媒体本地缓存（哈希命名、命中/写入/失效）
 static void TestMediaCache()
 {
@@ -1807,7 +1858,7 @@ static void TestMediaSettingsForm()
             AssertEqual(5, composed.MaxConcurrentDownloads, "settings form reads concurrency");
             AssertEqual(state.Settings.DownloadDirectory, composed.DownloadDirectory, "settings form reads directory");
             AssertEqual(MediaQualityPreference.Highest, composed.QualityPreference, "settings form reads quality");
-            AssertEqual(false, composed.UseProxy, "proxy off by default");
+            AssertEqual(MediaNetworkMode.Direct, composed.NetworkMode, "network mode direct by default");
 
             // 校验非法组合被拒绝
             var invalid = composed with { MaxConcurrentDownloads = 99 };

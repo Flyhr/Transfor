@@ -9,7 +9,8 @@ internal sealed class MediaSettingsForm : Form
     private readonly NumericUpDown concurrencyBox;
     private readonly CheckBox selectAllBox;
     private readonly CheckBox openFolderBox;
-    private readonly CheckBox useProxyBox;
+    private readonly ComboBox networkModeBox;
+    private readonly TextBox proxyAddressBox;
     private readonly ComboBox qualityBox;
     private readonly Label errorLabel;
 
@@ -68,9 +69,22 @@ internal sealed class MediaSettingsForm : Form
         openFolderBox = new CheckBox { Text = "下载完成后打开目录", Checked = stateStore.Settings.OpenFolderAfterDownload, AutoSize = true };
         root.Controls.Add(openFolderBox, 1, 3);
 
-        // 启用代理（默认直连；代理节点不稳定时保持直连更稳）
-        useProxyBox = new CheckBox { Text = "启用代理（默认直连）", Checked = stateStore.Settings.UseProxy, AutoSize = true };
-        root.Controls.Add(useProxyBox, 1, 4);
+        // 网络模式：强制直连 / 系统代理 / 指定代理
+        root.Controls.Add(new Label { Text = "网络模式", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 4);
+        var networkRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+        networkRow.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        networkRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        networkModeBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+        networkModeBox.Items.Add(new NetworkModeOption("强制直连", MediaNetworkMode.Direct));
+        networkModeBox.Items.Add(new NetworkModeOption("系统代理", MediaNetworkMode.System));
+        networkModeBox.Items.Add(new NetworkModeOption("指定代理", MediaNetworkMode.CustomProxy));
+        networkModeBox.SelectedItem = networkModeBox.Items.OfType<NetworkModeOption>().First(o => o.Value == stateStore.Settings.NetworkMode);
+        networkModeBox.SelectedIndexChanged += (_, _) => UpdateProxyAddressEnabled();
+        proxyAddressBox = new TextBox { Dock = DockStyle.Fill, Text = stateStore.Settings.ProxyAddress, PlaceholderText = "http://127.0.0.1:7897" };
+        networkRow.Controls.Add(networkModeBox, 0, 0);
+        networkRow.Controls.Add(proxyAddressBox, 0, 1);
+        root.Controls.Add(networkRow, 1, 4);
+        UpdateProxyAddressEnabled();
 
         // 质量策略
         root.Controls.Add(new Label { Text = "质量策略", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 5);
@@ -98,13 +112,26 @@ internal sealed class MediaSettingsForm : Form
     internal MediaDownloadSettings ComposeFromControls()
     {
         var quality = (QualityOption)qualityBox.SelectedItem;
+        var networkMode = (NetworkModeOption)networkModeBox.SelectedItem;
         return new MediaDownloadSettings(
             directoryBox.Text,
             (int)concurrencyBox.Value,
             selectAllBox.Checked,
             openFolderBox.Checked,
             quality.Value,
-            useProxyBox.Checked);
+            networkMode.Value,
+            proxyAddressBox.Text.Trim());
+    }
+
+    // 指定代理模式才启用代理地址输入框
+    private void UpdateProxyAddressEnabled()
+    {
+        var mode = (NetworkModeOption)networkModeBox.SelectedItem;
+        proxyAddressBox.Enabled = mode.Value == MediaNetworkMode.CustomProxy;
+        if (proxyAddressBox.Enabled)
+        {
+            proxyAddressBox.Focus();
+        }
     }
 
     private void BrowseDirectory()
@@ -134,6 +161,11 @@ internal sealed class MediaSettingsForm : Form
     }
 
     private sealed record QualityOption(string Name, MediaQualityPreference Value)
+    {
+        public override string ToString() => Name;
+    }
+
+    private sealed record NetworkModeOption(string Name, MediaNetworkMode Value)
     {
         public override string ToString() => Name;
     }

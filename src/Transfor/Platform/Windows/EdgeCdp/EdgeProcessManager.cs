@@ -6,20 +6,22 @@ using System.Text.Json.Nodes;
 namespace Transfor;
 
 // 专用 Edge 进程管理：启动有头 Edge（独立持久化配置目录、随机调试端口、最小化运行），
-// 轮询 /json/version 就绪；进程崩溃后按需重启；退出时仅结束自己启动的实例；
-// 默认全面直连（抖音为 CN 服务，直连最优）；useProxy=true 时经 --proxy-server 走环境变量代理
+// 轮询 /json/version 就绪；进程崩溃后按需重启；退出时结束所有本应用 profile 的 Edge；
+// 网络模式三态：Direct 强制直连（--no-proxy-server，不读系统代理）；
+// System 不指定代理参数（Edge 读 Windows 系统代理）；CustomProxy 使用指定代理地址
 internal sealed class EdgeProcessManager : IAsyncDisposable
 {
     private const int ReadyTimeoutMilliseconds = 30_000;
     private const int PollIntervalMilliseconds = 500;
 
-    // 启动参数版本标记：启动策略（代理开关等）变更时递增，
+    // 启动参数版本标记：启动策略（网络模式等）变更时递增，
     // 复用检查要求旧实例含同标记，避免复用旧参数策略的实例
-    private const string EditionMarker = "--transfor-edition=3";
+    private const string EditionMarker = "--transfor-edition=4";
 
     private readonly string profileDirectory;
     private readonly string edgeExecutable;
-    private readonly bool useProxy;
+    private readonly MediaNetworkMode networkMode;
+    private readonly string? proxyAddress;
     private readonly SemaphoreSlim startGate = new(1, 1);
     private Process? process;
     private string? browserWsUrl;
@@ -27,10 +29,14 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
     private int debuggingPort;
     private bool disposed;
 
-    public EdgeProcessManager(string profileDirectory, bool useProxy = false)
+    public EdgeProcessManager(
+        string profileDirectory,
+        MediaNetworkMode networkMode = MediaNetworkMode.Direct,
+        string? proxyAddress = null)
     {
         this.profileDirectory = profileDirectory ?? throw new ArgumentNullException(nameof(profileDirectory));
-        this.useProxy = useProxy;
+        this.networkMode = networkMode;
+        this.proxyAddress = proxyAddress;
         edgeExecutable = EdgeExecutableLocator.TryLocate()
             ?? throw new InvalidOperationException("未找到 Microsoft Edge。");
     }
@@ -55,11 +61,12 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
                 return;
             }
 
-            if (TryFindExistingProcess(out var existing, out var existingPort, out var existingEdition, out var existingHasProxy))
+            var expectedProxy = ResolveExpectedProxyArgument();
+            if (TryFindExistingProcess(out var existing, out var existingPort, out var existingEdition, out var existingProxy))
             {
-                // 仅当启动参数版本一致且代理开关一致时才复用（避免复用旧参数策略的实例）
+                // 仅当启动参数版本一致且代理配置一致时才复用（避免复用旧参数策略的实例）
                 if (string.Equals(existingEdition, EditionMarker, StringComparison.Ordinal)
-                    && existingHasProxy == useProxy)
+                    && ProxyEquals(existingProxy, expectedProxy))
                 {
                     // 参数策略一致：复用已运行实例（残留进程同样复用，保持会话温暖）
                     process = existing;
@@ -74,7 +81,7 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
                 }
                 else
                 {
-                    // 代理开关或启动参数策略已变化：结束旧实例，按当前配置启动新实例
+                    // 网络模式或代理配置已变化：结束旧实例，按当前配置启动新实例
                     TryKill(existing);
                     process = null;
                 }
@@ -91,14 +98,31 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
                 "--no-default-browser-check",
                 EditionMarker,
             };
-            // 显式开启代理时才传 --proxy-server（环境变量代理；不 bypass，全走代理）
-            if (useProxy)
+            // 网络模式三态：Direct 强制直连（不读系统代理）；System 不指定参数（读系统代理）；
+            // CustomProxy 使用指定代理地址（无效地址启动即报错，不静默直连）
+            switch (networkMode)
             {
-                var proxy = ReadProxyServer();
-                if (proxy is not null)
-                {
-                    arguments.Add($"--proxy-server={proxy}");
-                }
+                case MediaNetworkMode.Direct:
+                    arguments.Add("--no-proxy-server");
+                    break;
+
+                case MediaNetworkMode.System:
+                    break;
+
+                case MediaNetworkMode.CustomProxy:
+                    if (string.IsNullOrWhiteSpace(proxyAddress)
+                        || !Uri.TryCreate(proxyAddress.Trim(), UriKind.Absolute, out var proxyUri)
+                        || proxyUri.Scheme is not ("http" or "https" or "socks4" or "socks5")
+                        || string.IsNullOrEmpty(proxyUri.Host))
+                    {
+                        throw new InvalidOperationException(
+                            $"已启用指定代理，但代理地址无效：{proxyAddress ?? "(空)"}");
+                    }
+                    arguments.Add($"--proxy-server={proxyUri}");
+                    break;
+
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(networkMode));
             }
             arguments.Add("about:blank");
 
@@ -243,13 +267,13 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
     }
 
     // 查找已运行的专用 Edge 主进程（同 profile + 调试端口，且非子进程）；
-    // 返回主进程句柄、调试端口、启动版本标记与是否带代理参数
-    private bool TryFindExistingProcess(out Process? existing, out int port, out string? existingEdition, out bool existingHasProxy)
+    // 返回主进程句柄、调试端口、启动版本标记与实际代理地址
+    private bool TryFindExistingProcess(out Process? existing, out int port, out string? existingEdition, out string? existingProxy)
     {
         existing = null;
         port = 0;
         existingEdition = null;
-        existingHasProxy = false;
+        existingProxy = null;
         try
         {
             using var searcher = new System.Management.ManagementObjectSearcher(
@@ -275,12 +299,14 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
                 }
 
                 var editionMatch = System.Text.RegularExpressions.Regex.Match(commandLine, "--transfor-edition=(\\d+)");
+                var proxyMatch = System.Text.RegularExpressions.Regex.Match(
+                    commandLine, "--proxy-server=\"?([^\\s\"]+)\"?");
 
                 var pid = Convert.ToInt32(obj["ProcessId"]);
                 existing = Process.GetProcessById(pid);
                 port = int.Parse(portMatch.Groups[1].Value);
                 existingEdition = editionMatch.Success ? editionMatch.Groups[0].Value : null;
-                existingHasProxy = commandLine.Contains("--proxy-server=", StringComparison.OrdinalIgnoreCase);
+                existingProxy = proxyMatch.Success ? proxyMatch.Groups[1].Value : null;
                 return true;
             }
         }
@@ -291,6 +317,33 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
         return false;
     }
 
+    // 当前配置应使用的代理参数：CustomProxy 返回指定地址；Direct/System 不使用显式代理
+    private string? ResolveExpectedProxyArgument()
+        => networkMode == MediaNetworkMode.CustomProxy ? proxyAddress?.Trim() : null;
+
+    // 代理配置是否一致：按 scheme/host/port 规范化比较（忽略参数顺序与引号差异）
+    internal static bool ProxyEquals(string? existing, string? expected)
+    {
+        if (string.IsNullOrWhiteSpace(existing) && string.IsNullOrWhiteSpace(expected))
+        {
+            return true;
+        }
+        if (existing is null || expected is null)
+        {
+            return false;
+        }
+
+        if (Uri.TryCreate(existing.Trim(), UriKind.Absolute, out var a)
+            && Uri.TryCreate(expected.Trim(), UriKind.Absolute, out var b))
+        {
+            return string.Equals(a.Scheme, b.Scheme, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase)
+                && a.Port == b.Port;
+        }
+
+        return string.Equals(existing.Trim(), expected.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
     private static int FindFreePort()
     {
         var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -299,26 +352,5 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
         listener.Stop();
         return port;
     }
-
-    private static string? ReadProxyServer()
-    {
-        foreach (var name in new[] { "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy" })
-        {
-            var value = Environment.GetEnvironmentVariable(name);
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                continue;
-            }
-
-            var trimmed = value.Trim();
-            if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri)
-                && uri.Scheme is ("http" or "https" or "socks4" or "socks5")
-                && !string.IsNullOrEmpty(uri.Host))
-            {
-                return trimmed;
-            }
-        }
-
-        return null;
-    }
 }
+

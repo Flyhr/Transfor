@@ -7,7 +7,8 @@ internal sealed record MediaDownloadSettings(
     bool DefaultSelectAll,
     bool OpenFolderAfterDownload,
     MediaQualityPreference QualityPreference,
-    bool UseProxy = false)
+    MediaNetworkMode NetworkMode = MediaNetworkMode.Direct,
+    string ProxyAddress = "")
 {
     public const int MinimumConcurrency = 1;
     public const int MaximumConcurrency = 8;
@@ -15,7 +16,7 @@ internal sealed record MediaDownloadSettings(
     public const bool DefaultSelectAllValue = true;
     public const bool DefaultOpenFolderAfterDownload = false;
     public const MediaQualityPreference DefaultQualityPreference = MediaQualityPreference.Highest;
-    public const bool DefaultUseProxy = false;
+    public const MediaNetworkMode DefaultNetworkMode = MediaNetworkMode.Direct;
 
     // 创建默认设置：优先使用用户 Downloads 目录，缺失时回退到 fallbackDirectory
     public static MediaDownloadSettings CreateDefault(
@@ -38,7 +39,7 @@ internal sealed record MediaDownloadSettings(
             DefaultSelectAllValue,
             DefaultOpenFolderAfterDownload,
             DefaultQualityPreference,
-            DefaultUseProxy);
+            DefaultNetworkMode);
     }
 
     public void Validate()
@@ -62,6 +63,25 @@ internal sealed record MediaDownloadSettings(
             throw new ArgumentException(
                 "下载目录必须是绝对路径。",
                 nameof(DownloadDirectory));
+        }
+
+        if (!Enum.IsDefined(NetworkMode))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(NetworkMode));
+        }
+
+        if (NetworkMode == MediaNetworkMode.CustomProxy)
+        {
+            if (string.IsNullOrWhiteSpace(ProxyAddress)
+                || !Uri.TryCreate(ProxyAddress.Trim(), UriKind.Absolute, out var proxyUri)
+                || proxyUri.Scheme is not ("http" or "https" or "socks4" or "socks5")
+                || string.IsNullOrEmpty(proxyUri.Host))
+            {
+                throw new ArgumentException(
+                    "指定代理模式需要有效的代理地址（如 http://127.0.0.1:7897）。",
+                    nameof(ProxyAddress));
+            }
         }
 
         if (!Enum.IsDefined(QualityPreference))
