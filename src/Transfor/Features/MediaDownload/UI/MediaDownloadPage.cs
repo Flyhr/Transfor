@@ -70,7 +70,7 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         inputBox = new TextBox { Dock = DockStyle.Fill, Multiline = false };
         pasteButton = new Button { AutoSize = true, Text = "从剪贴板粘贴" };
         parseButton = new Button { AutoSize = true, Text = "解析" };
-        browserButton = new Button { AutoSize = true, Text = "浏览器登录", Enabled = false };
+        browserButton = new Button { AutoSize = true, Text = "浏览器登录", Enabled = true };
         clearButton = new Button { AutoSize = true, Text = "清空" };
         pasteButton.Click += (_, _) => PasteFromClipboard();
         parseButton.Click += (_, _) => _ = ParseCoreAsync();
@@ -460,7 +460,9 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         pasteButton.Enabled = basicEnabled;
         clearButton.Enabled = basicEnabled;
         browseButton.Enabled = basicEnabled;
-        browserButton.Enabled = state == MediaPageState.WaitingForUser;
+        // 浏览器登录在空闲/失败/待交互等状态下始终可用（用户可在任意时刻强制走浏览器解析），
+        // 仅解析与下载进行中禁用避免并发操作
+        browserButton.Enabled = state is not (MediaPageState.Resolving or MediaPageState.Downloading);
         selectAllButton.Enabled = state == MediaPageState.Resolved;
         unselectAllButton.Enabled = state == MediaPageState.Resolved;
         downloadButton.Enabled = state == MediaPageState.Resolved;

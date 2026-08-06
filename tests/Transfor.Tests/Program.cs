@@ -1306,10 +1306,10 @@ static void TestMediaDownloadPage()
             // 保存目录初始值来自设置
             AssertEqual(state.Settings.DownloadDirectory, page.DownloadDirectoryText, "directory initial from settings");
 
-            // 初始状态：解析可用、浏览器/下载禁用
+            // 初始状态：解析与浏览器可用、下载禁用
             AssertEqual(MediaPageState.Idle, page.CurrentState, "initial state idle");
             AssertEqual(true, page.ParseButtonEnabled, "parse enabled initially");
-            AssertEqual(false, page.BrowserButtonEnabled, "browser disabled initially");
+            AssertEqual(true, page.BrowserButtonEnabled, "browser enabled initially");
             AssertEqual(false, page.DownloadButtonEnabled, "download disabled initially");
 
             // WaitingForUser：浏览器按钮启用，普通解析与下载禁用
