@@ -50,12 +50,12 @@ internal sealed class SafeUriValidator
         }
         catch
         {
-            return new UriValidationResult(false, "域名解析失败。");
+            return new UriValidationResult(false, "域名解析失败。", UriValidationKind.DnsFailed);
         }
 
         if (addresses.Length == 0)
         {
-            return new UriValidationResult(false, "域名没有解析结果。");
+            return new UriValidationResult(false, "域名没有解析结果。", UriValidationKind.DnsFailed);
         }
 
         foreach (var address in addresses)

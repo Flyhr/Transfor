@@ -38,7 +38,7 @@ internal sealed class SafeHttpRequestSender
             var validation = await validator.ValidateAsync(currentUri, cancellationToken).ConfigureAwait(false);
             if (!validation.IsAllowed)
             {
-                throw new InvalidOperationException($"URI 校验失败：{validation.Error}");
+                throw new UriValidationException(validation.Kind, $"URI 校验失败：{validation.Error}");
             }
 
             var request = await requestFactory(currentUri, cancellationToken).ConfigureAwait(false)
