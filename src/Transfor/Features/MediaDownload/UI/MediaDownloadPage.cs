@@ -176,47 +176,64 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
 
     private async Task ParseCoreAsync()
     {
-        var text = inputBox.Text;
-        var uri = ShareLinkParser.TryExtractFirstLink(text, out var parseError);
-        if (uri is null)
+        try
         {
-            SetState(MediaPageState.Failed);
-            errorLabel.Text = parseError ?? "未在文本中找到链接。";
-            return;
-        }
+            var text = inputBox.Text;
+            var uri = ShareLinkParser.TryExtractFirstLink(text, out var parseError);
+            if (uri is null)
+            {
+                SetState(MediaPageState.Failed);
+                errorLabel.Text = parseError ?? "未在文本中找到链接。";
+                return;
+            }
 
-        SetState(MediaPageState.Resolving);
-        var request = new MediaResolveRequest(uri, MediaResolveMode.Automatic, new MediaRequestContext(null, null));
-        var result = await resolveCoordinator.ResolveAsync(request, CancellationToken.None);
-        HandleResolveResult(result, uri.ToString());
+            SetState(MediaPageState.Resolving);
+            var request = new MediaResolveRequest(uri, MediaResolveMode.Automatic, new MediaRequestContext(null, null));
+            var result = await resolveCoordinator.ResolveAsync(request, CancellationToken.None);
+            HandleResolveResult(result, uri.ToString());
+        }
+        catch (Exception ex)
+        {
+            // async void 入口的异常必须就地消化，否则会冒到 UI 线程弹崩溃对话框
+            SetState(MediaPageState.Failed);
+            errorLabel.Text = ErrorChainFormatter.Format(ex);
+        }
     }
 
     private async Task ParseWithBrowserAsync()
     {
-        var uri = ShareLinkParser.TryExtractFirstLink(inputBox.Text, out var parseError);
-        if (uri is null)
-        {
-            SetState(MediaPageState.Failed);
-            errorLabel.Text = parseError ?? "未在文本中找到链接。";
-            return;
-        }
-
-        // 首次进入浏览器流程：在 UI 线程初始化浏览器会话；失败转为 WaitingForUser 提示
         try
         {
-            await ensureBrowserInitializedAsync(this);
+            var uri = ShareLinkParser.TryExtractFirstLink(inputBox.Text, out var parseError);
+            if (uri is null)
+            {
+                SetState(MediaPageState.Failed);
+                errorLabel.Text = parseError ?? "未在文本中找到链接。";
+                return;
+            }
+
+            // 首次进入浏览器流程：在 UI 线程初始化浏览器会话；失败转为 WaitingForUser 提示
+            try
+            {
+                await ensureBrowserInitializedAsync(this);
+            }
+            catch (Exception ex)
+            {
+                SetState(MediaPageState.WaitingForUser);
+                errorLabel.Text = $"浏览器不可用：{ex.Message}";
+                return;
+            }
+
+            SetState(MediaPageState.Resolving);
+            var request = new MediaResolveRequest(uri, MediaResolveMode.BrowserInteractive, new MediaRequestContext(null, null));
+            var result = await resolveCoordinator.ResolveAsync(request, CancellationToken.None);
+            HandleResolveResult(result, uri.ToString());
         }
         catch (Exception ex)
         {
-            SetState(MediaPageState.WaitingForUser);
-            errorLabel.Text = $"浏览器不可用：{ex.Message}";
-            return;
+            SetState(MediaPageState.Failed);
+            errorLabel.Text = ErrorChainFormatter.Format(ex);
         }
-
-        SetState(MediaPageState.Resolving);
-        var request = new MediaResolveRequest(uri, MediaResolveMode.BrowserInteractive, new MediaRequestContext(null, null));
-        var result = await resolveCoordinator.ResolveAsync(request, CancellationToken.None);
-        HandleResolveResult(result, uri.ToString());
     }
 
     private void HandleResolveResult(MediaResolveResult result, string shareLink)
@@ -311,43 +328,51 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
 
     private async Task DownloadSelectedAsync()
     {
-        var post = currentPost;
-        if (post is null)
+        try
         {
-            return;
-        }
+            var post = currentPost;
+            if (post is null)
+            {
+                return;
+            }
 
-        var selected = assetGrid.GetSelected();
-        if (selected.Count == 0)
+            var selected = assetGrid.GetSelected();
+            if (selected.Count == 0)
+            {
+                errorLabel.Text = "请先勾选要下载的媒体。";
+                return;
+            }
+
+            var directory = directoryBox.Text;
+            if (!Directory.Exists(directory))
+            {
+                errorLabel.Text = "保存目录不存在，请先选择。";
+                return;
+            }
+
+            SetState(MediaPageState.Downloading);
+            var tasks = new List<MediaDownloadTask>(selected.Count);
+            foreach (var (asset, variant) in selected)
+            {
+                var fileName = BuildFileName(post, asset, variant);
+                var target = DownloadFileNameBuilder.BuildUniquePath(directory, fileName);
+                tasks.Add(new MediaDownloadTask(Guid.NewGuid(), asset, variant, target));
+            }
+
+            var batch = new MediaDownloadBatch(Guid.NewGuid(), currentShareLink, post, tasks);
+            foreach (var task in tasks)
+            {
+                queueGrid.AddTask(task);
+            }
+
+            await downloadCoordinator.EnqueueBatchAsync(batch, CancellationToken.None);
+            SetState(MediaPageState.Completed);
+        }
+        catch (Exception ex)
         {
-            errorLabel.Text = "请先勾选要下载的媒体。";
-            return;
+            SetState(MediaPageState.Failed);
+            errorLabel.Text = ErrorChainFormatter.Format(ex);
         }
-
-        var directory = directoryBox.Text;
-        if (!Directory.Exists(directory))
-        {
-            errorLabel.Text = "保存目录不存在，请先选择。";
-            return;
-        }
-
-        SetState(MediaPageState.Downloading);
-        var tasks = new List<MediaDownloadTask>(selected.Count);
-        foreach (var (asset, variant) in selected)
-        {
-            var fileName = BuildFileName(post, asset, variant);
-            var target = DownloadFileNameBuilder.BuildUniquePath(directory, fileName);
-            tasks.Add(new MediaDownloadTask(Guid.NewGuid(), asset, variant, target));
-        }
-
-        var batch = new MediaDownloadBatch(Guid.NewGuid(), currentShareLink, post, tasks);
-        foreach (var task in tasks)
-        {
-            queueGrid.AddTask(task);
-        }
-
-        await downloadCoordinator.EnqueueBatchAsync(batch, CancellationToken.None);
-        SetState(MediaPageState.Completed);
     }
 
     private void QueueGrid_OperationRequested(object? sender, (Guid TaskId, bool Retry) e)
@@ -371,31 +396,38 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     // 重试：以新任务 ID 重新入队一个单任务批次（作为独立批次写入历史）
     private async Task RetryTaskAsync(ResolvedMediaPost post, Guid originalTaskId)
     {
-        var original = queueGrid.FindTask(originalTaskId);
-        if (original is null)
+        try
         {
-            return;
-        }
-
-        // 浏览器会话失效时提示重新浏览器解析
-        if (!string.IsNullOrEmpty(original.SelectedVariant.RequestContext.BrowserSessionId))
-        {
-            try
+            var original = queueGrid.FindTask(originalTaskId);
+            if (original is null)
             {
-                await ensureBrowserInitializedAsync(this);
-            }
-            catch (Exception ex)
-            {
-                errorLabel.Text = $"浏览器会话失效，请重新浏览器解析：{ex.Message}";
                 return;
             }
-        }
 
-        var target = DownloadFileNameBuilder.BuildUniquePath(directoryBox.Text, Path.GetFileName(original.TargetPath));
-        var retryTask = new MediaDownloadTask(Guid.NewGuid(), original.Asset, original.SelectedVariant, target);
-        var batch = new MediaDownloadBatch(Guid.NewGuid(), currentShareLink, post, new MediaDownloadTask[] { retryTask });
-        queueGrid.AddTask(retryTask);
-        await downloadCoordinator.EnqueueBatchAsync(batch, CancellationToken.None);
+            // 浏览器会话失效时提示重新浏览器解析
+            if (!string.IsNullOrEmpty(original.SelectedVariant.RequestContext.BrowserSessionId))
+            {
+                try
+                {
+                    await ensureBrowserInitializedAsync(this);
+                }
+                catch (Exception ex)
+                {
+                    errorLabel.Text = $"浏览器会话失效，请重新浏览器解析：{ex.Message}";
+                    return;
+                }
+            }
+
+            var target = DownloadFileNameBuilder.BuildUniquePath(directoryBox.Text, Path.GetFileName(original.TargetPath));
+            var retryTask = new MediaDownloadTask(Guid.NewGuid(), original.Asset, original.SelectedVariant, target);
+            var batch = new MediaDownloadBatch(Guid.NewGuid(), currentShareLink, post, new MediaDownloadTask[] { retryTask });
+            queueGrid.AddTask(retryTask);
+            await downloadCoordinator.EnqueueBatchAsync(batch, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            errorLabel.Text = ErrorChainFormatter.Format(ex);
+        }
     }
 
     private static string BuildFileName(ResolvedMediaPost post, MediaAsset asset, MediaVariant variant)
