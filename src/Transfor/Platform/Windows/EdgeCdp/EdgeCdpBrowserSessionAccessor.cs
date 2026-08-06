@@ -466,14 +466,30 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
     }
 
     // 通过 Runtime.evaluate 收集页面 DOM 中的媒体元素（轮播图 img 顺序即作品顺序）；
+    // 先滚动页面触发懒加载（图文/实况轮播图只在进入视口时加载），再收集；
+    // src 缺失时回退 data-src/data-raw-src/data-original（未加载的懒加载元素也能拿到 URL）；
     // 携带 naturalWidth/Height 供小尺寸装饰图（头像/表情包）过滤
     private static async Task<IReadOnlyList<BrowserCapturedCandidate>> ExtractDomCandidatesAsync(
         CdpTargetSession target,
         CancellationToken cancellationToken)
     {
-        const string script = @"(() => {
+        const string script = @"(async () => {
+            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+            const body = document.body || document.documentElement;
+            const height = body.scrollHeight;
+            for (let y = 0; y < height; y += 600) {
+                window.scrollTo(0, y);
+                await sleep(80);
+            }
+            window.scrollTo(0, 0);
+            await sleep(400);
+
             const pick = (el) => {
-                const src = el.currentSrc || el.src;
+                const src = el.currentSrc || el.src
+                    || (el.dataset && (el.dataset.src || el.dataset.rawSrc))
+                    || el.getAttribute('data-raw-src')
+                    || el.getAttribute('data-original')
+                    || '';
                 if (!src || !src.startsWith('http')) return null;
                 return { src, w: el.naturalWidth || el.width || 0, h: el.naturalHeight || el.height || 0 };
             };

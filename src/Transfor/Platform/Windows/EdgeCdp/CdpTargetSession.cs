@@ -102,7 +102,8 @@ internal sealed class CdpTargetSession
 
     public async Task<T?> EvaluateAsync<T>(string expression, CancellationToken cancellationToken)
     {
-        var result = await connection.CommandAsync("Runtime.evaluate", new { expression, returnByValue = true }, sessionId, cancellationToken);
+        // awaitPromise=true：允许表达式返回 Promise（异步滚动/等待脚本），同步表达式不受影响
+        var result = await connection.CommandAsync("Runtime.evaluate", new { expression, returnByValue = true, awaitPromise = true }, sessionId, cancellationToken);
         var value = result?["result"]?["value"];
         if (value is null)
         {
