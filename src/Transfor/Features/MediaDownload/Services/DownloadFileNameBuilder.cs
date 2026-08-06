@@ -32,9 +32,13 @@ internal static class DownloadFileNameBuilder
         return name;
     }
 
-    // 根据 Content-Type 与媒体类型解析扩展名；无法确定时按类型返回通用后缀
-    public static string ResolveExtension(string? contentType, MediaKind kind)
+    // 根据 Content-Type 与媒体类型解析扩展名；
+    // Content-Type 缺失或为泛化类型（如抖音 RENDER_DATA 图片的裸 "image"）时，
+    // 按 URL 路径扩展名推断（抖音 CDN 图片 URL 带格式后缀，如 q80.jpeg）；
+    // 仍无法确定时按类型返回通用后缀
+    public static string ResolveExtension(string? contentType, MediaKind kind, string? urlPath = null)
     {
+        var inferredFromUrl = false;
         if (contentType is not null)
         {
             var lower = contentType.ToLowerInvariant();
@@ -48,9 +52,40 @@ internal static class DownloadFileNameBuilder
                 case "video/webm": return ".webm";
                 case "video/quicktime": return ".mov";
                 default:
-                    if (lower.StartsWith("image/", StringComparison.Ordinal)) return ".img";
-                    if (lower.StartsWith("video/", StringComparison.Ordinal)) return ".mp4";
+                    // 未知子类型与裸类型（"image"/"video"）：继续尝试 URL 推断
+                    if (lower.StartsWith("image/", StringComparison.Ordinal)
+                        || lower.StartsWith("video/", StringComparison.Ordinal)
+                        || lower is "image" or "video")
+                    {
+                        inferredFromUrl = true;
+                    }
                     break;
+            }
+        }
+        else
+        {
+            inferredFromUrl = true;
+        }
+
+        if (inferredFromUrl && !string.IsNullOrEmpty(urlPath))
+        {
+            // 剥离查询串/片段后再取扩展名（防御：调用方可能传完整 URL）
+            var queryIndex = urlPath.IndexOfAny(new[] { '?', '#' });
+            var pathOnly = queryIndex >= 0 ? urlPath[..queryIndex] : urlPath;
+            var extension = Path.GetExtension(pathOnly)?.ToLowerInvariant();
+            switch (extension)
+            {
+                case ".jpg":
+                case ".jpeg":
+                    return ".jpg";
+                case ".png": return ".png";
+                case ".gif": return ".gif";
+                case ".webp": return ".webp";
+                case ".bmp": return ".bmp";
+                case ".avif": return ".avif";
+                case ".mp4": return ".mp4";
+                case ".webm": return ".webm";
+                case ".mov": return ".mov";
             }
         }
 

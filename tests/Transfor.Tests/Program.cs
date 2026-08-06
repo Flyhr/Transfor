@@ -853,6 +853,14 @@ static void TestDownloadFileNameBuilder()
     AssertEqual(".img", DownloadFileNameBuilder.ResolveExtension(null, MediaKind.Image), "unknown image extension");
     AssertEqual(".bin", DownloadFileNameBuilder.ResolveExtension(null, MediaKind.Video), "unknown video extension");
 
+    // 泛化/缺失 Content-Type：按 URL 路径扩展名推断（抖音图片 content_type 为裸 "image"）
+    AssertEqual(".jpg", DownloadFileNameBuilder.ResolveExtension("image", MediaKind.Image, "/tos-cn-i-0813/abc~tplv-dy-vqe2-sr-v2:1440:2560:q80.jpeg?lk3s=1"), "bare image type inferred from jpeg url");
+    AssertEqual(".png", DownloadFileNameBuilder.ResolveExtension(null, MediaKind.Image, "/path/logo.png"), "null type inferred from png url");
+    AssertEqual(".webp", DownloadFileNameBuilder.ResolveExtension("image", MediaKind.Image, "/path/img~q80.webp"), "bare image type inferred from webp url");
+    AssertEqual(".mp4", DownloadFileNameBuilder.ResolveExtension("video", MediaKind.Video, "/aweme/v1/play/video.mp4?video_id=1"), "bare video type inferred from mp4 url");
+    AssertEqual(".img", DownloadFileNameBuilder.ResolveExtension("image", MediaKind.Image, "/path/no-extension"), "bare image without url extension falls back");
+    AssertEqual(".jpg", DownloadFileNameBuilder.ResolveExtension("image/jpeg", MediaKind.Image, "/path/confusing.webp"), "explicit type wins over url");
+
     // 重名使用 (1)、(2)
     var dir = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
     Directory.CreateDirectory(dir);
