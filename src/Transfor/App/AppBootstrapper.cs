@@ -23,10 +23,12 @@ internal static class AppBootstrapper
         // 下载服务：流式 + 安全链路；Cookie 源经代理（未启用浏览器时为空）
         var downloadService = new MediaDownloadService(requestSender, browserSessions);
         // 解析器注册：专用解析器（抖音）优先，Direct 最后兜底
+        // 抖音传输偏好为会话级熔断状态（进程内共享，重启复位）
+        var douyinPreference = new DouyinTransportPreferenceState();
         var registry = new MediaResolverRegistry(new IMediaResolver[]
         {
-            new DouyinMediaResolver(new DouyinHttpPageResolver(requestSender), browserSessions),
-            new DirectMediaResolver(requestSender),
+            new DouyinMediaResolver(new DouyinHttpPageResolver(requestSender), browserSessions, douyinPreference),
+            new DirectMediaResolver(requestSender, browserSessions),
         });
         var resolveCoordinator = new MediaResolveCoordinator(registry);
         var downloadCoordinator = new MediaDownloadCoordinator(downloadService, mediaState);
