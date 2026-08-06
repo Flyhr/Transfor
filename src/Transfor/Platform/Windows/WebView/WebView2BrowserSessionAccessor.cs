@@ -243,17 +243,19 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
                 {
                     var navigated = await browserForm!.NavigateAsync(mediaUri, TimeSpan.FromMilliseconds(NavigationTimeoutMilliseconds), token);
                     // 导航失败但可能有响应（断流/异常页）；等待响应或超时
-                    Task<CoreWebView2WebResourceResponseView?> responseTask;
+                    // 注意：WaitAsync 超时不抛同步异常，必须 await 才能捕获 TimeoutException
+                    CoreWebView2WebResourceResponseView? response;
                     try
                     {
-                        responseTask = responseTcs.Task.WaitAsync(TimeSpan.FromMilliseconds(NavigationTimeoutMilliseconds), token);
+                        response = await responseTcs.Task.WaitAsync(
+                            TimeSpan.FromMilliseconds(NavigationTimeoutMilliseconds), token);
                     }
                     catch (TimeoutException)
                     {
                         // 超时（导航失败且无任何响应）：抖音服务端拒绝浏览器网络栈的连接时即此表现
-                        responseTask = Task.FromResult<CoreWebView2WebResourceResponseView?>(null);
+                        response = null;
                     }
-                    var response = await responseTask;
+
                     if (!navigated && response is null)
                     {
                         return BrowserDownloadResult.Failed("浏览器媒体加载失败：抖音服务端拒绝了连接（TLS 拦截），请改用可访问的网络或稍后再试。");
@@ -296,8 +298,18 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
         CancellationToken cancellationToken,
         IProgress<MediaDownloadProgress>? progress)
     {
-        // 超大响应（超过 WebView2 内容视图上限）返回 null，明确提示而非静默失败
-        var content = await response.GetContentAsync();
+        // 超大响应（超过 WebView2 内容视图上限）返回 null，明确提示而非静默失败；
+        // WaitAsync 超时不抛同步异常，必须 await 才能捕获 TimeoutException
+        Stream? content;
+        try
+        {
+            content = await response.GetContentAsync().WaitAsync(
+                TimeSpan.FromMilliseconds(NavigationTimeoutMilliseconds), cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            return BrowserDownloadResult.Failed("浏览器媒体响应读取超时：连接被抖音服务端中断（TLS 拦截或风控），请改用可访问的网络或稍后再试。");
+        }
         if (content is null)
         {
             return BrowserDownloadResult.Failed("媒体响应过大，浏览器传输暂不支持。");
