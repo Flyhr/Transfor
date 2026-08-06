@@ -83,6 +83,7 @@ TestDouyinTransportClassifier();
 TestDouyinTransportPreference();
 TestErrorChainFormatter();
 TestCdpConnection();
+TestEdgeProxyComparison();
 TestMediaSettingsForm();
 TestMediaPreviewService();
 TestMediaAssetGrid();
@@ -1702,6 +1703,21 @@ static void TestCdpConnection()
     {
         connection.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
+}
+
+// 场景：Edge 复用代理一致性比较（规范化忽略引号/顺序）
+static void TestEdgeProxyComparison()
+{
+    AssertEqual(true, EdgeProcessManager.ProxyEquals(null, null), "both null equal");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals(null, "http://127.0.0.1:7897"), "null vs value differ");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", null), "value vs null differ");
+    AssertEqual(true, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://127.0.0.1:7897"), "same proxy equal");
+    AssertEqual(true, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://127.0.0.1:7897/"), "trailing slash ignored");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://127.0.0.1:8080"), "different port differ");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "https://127.0.0.1:7897"), "different scheme differ");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals("http://127.0.0.1:7897", "http://localhost:7897"), "different host differ");
+    AssertEqual(true, EdgeProcessManager.ProxyEquals("socks5://127.0.0.1:1080", "socks5://127.0.0.1:1080"), "socks proxy equal");
+    AssertEqual(false, EdgeProcessManager.ProxyEquals("not-a-proxy", "http://127.0.0.1:7897"), "invalid value treated as different");
 }
 
 // 场景：媒体设置窗体（STA）
