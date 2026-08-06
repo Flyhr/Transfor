@@ -58,10 +58,21 @@ internal sealed class CdpTargetSession
         domainsEnabled = true;
     }
 
-    // 导航并等待页面 readyState 为 complete；超时抛出明确错误
+    // 导航并等待页面 readyState 为 complete；检查导航错误与最终 URL（拒绝错误页）；
+    // 超时抛出明确错误；每次导航后主 frame 可能变化，需重新获取
     public async Task NavigateAsync(Uri url, CancellationToken cancellationToken, int timeoutSeconds = NavigationTimeoutSeconds)
     {
-        await connection.CommandAsync("Page.navigate", new { url = url.ToString() }, sessionId, cancellationToken);
+        var navigation = await connection.CommandAsync("Page.navigate", new { url = url.ToString() }, sessionId, cancellationToken);
+        var errorText = navigation?["errorText"]?.GetValue<string>();
+        if (!string.IsNullOrWhiteSpace(errorText))
+        {
+            throw new InvalidOperationException($"页面导航失败：{errorText}");
+        }
+
+        // 导航后主 frame 可能变化，frameId 缓存失效
+        frameId = null;
+
+        var ready = false;
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(timeoutSeconds);
         while (DateTime.UtcNow < deadline)
         {
@@ -69,11 +80,24 @@ internal sealed class CdpTargetSession
             var state = await EvaluateAsync<string>(connection, sessionId, "document.readyState", cancellationToken);
             if (string.Equals(state, "complete", StringComparison.Ordinal))
             {
-                return;
+                ready = true;
+                break;
             }
             await Task.Delay(ReadyPollMilliseconds, cancellationToken);
         }
-        throw new TimeoutException("页面加载超时。");
+
+        if (!ready)
+        {
+            throw new TimeoutException("页面加载超时。");
+        }
+
+        // readyState=complete 也可能落在 Edge 错误页（chrome-error://）：拒绝视为导航失败
+        var finalUrl = await EvaluateAsync<string>(connection, sessionId, "location.href", cancellationToken);
+        if (string.IsNullOrWhiteSpace(finalUrl)
+            || finalUrl.StartsWith("chrome-error://", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"页面进入 Edge 错误页：{finalUrl}");
+        }
     }
 
     public async Task<T?> EvaluateAsync<T>(string expression, CancellationToken cancellationToken)

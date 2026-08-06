@@ -27,14 +27,23 @@ internal static class EdgeCdpResourceDownloader
             options = new { disableCache = true, includeCredentials = true },
         }, cancellationToken, timeoutSeconds: 60);
 
-        var resource = result?["resource"] as JsonObject;
-        var stream = resource?["stream"]?.GetValue<string>();
-        if (stream is not null)
+        // 完整读取诊断字段：success/netError/netErrorName/httpStatusCode/stream，
+        // 失败时透出全部信息，避免只看到回退链路的错误而丢失主链路原因
+        var resource = result?["resource"] as JsonObject
+            ?? throw new InvalidOperationException("Network.loadNetworkResource 未返回 resource。");
+        var success = resource["success"]?.GetValue<bool>() ?? false;
+        var stream = resource["stream"]?.GetValue<string>();
+        var netError = resource["netError"]?.GetValue<int>();
+        var netErrorName = resource["netErrorName"]?.GetValue<string>();
+        var httpStatusCode = resource["httpStatusCode"]?.GetValue<int>();
+
+        if (!success || string.IsNullOrWhiteSpace(stream))
         {
-            return await ReadStreamToFileAsync(session, stream, partPath, cancellationToken, progress);
+            throw new InvalidOperationException(
+                $"Edge 资源请求失败：success={success}，netError={netError?.ToString() ?? "-"}，netErrorName={netErrorName ?? "-"}，httpStatus={httpStatusCode?.ToString() ?? "-"}。");
         }
 
-        return await FetchFallbackAsync(session, mediaUri, partPath, cancellationToken, progress);
+        return await ReadStreamToFileAsync(session, stream, partPath, cancellationToken, progress);
     }
 
     // 通过 IO.read 把浏览器网络栈收到的响应流式写入文件
