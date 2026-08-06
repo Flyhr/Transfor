@@ -149,6 +149,34 @@ internal sealed class DouyinMediaResolver : IMediaResolver
                 })
                 .ToArray(),
         };
+
+        // 后台预取图片到本地缓存（尽力而为，不阻塞解析返回）：
+        // 页面加载成功的图片响应直接落盘，下载时命中即复制
+        TryPrefetchImages(post);
+
         return MediaResolveResult.Success(post);
+    }
+
+    // 预取图片媒体到本地缓存；失败不影响解析结果
+    private void TryPrefetchImages(ResolvedMediaPost post)
+    {
+        try
+        {
+            var imageUris = post.Assets
+                .Where(asset => asset.Kind == MediaKind.Image)
+                .Select(asset => asset.Variants.FirstOrDefault(variant => !variant.IsSegmented)?.Uri)
+                .Where(uri => uri is not null)
+                .Cast<Uri>()
+                .Distinct()
+                .ToList();
+            if (imageUris.Count > 0)
+            {
+                _ = browserSessions.PrefetchImagesAsync(imageUris, CancellationToken.None);
+            }
+        }
+        catch
+        {
+            // 预取失败不影响解析
+        }
     }
 }

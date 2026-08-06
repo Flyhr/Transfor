@@ -393,7 +393,8 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         }
     }
 
-    // 重试：以新任务 ID 重新入队一个单任务批次（作为独立批次写入历史）
+    // 重试：重新解析作品获取新的媒体 URL（旧 URL 可能过期/失效），
+    // 按资产序号匹配后以新批次入队
     private async Task RetryTaskAsync(ResolvedMediaPost post, Guid originalTaskId)
     {
         try
@@ -404,23 +405,36 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
                 return;
             }
 
-            // 浏览器会话失效时提示重新浏览器解析
-            if (!string.IsNullOrEmpty(original.SelectedVariant.RequestContext.BrowserSessionId))
+            // 重新解析：优先用当前分享链接，其次用原作品页 URI
+            var sourceText = string.IsNullOrWhiteSpace(currentShareLink) ? post.SourceUri.ToString() : currentShareLink;
+            var uri = ShareLinkParser.TryExtractFirstLink(sourceText, out _) ?? post.SourceUri;
+            var result = await resolveCoordinator.ResolveAsync(
+                new MediaResolveRequest(uri, MediaResolveMode.Automatic, new MediaRequestContext(null, null)),
+                CancellationToken.None);
+            if (result.Status != MediaResolveStatus.Succeeded || result.Post is null)
             {
-                try
-                {
-                    await ensureBrowserInitializedAsync(this);
-                }
-                catch (Exception ex)
-                {
-                    errorLabel.Text = $"浏览器会话失效，请重新浏览器解析：{ex.Message}";
-                    return;
-                }
+                errorLabel.Text = $"重试解析失败：{result.Message ?? "解析未成功"}";
+                return;
+            }
+
+            // 按资产序号匹配原任务对应的媒体
+            var freshAsset = result.Post.Assets.FirstOrDefault(asset => asset.Index == original.Asset.Index);
+            if (freshAsset is null)
+            {
+                errorLabel.Text = "重新解析后未找到对应媒体。";
+                return;
+            }
+
+            var selection = MediaQualitySelector.SelectBest(freshAsset, stateStore.Settings.QualityPreference);
+            if (selection.Status != MediaSelectionStatus.Selected || selection.Variant is null)
+            {
+                errorLabel.Text = selection.Message ?? "重新解析后无可用变体。";
+                return;
             }
 
             var target = DownloadFileNameBuilder.BuildUniquePath(directoryBox.Text, Path.GetFileName(original.TargetPath));
-            var retryTask = new MediaDownloadTask(Guid.NewGuid(), original.Asset, original.SelectedVariant, target);
-            var batch = new MediaDownloadBatch(Guid.NewGuid(), currentShareLink, post, new MediaDownloadTask[] { retryTask });
+            var retryTask = new MediaDownloadTask(Guid.NewGuid(), freshAsset, selection.Variant, target);
+            var batch = new MediaDownloadBatch(Guid.NewGuid(), currentShareLink, result.Post, new MediaDownloadTask[] { retryTask });
             queueGrid.AddTask(retryTask);
             await downloadCoordinator.EnqueueBatchAsync(batch, CancellationToken.None);
         }

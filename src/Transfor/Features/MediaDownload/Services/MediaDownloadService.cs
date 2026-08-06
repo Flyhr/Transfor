@@ -9,16 +9,19 @@ internal sealed class MediaDownloadService : IMediaDownloadService
 {
     private readonly SafeHttpRequestSender requestSender;
     private readonly IBrowserSessionAccessor? browserSessions;
+    private readonly MediaCache? mediaCache;
     private readonly long maxFileBytes;
 
     public MediaDownloadService(
         SafeHttpRequestSender requestSender,
         IBrowserSessionAccessor? browserSessions,
-        long maxFileBytes = MediaContentValidator.DefaultMaxFileBytes)
+        long maxFileBytes = MediaContentValidator.DefaultMaxFileBytes,
+        MediaCache? mediaCache = null)
     {
         this.requestSender = requestSender ?? throw new ArgumentNullException(nameof(requestSender));
         this.browserSessions = browserSessions;
         this.maxFileBytes = maxFileBytes;
+        this.mediaCache = mediaCache;
     }
 
     public async Task<MediaDownloadResult> DownloadAsync(
@@ -33,6 +36,42 @@ internal sealed class MediaDownloadService : IMediaDownloadService
         if (!DownloadFileNameBuilder.IsWithinDirectory(targetDirectory, task.TargetPath))
         {
             return MediaDownloadResult.Failed(task.Id, "目标路径越出下载目录。");
+        }
+
+        // 缓存命中：直接从缓存复制（解析阶段预取的图片），不再访问网络
+        if (mediaCache is not null)
+        {
+            var cachedPath = mediaCache.GetCachedPath(task.SelectedVariant.Uri);
+            if (cachedPath is not null)
+            {
+                Directory.CreateDirectory(targetDirectory);
+                var cachePartPath = $"{task.TargetPath}.part.{task.Id:N}";
+                try
+                {
+                    await using var cacheSource = new FileStream(cachedPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    await using var cacheDestination = new FileStream(
+                        cachePartPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
+                    await cacheSource.CopyToAsync(cacheDestination, cancellationToken);
+                    await cacheDestination.FlushAsync(cancellationToken);
+                }
+                catch
+                {
+                    TryDelete(cachePartPath);
+                }
+
+                if (File.Exists(cachePartPath))
+                {
+                    var (cachedSaved, cachedError) = await MediaFileFinalizer.TryFinalizeAsync(
+                        cachePartPath, task.TargetPath, task.Asset.Kind, cancellationToken);
+                    if (cachedSaved is not null)
+                    {
+                        return MediaDownloadResult.Success(task.Id, cachedSaved);
+                    }
+                    // 缓存内容无效：清理并回退到网络下载
+                    mediaCache.Invalidate(task.SelectedVariant.Uri);
+                    TryDelete(cachePartPath);
+                }
+            }
         }
 
         // 浏览器会话解析出的抖音媒体：直接走浏览器网络栈下载，

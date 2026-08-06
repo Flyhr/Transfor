@@ -20,8 +20,10 @@ internal static class AppBootstrapper
         var requestSender = new SafeHttpRequestSender(httpClient, validator);
         // 浏览器会话代理：Edge CDP 实现由工厂延迟注入
         var browserSessions = new BrowserSessionAccessorProxy();
+        // 媒体本地缓存：解析阶段预取的图片在此复用
+        var mediaCache = new MediaCache(paths.MediaCacheDirectory);
         // 下载服务：流式 + 安全链路；Cookie 源经代理（未启用浏览器时为空）
-        var downloadService = new MediaDownloadService(requestSender, browserSessions);
+        var downloadService = new MediaDownloadService(requestSender, browserSessions, mediaCache: mediaCache);
         // 解析器注册：专用解析器（抖音）优先，Direct 最后兜底
         // 抖音传输偏好为会话级熔断状态（进程内共享，重启复位）
         var douyinPreference = new DouyinTransportPreferenceState();
@@ -47,7 +49,7 @@ internal static class AppBootstrapper
                 DownloadCoordinator = downloadCoordinator,
                 BrowserSessions = browserSessions,
                 HttpClient = httpClient,
-                Preview = new MediaPreviewService(requestSender, browserSessions),
+                Preview = new MediaPreviewService(requestSender, browserSessions, mediaCache),
                 // 浏览器会话工厂：真实 Edge + CDP（独立持久化配置目录），首次使用时惰性启动
                 BrowserSessionFactory = owner => new EdgeCdpBrowserSessionAccessor(owner, paths),
             },

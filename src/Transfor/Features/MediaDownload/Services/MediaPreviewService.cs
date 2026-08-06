@@ -9,14 +9,17 @@ internal sealed class MediaPreviewService : IDisposable
 
     private readonly SafeHttpRequestSender requestSender;
     private readonly IBrowserSessionAccessor? browserSessions;
+    private readonly MediaCache? mediaCache;
     private readonly string sessionDirectory = Path.Combine(Path.GetTempPath(), "Transfor", "PreviewCache", Guid.NewGuid().ToString("N"));
 
     public MediaPreviewService(
         SafeHttpRequestSender requestSender,
-        IBrowserSessionAccessor? browserSessions)
+        IBrowserSessionAccessor? browserSessions,
+        MediaCache? mediaCache = null)
     {
         this.requestSender = requestSender ?? throw new ArgumentNullException(nameof(requestSender));
         this.browserSessions = browserSessions;
+        this.mediaCache = mediaCache;
     }
 
     // 下载并校验图片预览，返回本地文件路径（会话内缓存命中时直接返回）
@@ -28,6 +31,30 @@ internal sealed class MediaPreviewService : IDisposable
         if (File.Exists(target))
         {
             return target;
+        }
+
+        // 媒体缓存命中（解析阶段预取的图片）：直接复制为预览文件
+        if (mediaCache is not null)
+        {
+            var cachedPath = mediaCache.GetCachedPath(variant.Uri);
+            if (cachedPath is not null)
+            {
+                try
+                {
+                    Directory.CreateDirectory(sessionDirectory);
+                    File.Copy(cachedPath, target, overwrite: true);
+                    using var stream = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    if (await MediaContentValidator.HasValidMagicNumberAsync(stream, MediaKind.Image, cancellationToken))
+                    {
+                        return target;
+                    }
+                    TryDelete(target);
+                }
+                catch
+                {
+                    TryDelete(target);
+                }
+            }
         }
 
         Directory.CreateDirectory(sessionDirectory);
