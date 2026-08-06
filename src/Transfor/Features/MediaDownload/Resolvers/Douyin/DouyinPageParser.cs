@@ -65,23 +65,52 @@ internal static class DouyinPageParser
         return new DouyinPageData(null, null, null, Array.Empty<DouyinAssetCandidate>(), true, loginRequired, failureReason);
     }
 
-    // 直接解析浏览器捕获的结构化 JSON（ExecuteScriptAsync 结果）
+    // 直接解析浏览器捕获的结构化 JSON（ExecuteScriptAsync 结果）；
+    // 支持纯 JSON 与 URL 编码 JSON 两种形态
     public static DouyinPageData ParseStructuredData(string json)
     {
-        try
+        foreach (var candidate in DecodeJsonCandidates(json))
         {
-            using var document = JsonDocument.Parse(json);
-            if (TryParseWork(document.RootElement, out var data))
+            try
             {
-                return data;
+                using var document = JsonDocument.Parse(candidate);
+                if (TryParseWork(document.RootElement, out var data))
+                {
+                    return data;
+                }
             }
-        }
-        catch (JsonException)
-        {
-            // 落入空壳
+            catch (JsonException)
+            {
+                // 该候选不是作品 JSON，继续
+            }
         }
 
         return new DouyinPageData(null, null, null, Array.Empty<DouyinAssetCandidate>(), true, false, null);
+    }
+
+    // 生成可尝试的 JSON 候选：原样 + URL 解码（真实页面常见 URL 编码形态）
+    private static IReadOnlyList<string> DecodeJsonCandidates(string json)
+    {
+        var candidates = new List<string> { json };
+        if (json.StartsWith('{'))
+        {
+            return candidates;
+        }
+
+        try
+        {
+            var decoded = Uri.UnescapeDataString(json);
+            if (decoded.StartsWith('{'))
+            {
+                candidates.Add(decoded);
+            }
+        }
+        catch (UriFormatException)
+        {
+            // 忽略解码失败
+        }
+
+        return candidates;
     }
 
     // 提取所有 <script ...>...</script> 块内容

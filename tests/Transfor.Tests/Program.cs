@@ -89,6 +89,9 @@ TestMediaCache();
 TestMediaSettingsForm();
 TestMediaPreviewService();
 TestMediaAssetGrid();
+TestDouyinStructuredDataFallbacks();
+TestDouyinDetailEndpointMatcher();
+TestDouyinCandidateFallback();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -1997,6 +2000,86 @@ static void TestMediaAssetGrid()
     });
 }
 
+// 场景：结构化数据兜底（NEXT_DATA 内嵌、URL 编码、详情接口响应）
+static void TestDouyinStructuredDataFallbacks()
+{
+    static string ReadFixture(string name) =>
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "MediaDownload", name));
+
+    // NEXT_DATA 结构：作品数据深嵌在 props.pageProps 中
+    var nextJson = ReadFixture("douyin-next-data.json");
+    var nextData = DouyinPageParser.ParseStructuredData(nextJson);
+    AssertEqual(3, nextData.Assets.Count, "next data image count");
+    AssertEqual("7200000000000000001", nextData.PostId, "next data post id");
+    AssertEqual("fixture NEXT_DATA 图文", nextData.Title, "next data title");
+    AssertEqual(2, nextData.Assets[2].Variants.Count, "next data third image two variants");
+
+    // 详情接口响应：根级 aweme_detail
+    var apiData = DouyinPageParser.ParseStructuredData(ReadFixture("douyin-detail-api.json"));
+    AssertEqual(3, apiData.Assets.Count, "detail api image count");
+    AssertEqual("fixture 详情接口图文", apiData.Title, "detail api title");
+
+    // URL 编码的 JSON：解码后解析
+    var encoded = Uri.EscapeDataString(ReadFixture("douyin-detail-api.json"));
+    var decodedData = DouyinPageParser.ParseStructuredData(encoded);
+    AssertEqual(3, decodedData.Assets.Count, "url-encoded json image count");
+
+    // 无关 JSON（不含作品数据）：空壳
+    var unrelated = DouyinPageParser.ParseStructuredData("{\"config\":{\"env\":\"prod\"}}");
+    AssertEqual(0, unrelated.Assets.Count, "unrelated json yields no assets");
+}
+
+// 场景：详情接口 URL 匹配规则
+static void TestDouyinDetailEndpointMatcher()
+{
+    AssertEqual(true, DouyinDetailEndpointMatcher.IsDetailEndpoint("https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=7200000000000000001", "XHR"), "detail api xhr matched");
+    AssertEqual(true, DouyinDetailEndpointMatcher.IsDetailEndpoint("https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=7200000000000000001", "Fetch"), "detail api fetch matched");
+    AssertEqual(true, DouyinDetailEndpointMatcher.IsDetailEndpoint("https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=1", null), "detail path matched without type");
+    AssertEqual(false, DouyinDetailEndpointMatcher.IsDetailEndpoint("https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=1", "Document"), "document type rejected");
+    AssertEqual(false, DouyinDetailEndpointMatcher.IsDetailEndpoint("https://www.douyin.com/aweme/v1/web/aweme/post/?aweme_id=1", "XHR"), "post endpoint rejected");
+    AssertEqual(false, DouyinDetailEndpointMatcher.IsDetailEndpoint("https://www.douyin.com/aweme/v1/web/user/profile/?sec_user_id=1", "XHR"), "profile endpoint rejected");
+    AssertEqual(false, DouyinDetailEndpointMatcher.IsDetailEndpoint("https://evil.com/aweme/detail/?aweme_id=1", "XHR"), "foreign host rejected");
+    AssertEqual(false, DouyinDetailEndpointMatcher.IsDetailEndpoint("https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=1", "Image"), "image type rejected");
+}
+
+// 场景：浏览器候选兜底（DOM 图片顺序、过滤、视频合并；Resolver 端到端）
+static void TestDouyinCandidateFallback()
+{
+    // 归一化：DOM 图片顺序保持、去重、头像/Logo 过滤、视频合并
+    var candidates = new BrowserCapturedCandidate[]
+    {
+        new(new Uri("https://media.example/avatar/1.webp"), MediaKind.Image, 0, null, null, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/img/1.webp"), MediaKind.Image, 1, null, null, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/img/2.webp"), MediaKind.Image, 2, null, null, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/img/2.webp"), MediaKind.Image, 3, null, null, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/logo/x.png"), MediaKind.Image, 4, null, null, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/video/main.mp4"), MediaKind.Video, 0, null, null, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/video/sub.mp4"), MediaKind.Video, 1, null, null, null, null, BrowserCandidateSource.Dom),
+    };
+    var pageData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(candidates);
+    AssertEqual(3, pageData.Assets.Count, "candidate assets: two images + one video");
+    AssertEqual(MediaKind.Image, pageData.Assets[0].Kind, "first asset image");
+    AssertEqual("https://media.example/img/1.webp", pageData.Assets[0].Variants[0].Url, "image order preserved");
+    AssertEqual("https://media.example/img/2.webp", pageData.Assets[1].Variants[0].Url, "second image preserved and deduped");
+    AssertEqual(MediaKind.Video, pageData.Assets[2].Kind, "video asset present");
+    AssertEqual(2, pageData.Assets[2].Variants.Count, "video variants merged");
+
+    // Resolver 端到端：结构化数据缺失但 DOM 候选存在 → 解析成功
+    var validator = new SafeUriValidator(new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("8.8.8.8") })));
+    var proxy = new BrowserSessionAccessorProxy();
+    var resolver = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(), validator)), proxy);
+    proxy.Attach(new CapturingBrowserSession(null, new BrowserCapturedCandidate[]
+    {
+        new(new Uri("https://media.example/img/1.webp"), MediaKind.Image, 0, null, null, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/img/2.webp"), MediaKind.Image, 1, null, null, null, null, BrowserCandidateSource.Dom),
+    }));
+    var result = resolver.ResolveAsync(new MediaResolveRequest(new Uri("https://www.douyin.com/note/7200000000000000003"), MediaResolveMode.BrowserInteractive, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Succeeded, result.Status, "candidate fallback resolves");
+    AssertEqual(2, result.Post!.Assets.Count, "candidate fallback two images");
+    AssertEqual(MediaKind.Image, result.Post.Assets[0].Kind, "candidate fallback image kind");
+    AssertEqual("session-1", result.Post.Assets[0].Variants[0].RequestContext.BrowserSessionId, "candidate fallback session id");
+}
+
 // 通用断言：相等则通过，否则抛出带用例名的异常
 static void AssertEqual<T>(T expected, T actual, string name)
 {
@@ -2370,11 +2453,13 @@ file sealed class FakeFailDownloadService : IMediaDownloadService
 // 测试替身：返回固定结构化数据的浏览器会话
 file sealed class CapturingBrowserSession : IBrowserSessionAccessor
 {
-    private readonly string structuredDataJson;
+    private readonly string? structuredDataJson;
+    private readonly IReadOnlyList<BrowserCapturedCandidate> candidates;
 
-    public CapturingBrowserSession(string structuredDataJson)
+    public CapturingBrowserSession(string? structuredDataJson, IReadOnlyList<BrowserCapturedCandidate>? candidates = null)
     {
         this.structuredDataJson = structuredDataJson;
+        this.candidates = candidates ?? Array.Empty<BrowserCapturedCandidate>();
     }
 
     public bool IsAvailable => true;
@@ -2384,7 +2469,7 @@ file sealed class CapturingBrowserSession : IBrowserSessionAccessor
             "session-1",
             structuredDataJson,
             null,
-            Array.Empty<BrowserCapturedCandidate>(),
+            candidates,
             BrowserCaptureStatus.Succeeded,
             null));
 

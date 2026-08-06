@@ -115,20 +115,28 @@ internal sealed class DouyinMediaResolver : IMediaResolver
                 return MediaResolveResult.Failure(capture.Error ?? "浏览器捕获失败。");
         }
 
-        if (capture.StructuredDataJson is null)
-        {
-            return MediaResolveResult.RequiresUserInteraction("页面未提供可直接解析的数据，请确认已登录后重试。");
-        }
-
-        var data = DouyinPageParser.ParseStructuredData(capture.StructuredDataJson);
+        // 结构化数据可能缺失（页面无 RENDER_DATA/NEXT_DATA 且详情接口未捕获到），
+        // 此时依赖 DOM/网络候选兜底
+        var data = capture.StructuredDataJson is null
+            ? new DouyinPageData(null, null, null, Array.Empty<DouyinAssetCandidate>(), true, false, null)
+            : DouyinPageParser.ParseStructuredData(capture.StructuredDataJson);
         if (data.FailureReason is not null)
         {
             return MediaResolveResult.Failure(data.FailureReason);
         }
 
+        // 结构化数据缺失时：用浏览器捕获的 DOM/网络候选兜底构造资产
+        if (data.Assets.Count == 0 && capture.Candidates.Count > 0)
+        {
+            data = DouyinMediaNormalizer.NormalizeCandidatesToPageData(capture.Candidates);
+        }
+
         if (data.Assets.Count == 0)
         {
-            return MediaResolveResult.RequiresUserInteraction("浏览器页面中未找到可下载的媒体。");
+            return MediaResolveResult.RequiresUserInteraction(
+                capture.StructuredDataJson is null
+                    ? "页面未提供可直接解析的数据，请确认已登录后重试。"
+                    : "浏览器页面中未找到可下载的媒体。");
         }
 
         // 归一化后所有变体携带会话 ID（用于下载时取 Cookie），但不携带 Cookie 本身

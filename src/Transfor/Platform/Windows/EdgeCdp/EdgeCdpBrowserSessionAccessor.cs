@@ -1,3 +1,5 @@
+using System.Text.Json.Nodes;
+
 namespace Transfor;
 
 // Edge CDP 浏览器会话访问器：实现 IBrowserSessionAccessor；
@@ -37,7 +39,7 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
 
     public bool IsAvailable => EdgeExecutableLocator.IsAvailable;
 
-    // 捕获页面：启动/复用专用 Edge → 导航 → 提取结构化状态（RENDER_DATA 型 JSON）；
+    // 捕获页面：启动/复用专用 Edge → 导航 → 捕获作品详情接口响应与结构化状态；
     // 交互模式先把 Edge 窗口带到前台（用户可能需要在其中登录）
     public async Task<BrowserCaptureResult> CaptureAsync(
         Uri pageUri,
@@ -52,9 +54,60 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
             }
 
             var target = await EnsureSessionAsync(cancellationToken);
-            await target.NavigateAsync(pageUri, cancellationToken, NavigationTimeoutSeconds);
-            var structuredJson = await ExtractStructuredDataAsync(target, cancellationToken);
-            return new BrowserCaptureResult(sessionId, structuredJson, null, Array.Empty<BrowserCapturedCandidate>(), BrowserCaptureStatus.Succeeded, null);
+
+            // 导航前订阅 Network 事件，捕获作品详情接口响应（登录态最可靠的数据来源）
+            string? detailJson = null;
+            var pendingBodies = new Dictionary<string, TaskCompletionSource<string?>>(StringComparer.Ordinal);
+            void OnEvent(string method, JsonNode? parameters, string? eventSessionId)
+            {
+                if (eventSessionId != target.SessionId)
+                {
+                    return;
+                }
+
+                if (method == "Network.responseReceived")
+                {
+                    var url = parameters?["response"]?["url"]?.GetValue<string>();
+                    var type = parameters?["type"]?.GetValue<string>();
+                    var requestId = parameters?["requestId"]?.GetValue<string>();
+                    if (url is not null && requestId is not null
+                        && DouyinDetailEndpointMatcher.IsDetailEndpoint(url, type)
+                        && !pendingBodies.ContainsKey(requestId))
+                    {
+                        pendingBodies[requestId] = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    }
+                }
+                else if (method == "Network.loadingFinished")
+                {
+                    var requestId = parameters?["requestId"]?.GetValue<string>();
+                    if (requestId is not null && pendingBodies.TryGetValue(requestId, out var tcs))
+                    {
+                        _ = FetchResponseBodyAsync(target, requestId, tcs, cancellationToken);
+                    }
+                }
+            }
+
+            target.EventReceived += OnEvent;
+            try
+            {
+                await target.NavigateAsync(pageUri, cancellationToken, NavigationTimeoutSeconds);
+
+                // 等待详情接口响应体就绪（懒加载窗口期）
+                if (pendingBodies.Count > 0)
+                {
+                    var first = await Task.WhenAny(pendingBodies.Values.Select(t => t.Task))
+                        .WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+                    detailJson = first.Result;
+                }
+            }
+            finally
+            {
+                target.EventReceived -= OnEvent;
+            }
+
+            var structuredJson = detailJson ?? await ExtractStructuredDataAsync(target, cancellationToken);
+            var domCandidates = await ExtractDomCandidatesAsync(target, cancellationToken);
+            return new BrowserCaptureResult(sessionId, structuredJson, null, domCandidates, BrowserCaptureStatus.Succeeded, null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -63,6 +116,29 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
         catch (Exception ex)
         {
             return new BrowserCaptureResult(null, null, null, Array.Empty<BrowserCapturedCandidate>(), BrowserCaptureStatus.Failed, ErrorChainFormatter.Format(ex));
+        }
+    }
+
+    // 拉取已加载完成的详情接口响应体（事件线程异步执行，失败视为未捕获）
+    private static async Task FetchResponseBodyAsync(
+        CdpTargetSession target,
+        string requestId,
+        TaskCompletionSource<string?> tcs,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var body = await target.CommandAsync("Network.getResponseBody", new { requestId }, cancellationToken);
+            var data = body?["body"]?.GetValue<string>();
+            var base64 = body?["base64Encoded"]?.GetValue<bool>() ?? false;
+            var text = data is null ? null
+                : base64 ? System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(data))
+                : data;
+            tcs.TrySetResult(text);
+        }
+        catch
+        {
+            tcs.TrySetResult(null);
         }
     }
 
@@ -266,7 +342,8 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
         }
     }
 
-    // 通过 Runtime.evaluate 获取页面内结构化状态（RENDER_DATA 型 JSON）
+    // 通过 Runtime.evaluate 获取页面内结构化状态：
+    // #RENDER_DATA → window.__NEXT_DATA__ → __INITIAL_STATE__ → _SSR_DATA → 首个非 ld+json 的 JSON script
     private static async Task<string?> ExtractStructuredDataAsync(
         CdpTargetSession target,
         CancellationToken cancellationToken)
@@ -274,9 +351,17 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
         const string script = @"(() => {
             const node = document.getElementById('RENDER_DATA');
             if (node && node.textContent) return node.textContent;
+            try {
+                if (window.__NEXT_DATA__ && typeof window.__NEXT_DATA__ === 'object') return JSON.stringify(window.__NEXT_DATA__);
+                if (window.__INITIAL_STATE__ && typeof window.__INITIAL_STATE__ === 'object') return JSON.stringify(window.__INITIAL_STATE__);
+                if (window._SSR_DATA && typeof window._SSR_DATA === 'object') return JSON.stringify(window._SSR_DATA);
+            } catch (e) { /* 序列化失败忽略 */ }
             for (const s of document.querySelectorAll('script')) {
                 const t = (s.textContent || '').trim();
-                if (t.startsWith('{')) return t;
+                if (!t.startsWith('{')) continue;
+                const type = (s.type || '').toLowerCase();
+                if (type === 'application/ld+json') continue;
+                return t;
             }
             return null;
         })()";
@@ -290,5 +375,67 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
         // Evaluate 返回的是页面字符串字面量（已是原始值），
         // RENDER_DATA 可能是 URL 编码的 JSON，解码后交给解析器
         return raw.StartsWith('{') ? raw : Uri.UnescapeDataString(raw);
+    }
+
+    // 通过 Runtime.evaluate 收集页面 DOM 中的媒体元素（轮播图 img 顺序即作品顺序）
+    private static async Task<IReadOnlyList<BrowserCapturedCandidate>> ExtractDomCandidatesAsync(
+        CdpTargetSession target,
+        CancellationToken cancellationToken)
+    {
+        const string script = @"(() => {
+            const pick = (el) => {
+                const src = el.currentSrc || el.src;
+                return src && src.startsWith('http') ? src : null;
+            };
+            const imgs = [...document.querySelectorAll('img')]
+                .map(pick).filter(Boolean);
+            const videos = [...document.querySelectorAll('video')]
+                .map(pick).filter(Boolean);
+            const sources = [...document.querySelectorAll('video source')]
+                .map(s => s.src).filter(u => u && u.startsWith('http'));
+            return JSON.stringify({ images: imgs, videos: [...videos, ...sources] });
+        })()";
+
+        try
+        {
+            var raw = await target.EvaluateAsync<string?>(script, cancellationToken);
+            if (string.IsNullOrWhiteSpace(raw) || raw == "null")
+            {
+                return Array.Empty<BrowserCapturedCandidate>();
+            }
+
+            using var document = System.Text.Json.JsonDocument.Parse(raw);
+            var root = document.RootElement;
+            var results = new List<BrowserCapturedCandidate>();
+            if (root.TryGetProperty("images", out var images) && images.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                var index = 0;
+                foreach (var image in images.EnumerateArray())
+                {
+                    if (image.GetString() is { Length: > 0 } url && Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                    {
+                        results.Add(new BrowserCapturedCandidate(uri, MediaKind.Image, index++, null, null, null, null, BrowserCandidateSource.Dom));
+                    }
+                }
+            }
+
+            if (root.TryGetProperty("videos", out var videos) && videos.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                var index = 0;
+                foreach (var video in videos.EnumerateArray())
+                {
+                    if (video.GetString() is { Length: > 0 } url && Uri.TryCreate(url, UriKind.Absolute, out var uri))
+                    {
+                        results.Add(new BrowserCapturedCandidate(uri, MediaKind.Video, index++, null, null, null, null, BrowserCandidateSource.Dom));
+                    }
+                }
+            }
+
+            return results;
+        }
+        catch
+        {
+            return Array.Empty<BrowserCapturedCandidate>();
+        }
     }
 }
