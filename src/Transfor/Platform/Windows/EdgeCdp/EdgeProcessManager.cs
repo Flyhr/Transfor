@@ -13,6 +13,10 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
     private const int ReadyTimeoutMilliseconds = 30_000;
     private const int PollIntervalMilliseconds = 500;
 
+    // 启动参数版本标记：启动策略（代理直连列表等）变更时递增，
+    // 复用检查要求旧实例含同标记，避免复用旧参数策略的实例
+    private const string EditionMarker = "--transfor-edition=2";
+
     private readonly string profileDirectory;
     private readonly string edgeExecutable;
     private readonly SemaphoreSlim startGate = new(1, 1);
@@ -50,9 +54,10 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
             }
 
             var expectedProxy = ReadProxyServer();
-            if (TryFindExistingProcess(out var existing, out var existingPort, out var existingProxy))
+            if (TryFindExistingProcess(out var existing, out var existingPort, out var existingProxy, out var existingEdition))
             {
-                if (ProxyEquals(existingProxy, expectedProxy))
+                // 仅当代理配置一致且启动参数版本一致时才复用（避免复用旧参数策略的实例）
+                if (ProxyEquals(existingProxy, expectedProxy) && string.Equals(existingEdition, EditionMarker, StringComparison.Ordinal))
                 {
                     // 代理配置一致：复用已运行实例（残留进程同样复用，保持会话温暖）
                     process = existing;
@@ -67,7 +72,7 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
                 }
                 else
                 {
-                    // 代理配置已变化：结束旧实例，按当前代理启动新实例
+                    // 代理配置或启动参数策略已变化：结束旧实例，按当前配置启动新实例
                     TryKill(existing);
                     process = null;
                 }
@@ -82,11 +87,15 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
                 $"--user-data-dir=\"{profileDirectory}\"",
                 "--no-first-run",
                 "--no-default-browser-check",
+                EditionMarker,
             };
             var proxy = ReadProxyServer();
             if (proxy is not null)
             {
                 arguments.Add($"--proxy-server={proxy}");
+                // 抖音家族 CN 域直连（与用户日常浏览器一致），绕开代理节点不稳定：
+                // 代理仅用于非 CN/被墙域；douyin 直连在多数网络下更稳
+                arguments.Add("--proxy-bypass-list=<local>;douyin.com;*.douyin.com;*.iesdouyin.com;*.douyinpic.com;*.douyinvod.com;*.snssdk.com;*.douyinstatic.com;*.byteimg.com;*.bytecdn.cn");
             }
             arguments.Add("about:blank");
 
@@ -209,12 +218,13 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
     }
 
     // 查找已运行的专用 Edge 主进程（同 profile + 调试端口，且非子进程）；
-    // 返回主进程句柄、调试端口与旧进程代理配置
-    private bool TryFindExistingProcess(out Process? existing, out int port, out string? existingProxy)
+    // 返回主进程句柄、调试端口、旧进程代理配置与启动版本标记
+    private bool TryFindExistingProcess(out Process? existing, out int port, out string? existingProxy, out string? existingEdition)
     {
         existing = null;
         port = 0;
         existingProxy = null;
+        existingEdition = null;
         try
         {
             using var searcher = new System.Management.ManagementObjectSearcher(
@@ -240,11 +250,13 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
                 }
 
                 var proxyMatch = System.Text.RegularExpressions.Regex.Match(commandLine, "--proxy-server=\"?([^\\s\"]+)");
+                var editionMatch = System.Text.RegularExpressions.Regex.Match(commandLine, "--transfor-edition=(\\d+)");
 
                 var pid = Convert.ToInt32(obj["ProcessId"]);
                 existing = Process.GetProcessById(pid);
                 port = int.Parse(portMatch.Groups[1].Value);
                 existingProxy = proxyMatch.Success ? proxyMatch.Groups[1].Value : null;
+                existingEdition = editionMatch.Success ? editionMatch.Groups[0].Value : null;
                 return true;
             }
         }
