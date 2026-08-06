@@ -100,7 +100,7 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
                 {
                     if (!await browserForm!.NavigateAsync(pageUri, TimeSpan.FromMilliseconds(NavigationTimeoutMilliseconds), token))
                     {
-                        return new BrowserCaptureResult(null, null, null, Array.Empty<BrowserCapturedCandidate>(), BrowserCaptureStatus.Failed, "浏览器页面加载失败或超时。");
+                        return new BrowserCaptureResult(null, null, null, Array.Empty<BrowserCapturedCandidate>(), BrowserCaptureStatus.Failed, "页面加载失败：抖音服务端可能拒绝了浏览器连接（TLS 拦截或风控验证），请改用可访问的网络或稍后再试。");
                     }
 
                     if (interactive)
@@ -243,14 +243,24 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
                 {
                     var navigated = await browserForm!.NavigateAsync(mediaUri, TimeSpan.FromMilliseconds(NavigationTimeoutMilliseconds), token);
                     // 导航失败但可能有响应（断流/异常页）；等待响应或超时
-                    var response = await responseTcs.Task.WaitAsync(TimeSpan.FromMilliseconds(NavigationTimeoutMilliseconds), token);
+                    Task<CoreWebView2WebResourceResponseView?> responseTask;
+                    try
+                    {
+                        responseTask = responseTcs.Task.WaitAsync(TimeSpan.FromMilliseconds(NavigationTimeoutMilliseconds), token);
+                    }
+                    catch (TimeoutException)
+                    {
+                        // 超时（导航失败且无任何响应）：抖音服务端拒绝浏览器网络栈的连接时即此表现
+                        responseTask = Task.FromResult<CoreWebView2WebResourceResponseView?>(null);
+                    }
+                    var response = await responseTask;
                     if (!navigated && response is null)
                     {
-                        return BrowserDownloadResult.Failed("浏览器媒体加载失败或超时。");
+                        return BrowserDownloadResult.Failed("浏览器媒体加载失败：抖音服务端拒绝了连接（TLS 拦截），请改用可访问的网络或稍后再试。");
                     }
                     if (response is null)
                     {
-                        return BrowserDownloadResult.Failed("浏览器未收到媒体响应。");
+                        return BrowserDownloadResult.Failed("浏览器未收到媒体响应：抖音服务端可能拒绝了连接（TLS 拦截），请改用可访问的网络或稍后再试。");
                     }
                     if (!(response.StatusCode >= 200 && response.StatusCode < 300))
                     {
