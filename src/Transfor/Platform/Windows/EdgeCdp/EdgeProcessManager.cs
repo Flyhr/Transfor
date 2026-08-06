@@ -49,17 +49,28 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
                 return;
             }
 
-            if (TryFindExistingProcess(out var existing, out var existingPort))
+            var expectedProxy = ReadProxyServer();
+            if (TryFindExistingProcess(out var existing, out var existingPort, out var existingProxy))
             {
-                process = existing;
-                debuggingPort = existingPort;
-                browserWsUrl = await WaitForDebuggerEndpointAsync(existingPort, cancellationToken);
-                if (browserWsUrl is not null)
+                if (ProxyEquals(existingProxy, expectedProxy))
                 {
-                    return;
+                    // 代理配置一致：复用已运行实例（残留进程同样复用，保持会话温暖）
+                    process = existing;
+                    debuggingPort = existingPort;
+                    browserWsUrl = await WaitForDebuggerEndpointAsync(existingPort, cancellationToken);
+                    if (browserWsUrl is not null)
+                    {
+                        return;
+                    }
+                    process = null;
+                    browserWsUrl = null;
                 }
-                process = null;
-                browserWsUrl = null;
+                else
+                {
+                    // 代理配置已变化：结束旧实例，按当前代理启动新实例
+                    TryKill(existing);
+                    process = null;
+                }
             }
 
             Directory.CreateDirectory(profileDirectory);
@@ -198,11 +209,12 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
     }
 
     // 查找已运行的专用 Edge 主进程（同 profile + 调试端口，且非子进程）；
-    // 返回主进程句柄与调试端口
-    private bool TryFindExistingProcess(out Process? existing, out int port)
+    // 返回主进程句柄、调试端口与旧进程代理配置
+    private bool TryFindExistingProcess(out Process? existing, out int port, out string? existingProxy)
     {
         existing = null;
         port = 0;
+        existingProxy = null;
         try
         {
             using var searcher = new System.Management.ManagementObjectSearcher(
@@ -221,15 +233,18 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
                     continue;
                 }
 
-                var match = System.Text.RegularExpressions.Regex.Match(commandLine, "--remote-debugging-port=(\\d+)");
-                if (!match.Success)
+                var portMatch = System.Text.RegularExpressions.Regex.Match(commandLine, "--remote-debugging-port=(\\d+)");
+                if (!portMatch.Success)
                 {
                     continue;
                 }
 
+                var proxyMatch = System.Text.RegularExpressions.Regex.Match(commandLine, "--proxy-server=\"?([^\\s\"]+)");
+
                 var pid = Convert.ToInt32(obj["ProcessId"]);
                 existing = Process.GetProcessById(pid);
-                port = int.Parse(match.Groups[1].Value);
+                port = int.Parse(portMatch.Groups[1].Value);
+                existingProxy = proxyMatch.Success ? proxyMatch.Groups[1].Value : null;
                 return true;
             }
         }
@@ -238,6 +253,45 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
             // WMI 不可用或进程已退出：回退到启动新实例
         }
         return false;
+    }
+
+    // 代理配置是否一致：按 scheme/host/port 规范化比较（忽略参数顺序与引号差异）
+    internal static bool ProxyEquals(string? existing, string? expected)
+    {
+        if (string.IsNullOrWhiteSpace(existing) && string.IsNullOrWhiteSpace(expected))
+        {
+            return true;
+        }
+        if (existing is null || expected is null)
+        {
+            return false;
+        }
+
+        if (Uri.TryCreate(existing.Trim(), UriKind.Absolute, out var a)
+            && Uri.TryCreate(expected.Trim(), UriKind.Absolute, out var b))
+        {
+            return string.Equals(a.Scheme, b.Scheme, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(a.Host, b.Host, StringComparison.OrdinalIgnoreCase)
+                && a.Port == b.Port;
+        }
+
+        return string.Equals(existing.Trim(), expected.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+                process.WaitForExit(5_000);
+            }
+        }
+        catch
+        {
+            // 进程已退出等场景忽略
+        }
     }
 
     private static int FindFreePort()
