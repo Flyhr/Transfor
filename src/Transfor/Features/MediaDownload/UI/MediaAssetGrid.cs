@@ -1,6 +1,6 @@
 namespace Transfor;
 
-// 资产列表控件：DataGridView 展示作品的媒体资产（勾选/序号/类型/尺寸/预计大小/质量状态/预览占位）
+// 资产列表控件：DataGridView 展示作品的媒体资产（勾选/序号/类型/尺寸/质量状态/预览占位）
 internal sealed class MediaAssetGrid : UserControl
 {
     private readonly DataGridView grid;
@@ -20,9 +20,8 @@ internal sealed class MediaAssetGrid : UserControl
         grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "选择", Width = 48, FillWeight = 10 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "序号", FillWeight = 10 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "类型", FillWeight = 15 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "尺寸", FillWeight = 25 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "预计大小", FillWeight = 20 });
-        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "质量状态", FillWeight = 25 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "尺寸", FillWeight = 30 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "质量状态", FillWeight = 30 });
         grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "预览", FillWeight = 15 });
         grid.CellContentClick += Grid_CellContentClick;
         Controls.Add(grid);
@@ -39,7 +38,7 @@ internal sealed class MediaAssetGrid : UserControl
 
     private void Grid_CellContentClick(object? sender, DataGridViewCellEventArgs e)
     {
-        if (e.RowIndex < 0 || e.ColumnIndex != 6)
+        if (e.RowIndex < 0 || e.ColumnIndex != 5)
         {
             return;
         }
@@ -71,7 +70,6 @@ internal sealed class MediaAssetGrid : UserControl
                     ? $"{variant.Width}×{variant.Height}"
                     : "-",
             });
-            row.Cells.Add(new DataGridViewTextBoxCell { Value = variant?.ContentLength is long length ? FormatSize(length) : "-" });
             row.Cells.Add(new DataGridViewTextBoxCell
             {
                 Value = selection?.Status switch
@@ -121,26 +119,14 @@ internal sealed class MediaAssetGrid : UserControl
         return result;
     }
 
-    // 下载开始时回填「预计大小」（响应头 Content-Length）
-    public void UpdateEstimatedSize(Uri variantUri, long bytes)
+    // 下载完成后回填「尺寸」（解析阶段缺失时由实际文件补齐）
+    public void UpdateFileInfo(Uri variantUri, int? width, int? height)
     {
         if (FindRowByVariant(variantUri) is not { } row)
         {
             return;
         }
 
-        row.Cells[4].Value = FormatSize(bytes);
-    }
-
-    // 下载完成后回填「尺寸」与「预计大小」（实际文件信息）
-    public void UpdateFileInfo(Uri variantUri, long bytes, int? width, int? height)
-    {
-        if (FindRowByVariant(variantUri) is not { } row)
-        {
-            return;
-        }
-
-        row.Cells[4].Value = FormatSize(bytes);
         if (width.HasValue && height.HasValue)
         {
             row.Cells[3].Value = $"{width}×{height}";
@@ -158,12 +144,5 @@ internal sealed class MediaAssetGrid : UserControl
             }
         }
         return null;
-    }
-
-    private static string FormatSize(long bytes)
-    {
-        const double mb = 1024 * 1024;
-        const double gb = 1024 * 1024 * 1024;
-        return bytes >= gb ? $"{bytes / gb:F1} GB" : $"{bytes / mb:F1} MB";
     }
 }

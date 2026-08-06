@@ -2014,7 +2014,7 @@ static void TestMediaAssetGrid()
     });
 }
 
-// 场景：资产表下载信息回填（预计大小/尺寸在解析缺失时由下载过程补齐）
+// 场景：资产表下载信息回填（尺寸在解析缺失时由下载完成补齐）
 static void TestMediaAssetGridBackfill()
 {
     RunSta(() =>
@@ -2028,23 +2028,21 @@ static void TestMediaAssetGridBackfill()
         });
         var selections = new MediaSelectionResult[] { new(MediaSelectionStatus.Selected, unknown, null) };
 
-        // 解析阶段尺寸/大小未知 → 显示占位符
+        // 解析阶段尺寸未知 → 显示占位符
         grid.LoadPost(post, selections, defaultSelectAll: true);
         AssertEqual("-", grid.GetCellValueForTest(0, 3) as string, "size placeholder when unknown");
-        AssertEqual("-", grid.GetCellValueForTest(0, 4) as string, "estimated size placeholder when unknown");
 
-        // 下载开始：响应头 Content-Length 回填预计大小
-        grid.UpdateEstimatedSize(unknown.Uri, 2 * 1024 * 1024);
-        AssertEqual("2.0 MB", grid.GetCellValueForTest(0, 4) as string, "estimated size backfilled from content length");
-
-        // 下载完成：实际文件信息回填尺寸与大小
-        grid.UpdateFileInfo(unknown.Uri, 3 * 1024 * 1024, 1080, 1440);
+        // 下载完成：实际文件信息回填尺寸
+        grid.UpdateFileInfo(unknown.Uri, 1080, 1440);
         AssertEqual("1080×1440", grid.GetCellValueForTest(0, 3) as string, "size backfilled from file");
-        AssertEqual("3.0 MB", grid.GetCellValueForTest(0, 4) as string, "estimated size backfilled from file");
 
         // 不匹配的 URL 不影响其他行
-        grid.UpdateFileInfo(new Uri("https://x/other.webp"), 100, 1, 1);
+        grid.UpdateFileInfo(new Uri("https://x/other.webp"), 1, 1);
         AssertEqual("1080×1440", grid.GetCellValueForTest(0, 3) as string, "unmatched url does not touch row");
+
+        // 尺寸缺失时不覆盖已有值
+        grid.UpdateFileInfo(unknown.Uri, null, null);
+        AssertEqual("1080×1440", grid.GetCellValueForTest(0, 3) as string, "null size keeps existing value");
     });
 }
 
