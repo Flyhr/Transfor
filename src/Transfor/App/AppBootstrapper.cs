@@ -18,7 +18,7 @@ internal static class AppBootstrapper
         var dnsResolver = new SystemDnsResolver();
         var validator = new SafeUriValidator(dnsResolver);
         var requestSender = new SafeHttpRequestSender(httpClient, validator);
-        // 浏览器会话代理：WebView2 实现由任务 12 延迟注入
+        // 浏览器会话代理：Edge CDP 实现由工厂延迟注入
         var browserSessions = new BrowserSessionAccessorProxy();
         // 下载服务：流式 + 安全链路；Cookie 源经代理（未启用浏览器时为空）
         var downloadService = new MediaDownloadService(requestSender, browserSessions);
@@ -48,8 +48,8 @@ internal static class AppBootstrapper
                 BrowserSessions = browserSessions,
                 HttpClient = httpClient,
                 Preview = new MediaPreviewService(requestSender, browserSessions),
-                // 浏览器会话工厂：延迟到首次浏览器解析时在 UI 线程创建
-                BrowserSessionFactory = owner => new WebView2BrowserSessionAccessor(owner, paths),
+                // 浏览器会话工厂：真实 Edge + CDP（独立持久化配置目录），首次使用时惰性启动
+                BrowserSessionFactory = owner => new EdgeCdpBrowserSessionAccessor(owner, paths),
             },
         };
     }

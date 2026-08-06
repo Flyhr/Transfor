@@ -15,7 +15,7 @@ internal enum MediaPageState
 }
 
 // 媒体下载页面：输入分享文本 → 解析 → 选择资产 → 队列下载；
-// 不引用任何具体平台解析器或 WebView2 类型
+// 不引用任何具体平台解析器或 Edge CDP 类型
 internal sealed class MediaDownloadPage : UserControl, IFeaturePage
 {
     private readonly MediaResolveCoordinator resolveCoordinator;
@@ -70,7 +70,7 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         inputBox = new TextBox { Dock = DockStyle.Fill, Multiline = false };
         pasteButton = new Button { AutoSize = true, Text = "从剪贴板粘贴" };
         parseButton = new Button { AutoSize = true, Text = "解析" };
-        browserButton = new Button { AutoSize = true, Text = "浏览器登录", Enabled = true };
+        browserButton = new Button { AutoSize = true, Text = "打开真实 Edge 登录", Enabled = true };
         clearButton = new Button { AutoSize = true, Text = "清空" };
         pasteButton.Click += (_, _) => PasteFromClipboard();
         parseButton.Click += (_, _) => _ = ParseCoreAsync();

@@ -32,8 +32,8 @@ internal sealed class AppPaths
     // 媒体下载批次历史（独立于文本历史）
     public string MediaDownloadHistoryFile => Path.Combine(ApplicationDirectory, "download-history.json");
 
-    // WebView2 独立用户数据目录（Cookie/权限/缓存只存于此，不写入普通 JSON）
-    public string WebView2Directory => Path.Combine(ApplicationDirectory, "WebView2", "Douyin");
+    // 专用 Edge 持久化配置目录（登录态/Cookie/缓存只存于此，不写入普通 JSON）
+    public string EdgeProfileDirectory => Path.Combine(ApplicationDirectory, "Edge", "Douyin");
 
     // 默认状态目录：%LOCALAPPDATA%\Transfor
     public static AppPaths Default => new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Transfor"));

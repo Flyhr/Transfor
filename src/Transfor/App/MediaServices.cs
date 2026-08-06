@@ -1,7 +1,7 @@
 namespace Transfor;
 
 // 媒体服务组合对象：集中持有媒体模块的单例服务；
-// 浏览器会话延迟初始化，仅在首次进入浏览器解析流程时在 UI 线程创建；
+// 浏览器会话惰性启动（首次解析/下载时拉起专用 Edge）；
 // 释放顺序：取消任务 → 释放协调器与浏览器会话 → 释放 HttpClient
 internal sealed class MediaServices : IDisposable, IAsyncDisposable
 {
@@ -16,7 +16,7 @@ internal sealed class MediaServices : IDisposable, IAsyncDisposable
     public required HttpClient HttpClient { get; init; }
     public required MediaPreviewService Preview { get; init; }
 
-    // 浏览器会话工厂（Task 12 设置）；为空时浏览器能力不可用但 Direct 下载正常
+    // 浏览器会话工厂；为空时浏览器能力不可用但 Direct 下载正常
     public Func<Control, IBrowserSessionAccessor>? BrowserSessionFactory { get; set; }
 
     // 首次进入浏览器解析流程时调用一次；失败时保留 Proxy 的 unavailable 状态并抛出可识别异常

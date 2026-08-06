@@ -3,7 +3,7 @@ namespace Transfor;
 // 安全流式下载服务：复用 SafeHttpRequestSender 的安全链路（每跳校验/重定向/Referer/Cookie），
 // 流式写入 .part.<TaskId> 临时文件，成功后校验魔数与哈希并原子移动；
 // HttpClient 传输被服务端 TLS 指纹拦截（TLS 握手被拒/DNS 失败/重置/EOF/超时）时，
-// 自动转入浏览器网络栈兜底下载（单 WebView2 串行）；
+// 自动转入浏览器网络栈兜底下载（单 Edge CDP 串行）；
 // 失败/取消清理临时文件；不把整个文件载入内存
 internal sealed class MediaDownloadService : IMediaDownloadService
 {
@@ -33,6 +33,13 @@ internal sealed class MediaDownloadService : IMediaDownloadService
         if (!DownloadFileNameBuilder.IsWithinDirectory(targetDirectory, task.TargetPath))
         {
             return MediaDownloadResult.Failed(task.Id, "目标路径越出下载目录。");
+        }
+
+        // 浏览器会话解析出的抖音媒体：直接走浏览器网络栈下载，
+        // 跳过已知必失败的 HttpClient TLS 尝试（抖音对非真实 Edge 客户端拒绝握手）
+        if (browserSessions is not null && !string.IsNullOrEmpty(task.SelectedVariant.RequestContext.BrowserSessionId))
+        {
+            return await DownloadViaBrowserAsync(task, progress, cancellationToken);
         }
 
         var partPath = $"{task.TargetPath}.part.{task.Id:N}";

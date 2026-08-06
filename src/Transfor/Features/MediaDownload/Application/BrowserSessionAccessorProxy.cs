@@ -1,6 +1,6 @@
 namespace Transfor;
 
-// 浏览器会话代理：下载服务与解析器始终依赖此代理，WebView2 实现延迟注入；
+// 浏览器会话代理：下载服务与解析器始终依赖此代理，Edge CDP 实现延迟注入；
 // 未 Attach 时 Capture 返回 unavailable 结果、GetCookies 返回空集合
 internal sealed class BrowserSessionAccessorProxy : IBrowserSessionAccessor
 {

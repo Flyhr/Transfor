@@ -6,12 +6,6 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- WebView2 包自身 WPF/WindowsBase 元数据的已知冲突警告，官方建议降级为消息 -->
-    <MSBuildWarningsAsMessages>$(MSBuildWarningsAsMessages);MSB3277</MSBuildWarningsAsMessages>
   </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4078.44" />
-  </ItemGroup>
 
 </Project>

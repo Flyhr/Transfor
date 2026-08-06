@@ -1,7 +1,7 @@
 namespace Transfor;
 
-// 浏览器会话访问契约：隐藏 WebView2 实现细节；
-// 下载器与解析器只依赖此接口，不直接持有 WebView2 控件
+// 浏览器会话访问契约：隐藏浏览器实现细节（真实 Edge + CDP）；
+// 下载器与解析器只依赖此接口，不直接持有浏览器进程或会话
 internal interface IBrowserSessionAccessor : IAsyncDisposable
 {
     bool IsAvailable { get; }
@@ -12,7 +12,7 @@ internal interface IBrowserSessionAccessor : IAsyncDisposable
         CancellationToken cancellationToken);
 
     // 浏览器网络栈下载：用于 HttpClient 被服务端 TLS 指纹拦截时的兜底；
-    // 内部串行执行（单 WebView2 实例），流式写入并校验后返回保存路径
+    // 内部串行执行（单浏览器会话），流式写入并校验后返回保存路径
     Task<BrowserDownloadResult> DownloadAsync(
         Uri mediaUri,
         Guid taskId,

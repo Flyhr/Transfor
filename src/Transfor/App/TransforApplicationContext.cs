@@ -37,8 +37,8 @@ internal sealed class TransforApplicationContext : ApplicationContext
             historyStore,
             services.PasteCoordinator);
 
-        // 启动即挂接浏览器会话（只挂接不初始化，首次捕获时在 UI 线程创建 WebView2），
-        // Automatic 解析的浏览器兜底无需用户先点击「浏览器登录」
+        // 启动即挂接浏览器会话（只挂接不启动，首次使用时惰性启动专用 Edge），
+        // Automatic 解析的浏览器兜底无需用户先点击「打开真实 Edge 登录」
         try
         {
             services.Media.EnsureBrowserInitializedAsync(mainForm).GetAwaiter().GetResult();
@@ -147,7 +147,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
     }
 
     // 退出应用：有活动任务时先确认，再取消任务并等待落定；
-    // 在主窗体与消息循环仍存活时释放服务（WebView2 在创建它的 STA 线程释放），
+    // 主窗体仍存活时释放服务（含关闭专用 Edge 进程），
     // 最后关闭窗口与托盘；释放异常转换为可见错误，不遗留半退出状态
     private async void ExitApplication()
     {
@@ -171,7 +171,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
                 await services.Media.DownloadCoordinator.CancelAllAsync();
             }
 
-            // 主窗体仍存活：WebView2 在 UI 线程释放
+            // 主窗体仍存活：释放服务并关闭专用 Edge 进程
             await services.DisposeAsync();
             historyPanel.CloseForExit();
             mainForm.CloseForExit();
