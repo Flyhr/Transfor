@@ -224,8 +224,13 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
         }
     }
 
-    private static void TryKill(Process process)
+    private static void TryKill(Process? process)
     {
+        if (process is null)
+        {
+            return;
+        }
+
         try
         {
             if (!process.HasExited)
