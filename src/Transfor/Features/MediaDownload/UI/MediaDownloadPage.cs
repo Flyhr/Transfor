@@ -287,7 +287,7 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         }
         catch (Exception ex)
         {
-            previewControl.ShowError($"预览失败：{ex.Message}");
+            previewControl.ShowError($"预览失败：{ErrorChainFormatter.Format(ex)}");
         }
     }
 

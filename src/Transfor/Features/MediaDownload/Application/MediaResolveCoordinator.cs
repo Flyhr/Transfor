@@ -33,7 +33,8 @@ internal sealed class MediaResolveCoordinator
         }
         catch (Exception ex)
         {
-            return MediaResolveResult.Failure(ex.Message);
+            // 保留完整异常链，便于定位 TLS/DNS 等传输层问题
+            return MediaResolveResult.Failure(ErrorChainFormatter.Format(ex));
         }
     }
 }
