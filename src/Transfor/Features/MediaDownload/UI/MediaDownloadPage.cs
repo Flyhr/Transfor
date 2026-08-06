@@ -79,7 +79,7 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         inputRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         inputRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         inputRow.Controls.Add(inputBox, 0, 0);
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        var buttons = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false };
         buttons.Controls.AddRange(new Control[] { pasteButton, parseButton, browserButton, clearButton });
         inputRow.Controls.Add(buttons, 1, 0);
         root.Controls.Add(inputRow, 0, 0);
@@ -115,7 +115,7 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         actionRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         actionRow.Controls.Add(directoryBox, 0, 0);
-        var actionButtons = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        var actionButtons = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false };
         actionButtons.Controls.AddRange(new Control[] { browseButton, settingsButton, selectAllButton, unselectAllButton, downloadButton });
         actionRow.Controls.Add(actionButtons, 1, 0);
         root.Controls.Add(actionRow, 0, 3);
