@@ -63,26 +63,35 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
                 var candidates = new List<BrowserCapturedCandidate>();
                 void OnResourceReceived(object? sender, CoreWebView2WebResourceResponseReceivedEventArgs args)
                 {
-                    var contentType = args.Response?.Headers?.GetHeader("Content-Type") ?? string.Empty;
-                    if (contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
-                        || contentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
+                    // 事件处理器内任何 COM 异常都必须就地消化：
+                    // WebView2 在响应头枚举/读取时偶发 COMException，冒泡会击穿整个解析流程
+                    try
                     {
-                        long? contentLength = null;
-                        var lengthHeader = args.Response?.Headers?.GetHeader("Content-Length");
-                        if (long.TryParse(lengthHeader, out var parsed))
+                        var contentType = args.Response?.Headers?.GetHeader("Content-Type") ?? string.Empty;
+                        if (contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+                            || contentType.StartsWith("video/", StringComparison.OrdinalIgnoreCase))
                         {
-                            contentLength = parsed;
-                        }
+                            long? contentLength = null;
+                            var lengthHeader = args.Response?.Headers?.GetHeader("Content-Length");
+                            if (long.TryParse(lengthHeader, out var parsed))
+                            {
+                                contentLength = parsed;
+                            }
 
-                        candidates.Add(new BrowserCapturedCandidate(
-                            new Uri(args.Request.Uri),
-                            contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? MediaKind.Image : MediaKind.Video,
-                            null,
-                            null,
-                            null,
-                            contentType,
-                            contentLength,
-                            BrowserCandidateSource.Network));
+                            candidates.Add(new BrowserCapturedCandidate(
+                                new Uri(args.Request.Uri),
+                                contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase) ? MediaKind.Image : MediaKind.Video,
+                                null,
+                                null,
+                                null,
+                                contentType,
+                                contentLength,
+                                BrowserCandidateSource.Network));
+                        }
+                    }
+                    catch
+                    {
+                        // 单个资源事件失败不影响整体捕获
                     }
                 }
 
@@ -216,9 +225,16 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
                     TaskCreationOptions.RunContinuationsAsynchronously);
                 void OnResourceReceived(object? sender, CoreWebView2WebResourceResponseReceivedEventArgs args)
                 {
-                    if (string.Equals(args.Request.Uri, mediaUri.ToString(), StringComparison.OrdinalIgnoreCase))
+                    try
                     {
-                        responseTcs.TrySetResult(args.Response);
+                        if (string.Equals(args.Request.Uri, mediaUri.ToString(), StringComparison.OrdinalIgnoreCase))
+                        {
+                            responseTcs.TrySetResult(args.Response);
+                        }
+                    }
+                    catch
+                    {
+                        // 事件处理器内的 COM 异常不影响下载流程（等待将超时并给出明确错误）
                     }
                 }
 

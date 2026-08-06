@@ -98,7 +98,15 @@ internal sealed class DouyinBrowserForm : Form
         core.NavigationCompleted += OnNavigated;
         try
         {
-            core.Navigate(url.ToString());
+            try
+            {
+                core.Navigate(url.ToString());
+            }
+            catch
+            {
+                // 导航 COM 异常（如风控页导致的无效导航）视为导航失败
+                return false;
+            }
             var timeoutTask = Task.Delay(timeout, cancellationToken);
             var winner = await Task.WhenAny(navigated.Task, timeoutTask).ConfigureAwait(true);
             if (winner != navigated.Task)
