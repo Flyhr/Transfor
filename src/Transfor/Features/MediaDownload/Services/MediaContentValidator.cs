@@ -74,6 +74,54 @@ internal static class MediaContentValidator
         return HasValidMagic(header.AsSpan(0, read), expectedKind);
     }
 
+    // 按魔数识别具体格式并返回标准扩展名（.jpg/.png/.gif/.webp/.mp4/.webm）；
+    // 无法识别返回 null；可 Seek 流恢复原位置
+    public static async Task<string?> DetectExtensionAsync(
+        Stream stream,
+        MediaKind expectedKind,
+        CancellationToken cancellationToken)
+    {
+        var header = new byte[12];
+        var original = stream.CanSeek ? stream.Position : (long?)null;
+        int read;
+        try
+        {
+            read = await ReadUpToAsync(stream, header, header.Length, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (original is not null)
+            {
+                stream.Position = original.Value;
+            }
+        }
+
+        return DetectExtension(header.AsSpan(0, read), expectedKind);
+    }
+
+    private static string? DetectExtension(ReadOnlySpan<byte> header, MediaKind kind)
+    {
+        if (kind == MediaKind.Image)
+        {
+            if (header.Length >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF) return ".jpg";
+            if (header.Length >= 8 && header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47
+                && header[4] == 0x0D && header[5] == 0x0A && header[6] == 0x1A && header[7] == 0x0A) return ".png";
+            if (header.Length >= 4 && header[0] == 0x47 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x38) return ".gif";
+            if (header.Length >= 12 && header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46
+                && header[8] == 0x57 && header[9] == 0x45 && header[10] == 0x42 && header[11] == 0x50) return ".webp";
+            return null;
+        }
+
+        if (kind == MediaKind.Video)
+        {
+            if (header.Length >= 8 && header[4] == 0x66 && header[5] == 0x74 && header[6] == 0x79 && header[7] == 0x70) return ".mp4";
+            if (header.Length >= 4 && header[0] == 0x1A && header[1] == 0x45 && header[2] == 0xDF && header[3] == 0xA3) return ".webm";
+            return null;
+        }
+
+        return null;
+    }
+
     private static async Task<int> ReadUpToAsync(Stream stream, byte[] buffer, int max, CancellationToken cancellationToken)
     {
         var total = 0;

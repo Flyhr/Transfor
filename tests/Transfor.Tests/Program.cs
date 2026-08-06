@@ -92,6 +92,7 @@ TestMediaAssetGrid();
 TestDouyinStructuredDataFallbacks();
 TestDouyinDetailEndpointMatcher();
 TestDouyinCandidateFallback();
+TestMagicExtensionDetection();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -2078,6 +2079,66 @@ static void TestDouyinCandidateFallback()
     AssertEqual(2, result.Post!.Assets.Count, "candidate fallback two images");
     AssertEqual(MediaKind.Image, result.Post.Assets[0].Kind, "candidate fallback image kind");
     AssertEqual("session-1", result.Post.Assets[0].Variants[0].RequestContext.BrowserSessionId, "candidate fallback session id");
+}
+
+// 场景：魔数识别扩展名与终化修正（.img/.bin → 真实格式）
+static void TestMagicExtensionDetection()
+{
+    // 魔数 → 扩展名识别
+    using (var jpeg = new MemoryStream(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0 }))
+    {
+        AssertEqual(".jpg", MediaContentValidator.DetectExtensionAsync(jpeg, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "jpeg magic to jpg");
+    }
+    using (var png = new MemoryStream(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0 }))
+    {
+        AssertEqual(".png", MediaContentValidator.DetectExtensionAsync(png, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "png magic to png");
+    }
+    using (var webp = new MemoryStream(new byte[] { 0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50 }))
+    {
+        AssertEqual(".webp", MediaContentValidator.DetectExtensionAsync(webp, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "webp magic to webp");
+    }
+    using (var mp4 = new MemoryStream(new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0, 0, 0, 0 }))
+    {
+        AssertEqual(".mp4", MediaContentValidator.DetectExtensionAsync(mp4, MediaKind.Video, CancellationToken.None).GetAwaiter().GetResult(), "mp4 magic to mp4");
+    }
+    using (var webm = new MemoryStream(new byte[] { 0x1A, 0x45, 0xDF, 0xA3, 0, 0, 0, 0, 0, 0, 0, 0 }))
+    {
+        AssertEqual(".webm", MediaContentValidator.DetectExtensionAsync(webm, MediaKind.Video, CancellationToken.None).GetAwaiter().GetResult(), "webm magic to webm");
+    }
+    using (var zip = new MemoryStream(new byte[] { 0x50, 0x4B, 0x03, 0x04, 0, 0, 0, 0, 0, 0, 0, 0 }))
+    {
+        AssertEqual(null, MediaContentValidator.DetectExtensionAsync(zip, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "unknown magic returns null");
+    }
+
+    // 终化修正：.img → .jpg、.bin → .mp4；已有具体扩展名不重复修正
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var jpegBody = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0 };
+        var part1 = Path.Combine(root, "p1.part");
+        File.WriteAllBytes(part1, jpegBody);
+        var (saved1, err1) = MediaFileFinalizer.TryFinalizeAsync(part1, Path.Combine(root, "photo.img"), MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(true, err1 is null && saved1 is not null, "img finalize succeeds");
+        AssertEqual("photo.jpg", Path.GetFileName(saved1), "img corrected to jpg by magic");
+
+        var mp4Body = new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x63, 0x31, 0, 0, 0, 0 };
+        var part2 = Path.Combine(root, "p2.part");
+        File.WriteAllBytes(part2, mp4Body);
+        var (saved2, err2) = MediaFileFinalizer.TryFinalizeAsync(part2, Path.Combine(root, "video.bin"), MediaKind.Video, CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(true, err2 is null && saved2 is not null, "bin finalize succeeds");
+        AssertEqual("video.mp4", Path.GetFileName(saved2), "bin corrected to mp4 by magic");
+
+        var part3 = Path.Combine(root, "p3.part");
+        File.WriteAllBytes(part3, jpegBody);
+        var (saved3, err3) = MediaFileFinalizer.TryFinalizeAsync(part3, Path.Combine(root, "explicit.jpg"), MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(true, err3 is null && saved3 is not null, "explicit extension finalize succeeds");
+        AssertEqual("explicit.jpg", Path.GetFileName(saved3), "explicit extension unchanged");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常

@@ -24,6 +24,10 @@ internal static class MediaFileFinalizer
             partStream.Position = 0;
             partHash = await MediaHashService.ComputeSha256Async(partStream, cancellationToken);
 
+            // 泛化扩展名（.img/.bin，URL 无法推断时的兜底）按实际内容魔数修正为标准扩展名
+            partStream.Position = 0;
+            targetPath = await CorrectGenericExtensionAsync(partStream, targetPath, kind, cancellationToken);
+
             if (File.Exists(targetPath))
             {
                 // 目标存在且哈希相同：删除临时文件，幂等成功
@@ -43,6 +47,23 @@ internal static class MediaFileFinalizer
 
         var savedPath = MoveWithUniqueFallback(targetPath, partPath);
         return (savedPath, null);
+    }
+
+    // 目标扩展名为泛化类型时，按文件实际格式修正为真实扩展名
+    private static async Task<string> CorrectGenericExtensionAsync(
+        Stream partStream,
+        string targetPath,
+        MediaKind kind,
+        CancellationToken cancellationToken)
+    {
+        var extension = Path.GetExtension(targetPath);
+        if (extension is not (".img" or ".bin"))
+        {
+            return targetPath;
+        }
+
+        var detected = await MediaContentValidator.DetectExtensionAsync(partStream, kind, cancellationToken);
+        return detected is null ? targetPath : Path.ChangeExtension(targetPath, detected);
     }
 
     // 独占移动：目标被并发任务创建时重新生成 (1)(2) 后缀，不覆盖其他任务文件
