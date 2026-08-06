@@ -100,6 +100,12 @@ internal static class MediaContentValidator
     }
 
     private static string? DetectExtension(ReadOnlySpan<byte> header, MediaKind kind)
+        => Detect(header, kind);
+
+    // 统一魔数识别：返回标准扩展名（.jpg/.png/.gif/.webp/.heic/.avif/.bmp/.tiff/.mp4/.webm），
+    // 无法识别返回 null；ftyp 开头的 ISO BMFF 文件按品牌区分：
+    // heic/heix/hevc/mif1/msf1/avif/avis 为图片（实况/HEIF），avc1/isom/mp42 等为视频
+    private static string? Detect(ReadOnlySpan<byte> header, MediaKind kind)
     {
         if (kind == MediaKind.Image)
         {
@@ -109,17 +115,54 @@ internal static class MediaContentValidator
             if (header.Length >= 4 && header[0] == 0x47 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x38) return ".gif";
             if (header.Length >= 12 && header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46
                 && header[8] == 0x57 && header[9] == 0x45 && header[10] == 0x42 && header[11] == 0x50) return ".webp";
+            // BMP: BM
+            if (header.Length >= 2 && header[0] == 0x42 && header[1] == 0x4D) return ".bmp";
+            // TIFF: II*\0 或 MM\0*
+            if (header.Length >= 4
+                && ((header[0] == 0x49 && header[1] == 0x49 && header[2] == 0x2A && header[3] == 0x00)
+                    || (header[0] == 0x4D && header[1] == 0x4D && header[2] == 0x00 && header[3] == 0x2A))) return ".tiff";
+            // HEIC/HEIF/AVIF（ISO BMFF 图片品牌）
+            var imageBrand = ReadBrand(header);
+            if (imageBrand is not null && HeifImageBrands.Contains(imageBrand))
+            {
+                return imageBrand is "avif" or "avis" ? ".avif" : ".heic";
+            }
             return null;
         }
 
         if (kind == MediaKind.Video)
         {
-            if (header.Length >= 8 && header[4] == 0x66 && header[5] == 0x74 && header[6] == 0x79 && header[7] == 0x70) return ".mp4";
+            var videoBrand = ReadBrand(header);
+            if (videoBrand is not null && Mp4VideoBrands.Contains(videoBrand)) return ".mp4";
             if (header.Length >= 4 && header[0] == 0x1A && header[1] == 0x45 && header[2] == 0xDF && header[3] == 0xA3) return ".webm";
             return null;
         }
 
         return null;
+    }
+
+    // ISO BMFF 图片品牌（实况/HEIF/AVIF）
+    private static readonly HashSet<string> HeifImageBrands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "heic", "heix", "hevc", "hevx", "mif1", "msf1", "avif", "avis",
+    };
+
+    // ISO BMFF 视频品牌（MP4 及其变体）
+    private static readonly HashSet<string> Mp4VideoBrands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "avc1", "avc3", "mp42", "mp41", "isom", "iso2", "dash", "mp21", "M4V",
+    };
+
+    // 读取 ftyp 盒的 major brand（偏移 8-11）；非 ftyp 开头返回 null
+    private static string? ReadBrand(ReadOnlySpan<byte> header)
+    {
+        if (header.Length < 12
+            || header[4] != 0x66 || header[5] != 0x74 || header[6] != 0x79 || header[7] != 0x70)
+        {
+            return null;
+        }
+
+        return System.Text.Encoding.ASCII.GetString(header.Slice(8, 4));
     }
 
     private static async Task<int> ReadUpToAsync(Stream stream, byte[] buffer, int max, CancellationToken cancellationToken)
@@ -138,28 +181,5 @@ internal static class MediaContentValidator
     }
 
     private static bool HasValidMagic(ReadOnlySpan<byte> header, MediaKind kind)
-    {
-        if (kind == MediaKind.Image)
-        {
-            // JPEG: FF D8 FF
-            if (header.Length >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF) return true;
-            // PNG: 89 50 4E 47 0D 0A 1A 0A
-            if (header.Length >= 8 && header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47
-                && header[4] == 0x0D && header[5] == 0x0A && header[6] == 0x1A && header[7] == 0x0A) return true;
-            // GIF: 47 49 46 38
-            if (header.Length >= 4 && header[0] == 0x47 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x38) return true;
-            // WebP: RIFF .... WEBP
-            if (header.Length >= 12 && header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46
-                && header[8] == 0x57 && header[9] == 0x45 && header[10] == 0x42 && header[11] == 0x50) return true;
-        }
-        else if (kind == MediaKind.Video)
-        {
-            // MP4: 偏移 4 处 ftyp
-            if (header.Length >= 8 && header[4] == 0x66 && header[5] == 0x74 && header[6] == 0x79 && header[7] == 0x70) return true;
-            // WebM/Matroska: 1A 45 DF A3
-            if (header.Length >= 4 && header[0] == 0x1A && header[1] == 0x45 && header[2] == 0xDF && header[3] == 0xA3) return true;
-        }
-
-        return false;
-    }
+        => Detect(header, kind) is not null;
 }

@@ -18,6 +18,8 @@ internal static class MediaFileFinalizer
             using var partStream = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.Read);
             if (!await MediaContentValidator.HasValidMagicNumberAsync(partStream, kind, cancellationToken))
             {
+                // 临时诊断：魔数校验失败时保存文件头部样本，便于定位真实格式（定位后移除）
+                SaveFailureSample(partPath, kind);
                 return (null, "下载内容不是有效的媒体文件。");
             }
 
@@ -101,6 +103,35 @@ internal static class MediaFileFinalizer
         catch
         {
             // 清理失败不掩盖原始结果
+        }
+    }
+
+    // 临时诊断：保存校验失败文件的前 64KB 与十六进制头部，供定位真实格式（定位后移除）
+    private static void SaveFailureSample(string partPath, MediaKind kind)
+    {
+        try
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "Transfor", "diagnostics");
+            Directory.CreateDirectory(directory);
+            var samplePath = Path.Combine(directory, $"failed-media-{kind}-{DateTime.Now:yyyyMMdd-HHmmss-fff}.bin");
+            using (var source = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var destination = new FileStream(samplePath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                var buffer = new byte[64 * 1024];
+                var read = source.Read(buffer, 0, buffer.Length);
+                destination.Write(buffer, 0, read);
+            }
+
+            using var sample = new FileStream(samplePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var header = new byte[16];
+            var headerRead = sample.Read(header, 0, header.Length);
+            var hex = Convert.ToHexString(header.AsSpan(0, headerRead));
+            var notePath = samplePath + ".txt";
+            File.WriteAllText(notePath, $"kind={kind}\nhead-hex={hex}\n");
+        }
+        catch
+        {
+            // 诊断写入失败不影响主流程
         }
     }
 }

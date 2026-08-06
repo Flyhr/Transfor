@@ -815,7 +815,7 @@ static void TestMediaContentValidator()
     using var pngStream = new MemoryStream(png);
     AssertEqual(true, MediaContentValidator.HasValidMagicNumberAsync(pngStream, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "png magic ok");
 
-    var mp4 = new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0, 0, 0, 0 };
+    var mp4 = new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x63, 0x31 };
     using var mp4Stream = new MemoryStream(mp4);
     AssertEqual(true, MediaContentValidator.HasValidMagicNumberAsync(mp4Stream, MediaKind.Video, CancellationToken.None).GetAwaiter().GetResult(), "mp4 magic ok");
 
@@ -2166,7 +2166,7 @@ static void TestMagicExtensionDetection()
     {
         AssertEqual(".webp", MediaContentValidator.DetectExtensionAsync(webp, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "webp magic to webp");
     }
-    using (var mp4 = new MemoryStream(new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0, 0, 0, 0 }))
+    using (var mp4 = new MemoryStream(new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x63, 0x31 }))
     {
         AssertEqual(".mp4", MediaContentValidator.DetectExtensionAsync(mp4, MediaKind.Video, CancellationToken.None).GetAwaiter().GetResult(), "mp4 magic to mp4");
     }
@@ -2177,6 +2177,44 @@ static void TestMagicExtensionDetection()
     using (var zip = new MemoryStream(new byte[] { 0x50, 0x4B, 0x03, 0x04, 0, 0, 0, 0, 0, 0, 0, 0 }))
     {
         AssertEqual(null, MediaContentValidator.DetectExtensionAsync(zip, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "unknown magic returns null");
+    }
+
+    // HEIC/HEIF/AVIF：ISO BMFF 图片品牌（抖音实况图格式）
+    using (var heic = new MemoryStream(new byte[] { 0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63 }))
+    {
+        AssertEqual(".heic", MediaContentValidator.DetectExtensionAsync(heic, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "heic brand to heic");
+        AssertEqual(true, MediaContentValidator.HasValidMagicNumberAsync(heic, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "heic valid as image");
+        AssertEqual(false, MediaContentValidator.HasValidMagicNumberAsync(heic, MediaKind.Video, CancellationToken.None).GetAwaiter().GetResult(), "heic not treated as video");
+    }
+    using (var avif = new MemoryStream(new byte[] { 0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x69, 0x66 }))
+    {
+        AssertEqual(".avif", MediaContentValidator.DetectExtensionAsync(avif, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "avif brand to avif");
+        AssertEqual(true, MediaContentValidator.HasValidMagicNumberAsync(avif, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "avif valid as image");
+    }
+    using (var mif1 = new MemoryStream(new byte[] { 0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x6D, 0x69, 0x66, 0x31 }))
+    {
+        AssertEqual(".heic", MediaContentValidator.DetectExtensionAsync(mif1, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "mif1 brand to heic");
+    }
+
+    // MP4 品牌细化：avc1/isom 是视频；HEIC/AVIF 品牌不再误判为 MP4
+    using (var mp4avc = new MemoryStream(new byte[] { 0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x63, 0x31 }))
+    {
+        AssertEqual(".mp4", MediaContentValidator.DetectExtensionAsync(mp4avc, MediaKind.Video, CancellationToken.None).GetAwaiter().GetResult(), "avc1 brand to mp4");
+    }
+    using (var mp4isom = new MemoryStream(new byte[] { 0, 0, 0, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D }))
+    {
+        AssertEqual(".mp4", MediaContentValidator.DetectExtensionAsync(mp4isom, MediaKind.Video, CancellationToken.None).GetAwaiter().GetResult(), "isom brand to mp4");
+        AssertEqual(false, MediaContentValidator.HasValidMagicNumberAsync(mp4isom, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "mp4 not treated as image");
+    }
+
+    // BMP/TIFF
+    using (var bmp = new MemoryStream(new byte[] { 0x42, 0x4D, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 0 }))
+    {
+        AssertEqual(".bmp", MediaContentValidator.DetectExtensionAsync(bmp, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "bmp magic to bmp");
+    }
+    using (var tiff = new MemoryStream(new byte[] { 0x49, 0x49, 0x2A, 0x00, 0, 0, 0, 0, 0, 0, 0, 0 }))
+    {
+        AssertEqual(".tiff", MediaContentValidator.DetectExtensionAsync(tiff, MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult(), "tiff magic to tiff");
     }
 
     // 终化修正：.img → .jpg、.bin → .mp4；已有具体扩展名不重复修正
@@ -2631,7 +2669,7 @@ file sealed class FakeSucceedDownloadService : IMediaDownloadService
         {
             return Task.FromResult(MediaDownloadResult.Cancelled(task.Id));
         }
-        File.WriteAllBytes(task.TargetPath, new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70 });
+        File.WriteAllBytes(task.TargetPath, new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x63, 0x31 });
         return Task.FromResult(MediaDownloadResult.Success(task.Id, task.TargetPath));
     }
 }
@@ -2757,7 +2795,7 @@ file sealed class BrowserDownloadSession : IBrowserSessionAccessor
         Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
         var partPath = targetPath + $".part.{taskId:N}";
         // mp4 魔数开头，保证终化校验通过
-        await File.WriteAllBytesAsync(partPath, new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70 }, cancellationToken);
+        await File.WriteAllBytesAsync(partPath, new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70, 0x61, 0x76, 0x63, 0x31 }, cancellationToken);
         var (savedPath, error) = await MediaFileFinalizer.TryFinalizeAsync(partPath, targetPath, kind, cancellationToken);
         return savedPath is not null
             ? BrowserDownloadResult.Succeeded(savedPath)
