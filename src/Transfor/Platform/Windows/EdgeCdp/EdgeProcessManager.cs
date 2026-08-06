@@ -35,7 +35,9 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
 
     public string? BrowserVersion => browserVersion;
 
-    // 启动（或重启已退出的）Edge 并等待调试端点就绪；幂等
+    // 启动（或重启已退出的）Edge 并等待调试端点就绪；幂等；
+    // 优先复用已运行的同 profile 实例（前次会话残留或仍被占用的 Edge），
+    // 复用失败或不存在时才启动新实例（避免 profile 被锁导致启动失败）
     public async Task EnsureStartedAsync(CancellationToken cancellationToken)
     {
         await startGate.WaitAsync(cancellationToken);
@@ -45,6 +47,19 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
             if (IsReady)
             {
                 return;
+            }
+
+            if (TryFindExistingProcess(out var existing, out var existingPort))
+            {
+                process = existing;
+                debuggingPort = existingPort;
+                browserWsUrl = await WaitForDebuggerEndpointAsync(existingPort, cancellationToken);
+                if (browserWsUrl is not null)
+                {
+                    return;
+                }
+                process = null;
+                browserWsUrl = null;
             }
 
             Directory.CreateDirectory(profileDirectory);
@@ -180,6 +195,49 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
             await Task.Delay(PollIntervalMilliseconds, cancellationToken);
         }
         return null;
+    }
+
+    // 查找已运行的专用 Edge 主进程（同 profile + 调试端口，且非子进程）；
+    // 返回主进程句柄与调试端口
+    private bool TryFindExistingProcess(out Process? existing, out int port)
+    {
+        existing = null;
+        port = 0;
+        try
+        {
+            using var searcher = new System.Management.ManagementObjectSearcher(
+                "SELECT ProcessId, CommandLine FROM Win32_Process WHERE Name = 'msedge.exe'");
+            foreach (var obj in searcher.Get())
+            {
+                var commandLine = obj["CommandLine"] as string;
+                if (commandLine is null)
+                {
+                    continue;
+                }
+                // 仅匹配主进程（子进程带 --type=）且使用本应用 profile 与调试端口
+                if (commandLine.Contains("--type=", StringComparison.OrdinalIgnoreCase)
+                    || !commandLine.Contains(profileDirectory, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var match = System.Text.RegularExpressions.Regex.Match(commandLine, "--remote-debugging-port=(\\d+)");
+                if (!match.Success)
+                {
+                    continue;
+                }
+
+                var pid = Convert.ToInt32(obj["ProcessId"]);
+                existing = Process.GetProcessById(pid);
+                port = int.Parse(match.Groups[1].Value);
+                return true;
+            }
+        }
+        catch
+        {
+            // WMI 不可用或进程已退出：回退到启动新实例
+        }
+        return false;
     }
 
     private static int FindFreePort()
