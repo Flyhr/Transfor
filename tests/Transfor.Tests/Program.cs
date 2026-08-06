@@ -1475,7 +1475,7 @@ static void TestDouyinPageParser()
     AssertEqual(true, !video.EmptyShell && !video.LoginRequired, "video page not shell or login");
     AssertEqual(1, video.Assets.Count, "video single asset");
     AssertEqual(MediaKind.Video, video.Assets[0].Kind, "video asset kind");
-    AssertEqual(4, video.Assets[0].Variants.Count, "video variants (high/low/dl/cover)");
+    AssertEqual(3, video.Assets[0].Variants.Count, "video variants (high/low/dl, cover excluded)");
 
     var carousel = DouyinPageParser.Parse(ReadFixture("douyin-image-carousel-page.html"));
     AssertEqual(9, carousel.Assets.Count, "nine image assets");
@@ -1520,9 +1520,9 @@ static void TestDouyinMediaNormalizer()
     AssertEqual(MediaProviderId.Douyin, video.Provider, "provider douyin");
     AssertEqual(1, video.Assets.Count, "single video asset after normalize");
     AssertEqual(MediaKind.Video, video.Assets[0].Kind, "video kind");
-    // 头像/推荐被过滤，封面保留为缩略图变体
+    // 头像/推荐/封面（cover）均不作为视频变体
     AssertEqual(true, video.Assets[0].Variants.All(v => !v.Uri.ToString().Contains("avatar") && !v.Uri.ToString().Contains("recommend")), "avatar and recommend filtered");
-    AssertEqual(true, video.Assets[0].Variants.Any(v => v.Source == MediaVariantSource.Thumbnail), "cover kept as thumbnail variant");
+    AssertEqual(true, video.Assets[0].Variants.All(v => v.Source != MediaVariantSource.Thumbnail), "cover not a video variant");
     AssertEqual(videoSource.ToString(), video.Assets[0].Variants[0].RequestContext.Referer?.ToString(), "referer set to page uri");
 
     var carouselSource = new Uri("https://www.douyin.com/note/7123456789012345000");

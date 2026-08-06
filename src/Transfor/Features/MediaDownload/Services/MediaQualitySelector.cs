@@ -34,8 +34,9 @@ internal static class MediaQualitySelector
             return new(MediaSelectionStatus.UnsupportedSegmented, null, "已发现更高质量的分段媒体流，但当前版本暂不支持合并。");
         }
 
-        // 图片：存在非缩略图候选时，完全排除缩略图池
-        if (asset.Kind == MediaKind.Image && pool.Any(v => v.Source != MediaVariantSource.Thumbnail))
+        // 图片与视频：存在非缩略图候选时，完全排除缩略图池
+        // （视频封面是 JPEG 图片，绝不能作为视频变体参与下载）
+        if (pool.Any(v => v.Source != MediaVariantSource.Thumbnail))
         {
             pool = pool.Where(v => v.Source != MediaVariantSource.Thumbnail).ToList();
         }

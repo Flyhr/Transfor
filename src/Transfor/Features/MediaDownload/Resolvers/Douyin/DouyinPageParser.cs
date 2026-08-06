@@ -221,7 +221,8 @@ internal static class DouyinPageParser
         }
         else if (hasVideo)
         {
-            // 视频作品：play_addr / download_addr / cover
+            // 视频作品：play_addr / download_addr 为可下载变体；
+            // cover 是封面图（JPEG），不得作为视频变体参与下载
             var variants = new List<DouyinVariantCandidate>();
             var width = GetInt(video, "width") ?? GetNestedInt(video, "play_addr", "width");
             var height = GetInt(video, "height") ?? GetNestedInt(video, "play_addr", "height");
@@ -235,12 +236,6 @@ internal static class DouyinPageParser
             if (video.TryGetProperty("download_addr", out var downloadAddr))
             {
                 CollectUrlList(downloadAddr, "url_list", "video/mp4", width, height, fps, MediaVariantSource.StructuredData, variants);
-            }
-
-            // 封面/缩略图仅作兜底
-            if (video.TryGetProperty("cover", out var cover))
-            {
-                CollectUrlList(cover, "url_list", "image", null, null, null, MediaVariantSource.Thumbnail, variants);
             }
 
             if (variants.Count > 0)

@@ -20,6 +20,17 @@ internal static class MediaFileFinalizer
             {
                 // 临时诊断：魔数校验失败时保存文件头部样本，便于定位真实格式（定位后移除）
                 SaveFailureSample(partPath, kind);
+
+                // 预期视频却拿到图片：多为封面/占位（未登录或链接失效）
+                if (kind == MediaKind.Video)
+                {
+                    var actual = await MediaContentValidator.DetectExtensionAsync(partStream, MediaKind.Image, cancellationToken);
+                    if (actual is not null)
+                    {
+                        return (null, "视频地址返回了图片内容（封面或占位），可能链接已失效或需要登录后重新解析。");
+                    }
+                }
+
                 return (null, "下载内容不是有效的媒体文件。");
             }
 
