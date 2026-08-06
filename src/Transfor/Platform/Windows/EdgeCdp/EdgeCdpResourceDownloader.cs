@@ -57,6 +57,65 @@ internal static class EdgeCdpResourceDownloader
         return await ReadStreamToFileAsync(session, stream, partPath, cancellationToken, progress);
     }
 
+    // 通过浏览器网络栈请求并完整读取一个 JSON 接口响应（带浏览器 Cookie 与指纹）；
+    // 用于作品详情接口兜底（页面脚本无作品数据时，按作品 ID 直取接口）
+    public static async Task<string?> FetchJsonAsync(
+        CdpTargetSession session,
+        Uri url,
+        CancellationToken cancellationToken)
+    {
+        var frameId = await session.GetFrameIdAsync(cancellationToken);
+        var result = await session.CommandAsync("Network.loadNetworkResource", new
+        {
+            frameId,
+            url = url.ToString(),
+            options = new { disableCache = true, includeCredentials = true },
+        }, cancellationToken, timeoutSeconds: 60);
+
+        var resource = result?["resource"] as JsonObject;
+        var success = resource?["success"]?.GetValue<bool>() ?? false;
+        var stream = resource?["stream"]?.GetValue<string>();
+        if (!success || string.IsNullOrWhiteSpace(stream))
+        {
+            return null;
+        }
+
+        try
+        {
+            var builder = new StringBuilder();
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var chunk = await session.CommandAsync("IO.read", new { handle = stream, size = ReadChunkSize }, cancellationToken);
+                var data = chunk?["data"]?.GetValue<string>() ?? string.Empty;
+                var base64 = chunk?["base64Encoded"]?.GetValue<bool>() ?? false;
+                var text = base64 ? Encoding.UTF8.GetString(Convert.FromBase64String(data)) : data;
+                if (text.Length == 0)
+                {
+                    break;
+                }
+
+                builder.Append(text);
+                if (chunk?["eof"]?.GetValue<bool>() == true)
+                {
+                    break;
+                }
+            }
+            return builder.ToString();
+        }
+        finally
+        {
+            try
+            {
+                await session.CommandAsync("IO.close", new { handle = stream }, CancellationToken.None);
+            }
+            catch
+            {
+                // 流已关闭等场景忽略
+            }
+        }
+    }
+
     // 通过 IO.read 把浏览器网络栈收到的响应流式写入文件
     private static async Task<long> ReadStreamToFileAsync(
         CdpTargetSession session,

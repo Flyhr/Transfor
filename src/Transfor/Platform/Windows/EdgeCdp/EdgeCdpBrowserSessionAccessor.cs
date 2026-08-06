@@ -41,6 +41,7 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
     public bool IsAvailable => EdgeExecutableLocator.IsAvailable;
 
     // 捕获页面：启动/复用专用 Edge → 导航 → 捕获作品详情接口响应与结构化状态；
+    // 页面脚本无作品数据时轮询等待 SPA 渲染，并按页面配置中的作品 ID 经浏览器网络栈直取详情接口；
     // 交互模式先把 Edge 窗口带到前台（用户可能需要在其中登录）
     public async Task<BrowserCaptureResult> CaptureAsync(
         Uri pageUri,
@@ -97,7 +98,7 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
                 if (pendingBodies.Count > 0)
                 {
                     var first = await Task.WhenAny(pendingBodies.Values.Select(t => t.Task))
-                        .WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+                        .WaitAsync(TimeSpan.FromSeconds(8), cancellationToken);
                     detailJson = first.Result;
                 }
             }
@@ -106,8 +107,37 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
                 target.EventReceived -= OnEvent;
             }
 
-            var structuredJson = detailJson ?? await ExtractStructuredDataAsync(target, cancellationToken);
-            var domCandidates = await ExtractDomCandidatesAsync(target, cancellationToken);
+            // 轮询提取结构化数据与 DOM 候选（SPA 渲染/懒加载窗口）
+            string? structuredJson = detailJson;
+            IReadOnlyList<BrowserCapturedCandidate> domCandidates = Array.Empty<BrowserCapturedCandidate>();
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (DateTime.UtcNow < deadline)
+            {
+                structuredJson ??= await ExtractStructuredDataAsync(target, cancellationToken);
+                domCandidates = await ExtractDomCandidatesAsync(target, cancellationToken);
+                if (HasWorkData(structuredJson) || domCandidates.Count > 0)
+                {
+                    break;
+                }
+
+                await Task.Delay(1000, cancellationToken);
+            }
+
+            // 页面脚本无作品数据时：从页面配置 JSON 提取作品 ID，
+            // 经浏览器网络栈（带 Cookie 与真实 Edge 指纹）直取详情接口
+            if (!HasWorkData(structuredJson))
+            {
+                var workId = ExtractWorkId(structuredJson);
+                if (workId is not null)
+                {
+                    var fetched = await EdgeCdpResourceDownloader.FetchJsonAsync(target, BuildDetailApiUri(workId), cancellationToken);
+                    if (HasWorkData(fetched))
+                    {
+                        structuredJson = fetched;
+                    }
+                }
+            }
+
             return new BrowserCaptureResult(sessionId, structuredJson, null, domCandidates, BrowserCaptureStatus.Succeeded, null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -119,6 +149,40 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
             return new BrowserCaptureResult(null, null, null, Array.Empty<BrowserCapturedCandidate>(), BrowserCaptureStatus.Failed, ErrorChainFormatter.Format(ex));
         }
     }
+
+    // 结构化 JSON 是否含作品数据特征
+    internal static bool HasWorkData(string? json)
+    {
+        if (string.IsNullOrEmpty(json))
+        {
+            return false;
+        }
+
+        return json.Contains("aweme_detail", StringComparison.Ordinal)
+            || json.Contains("\"aweme_id\"", StringComparison.Ordinal);
+    }
+
+    // 从页面配置 JSON 提取作品 ID：优先 pathname（/video/123 或 /note/123），再找 aweme_id 字段
+    internal static string? ExtractWorkId(string? json)
+    {
+        if (string.IsNullOrEmpty(json))
+        {
+            return null;
+        }
+
+        var pathname = System.Text.RegularExpressions.Regex.Match(json, "\"pathname\"\\s*:\\s*\"/[^/\"]+/(\\d+)\"");
+        if (pathname.Success)
+        {
+            return pathname.Groups[1].Value;
+        }
+
+        var awemeId = System.Text.RegularExpressions.Regex.Match(json, "\"aweme_id\"\\s*:\\s*\"(\\d+)\"");
+        return awemeId.Success ? awemeId.Groups[1].Value : null;
+    }
+
+    // 作品详情接口 URL（桌面 web 端参数形态，浏览器网络栈请求时携带会话 Cookie）
+    internal static Uri BuildDetailApiUri(string workId)
+        => new($"https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id={workId}&pc_client_type=1&version_code=190400&version_name=19.4.0&cookie_enabled=true&platform=PC&priority_region=CN&browser_language=zh-CN&browser_platform=Win32&browser_name=Edge&browser_version=151.0.0.0&os=windows");
 
     // 拉取已加载完成的详情接口响应体（事件线程异步执行，失败视为未捕获）
     private static async Task FetchResponseBodyAsync(

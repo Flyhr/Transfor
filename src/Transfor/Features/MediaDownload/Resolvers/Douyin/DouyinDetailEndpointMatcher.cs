@@ -25,8 +25,9 @@ internal static class DouyinDetailEndpointMatcher
         }
 
         var path = uri.AbsolutePath;
-        // 详情接口路径特征：/aweme/v1/web/aweme/detail/ 等
-        if (path.Contains("aweme/detail", StringComparison.OrdinalIgnoreCase))
+        // 详情接口路径特征：/aweme/v1/web/aweme/detail/ 或 /aweme/v1/web/aweme/iteminfo/ 等
+        if (path.Contains("aweme/detail", StringComparison.OrdinalIgnoreCase)
+            || path.Contains("aweme/iteminfo", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }

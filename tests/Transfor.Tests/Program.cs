@@ -94,6 +94,7 @@ TestDouyinDetailEndpointMatcher();
 TestDouyinCandidateFallback();
 TestMagicExtensionDetection();
 TestBatchCompletedEvent();
+TestWorkIdExtraction();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -2238,6 +2239,36 @@ static void TestBatchCompletedEvent()
     {
         Directory.Delete(root, recursive: true);
     }
+}
+
+// 场景：作品 ID 提取与详情接口 URL 构造（页面配置 JSON → 浏览器网络栈直取详情）
+static void TestWorkIdExtraction()
+{
+    // pathname 提取作品 ID（诊断文件形态）
+    var configJson = "{\"app\":{\"pathname\":\"/video/7670791950899991451\",\"odin\":{}}}";
+    AssertEqual("7670791950899991451", EdgeCdpBrowserSessionAccessor.ExtractWorkId(configJson), "work id from pathname");
+    AssertEqual("7670791950899991452", EdgeCdpBrowserSessionAccessor.ExtractWorkId("{\"pathname\":\"/note/7670791950899991452\"}"), "work id from note pathname");
+
+    // aweme_id 字段提取
+    AssertEqual("123456789", EdgeCdpBrowserSessionAccessor.ExtractWorkId("{\"aweme_id\":\"123456789\"}"), "work id from aweme_id field");
+
+    // 无 ID
+    AssertEqual(null, EdgeCdpBrowserSessionAccessor.ExtractWorkId("{\"config\":{\"env\":\"prod\"}}"), "no id returns null");
+    AssertEqual(null, EdgeCdpBrowserSessionAccessor.ExtractWorkId(null), "null json returns null");
+
+    // 作品数据特征判断
+    AssertEqual(true, EdgeCdpBrowserSessionAccessor.HasWorkData("{\"aweme_detail\":{}}"), "has work data via aweme_detail");
+    AssertEqual(true, EdgeCdpBrowserSessionAccessor.HasWorkData("{\"data\":{\"aweme_id\":\"1\"}}"), "has work data via aweme_id");
+    AssertEqual(false, EdgeCdpBrowserSessionAccessor.HasWorkData("{\"app\":{\"pathname\":\"/video/1\"}}"), "config without work data");
+    AssertEqual(false, EdgeCdpBrowserSessionAccessor.HasWorkData(null), "null has no work data");
+
+    // 详情接口 URL 构造
+    var detailUri = EdgeCdpBrowserSessionAccessor.BuildDetailApiUri("7670791950899991451");
+    AssertEqual(true, detailUri.AbsoluteUri.Contains("aweme_id=7670791950899991451", StringComparison.Ordinal), "detail url carries aweme id");
+    AssertEqual(true, detailUri.AbsoluteUri.Contains("aweme/detail", StringComparison.Ordinal), "detail url path");
+
+    // matcher 新增 iteminfo 变体
+    AssertEqual(true, DouyinDetailEndpointMatcher.IsDetailEndpoint("https://www.douyin.com/aweme/v1/web/aweme/iteminfo/?item_ids=7670791950899991451", "XHR"), "iteminfo api matched");
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常
