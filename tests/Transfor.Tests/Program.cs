@@ -1486,6 +1486,20 @@ static void TestDouyinPageParser()
 
     var removed = DouyinPageParser.Parse(ReadFixture("douyin-removed-page.html"));
     AssertEqual(true, removed.FailureReason is not null, "removed page failure reason");
+
+    // 嵌套 RENDER_DATA（真实抖音结构 {"app":{"aweme":{"detail":{"aweme_detail":{...}}}}}）：
+    // 递归查找 aweme_detail，解析出全部图片并保持顺序
+    var nested = DouyinPageParser.ParseStructuredData(ReadFixture("douyin-nested-structured-data.json"));
+    AssertEqual(false, nested.EmptyShell, "nested structure not empty shell");
+    AssertEqual("嵌套结构图文作品", nested.Title, "nested title");
+    AssertEqual("嵌套作者", nested.AuthorName, "nested author");
+    AssertEqual(3, nested.Assets.Count, "nested three image assets");
+    AssertEqual(MediaKind.Image, nested.Assets[0].Kind, "nested first kind image");
+    for (var i = 0; i < 3; i++)
+    {
+        AssertEqual(i, nested.Assets[i].OrderIndex, $"nested asset {i + 1} order");
+    }
+    AssertEqual(2, nested.Assets[0].Variants.Count, "nested first image two variants");
 }
 
 // 场景：抖音候选归一化（顺序保持、去重、过滤非作品媒体）

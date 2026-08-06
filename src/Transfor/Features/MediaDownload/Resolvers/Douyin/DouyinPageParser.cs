@@ -140,11 +140,13 @@ internal static class DouyinPageParser
         }
     }
 
-    // 从作品 JSON 中提取数据；识别 aweme_detail / aweme 结构
+    // 从作品 JSON 中提取数据；识别 aweme_detail / aweme 结构；
+    // 真实抖音 RENDER_DATA 为嵌套结构（如 {"app":{"aweme":{"detail":{"aweme_detail":{...}}}}}），
+    // 因此 aweme_detail 做递归查找（该键语义特定，不会误匹配推荐流），aweme 仅根级匹配
     private static bool TryParseWork(JsonElement root, out DouyinPageData data)
     {
         data = default!;
-        if (!root.TryGetProperty("aweme_detail", out var detail) && !root.TryGetProperty("aweme", out detail))
+        if (!TryFindWorkElement(root, out var detail))
         {
             return false;
         }
@@ -219,6 +221,115 @@ internal static class DouyinPageParser
 
         data = new DouyinPageData(postId, title, authorName, assets, false, false, null);
         return true;
+    }
+
+    // 查找作品详情节点：根级 aweme_detail/aweme 优先；
+    // 否则递归搜索任意深度的 aweme_detail；最后兜底接受含 aweme_id 的作品对象
+    private static bool TryFindWorkElement(JsonElement root, out JsonElement detail)
+    {
+        if (root.TryGetProperty("aweme_detail", out var rootDetail) || root.TryGetProperty("aweme", out rootDetail))
+        {
+            detail = rootDetail;
+            return true;
+        }
+
+        if (TryFindNestedProperty(root, "aweme_detail", out var nestedDetail, depth: 0))
+        {
+            detail = nestedDetail;
+            return true;
+        }
+
+        if (TryFindWorkLikeObject(root, out var workLike, depth: 0))
+        {
+            detail = workLike;
+            return true;
+        }
+
+        detail = default;
+        return false;
+    }
+
+    // 递归查找指定属性（深度限制，防止病态结构耗尽栈）
+    private static bool TryFindNestedProperty(JsonElement element, string property, out JsonElement found, int depth)
+    {
+        if (depth > 8)
+        {
+            found = default;
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var child in element.EnumerateObject())
+            {
+                if (string.Equals(child.Name, property, StringComparison.Ordinal)
+                    && child.Value.ValueKind == JsonValueKind.Object)
+                {
+                    found = child.Value;
+                    return true;
+                }
+
+                if (TryFindNestedProperty(child.Value, property, out found, depth + 1))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                if (TryFindNestedProperty(item, property, out found, depth + 1))
+                {
+                    return true;
+                }
+            }
+        }
+
+        found = default;
+        return false;
+    }
+
+    // 兜底：任意含 aweme_id 属性的对象视为作品详情（覆盖路径键直挂详情对象的结构）
+    private static bool TryFindWorkLikeObject(JsonElement element, out JsonElement found, int depth)
+    {
+        if (depth > 8)
+        {
+            found = default;
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            if (element.TryGetProperty("aweme_id", out var id)
+                && id.ValueKind == JsonValueKind.String
+                && id.GetString() is { Length: > 0 })
+            {
+                found = element;
+                return true;
+            }
+
+            foreach (var child in element.EnumerateObject())
+            {
+                if (TryFindWorkLikeObject(child.Value, out found, depth + 1))
+                {
+                    return true;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                if (TryFindWorkLikeObject(item, out found, depth + 1))
+                {
+                    return true;
+                }
+            }
+        }
+
+        found = default;
+        return false;
     }
 
     private static void CollectUrlList(
