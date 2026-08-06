@@ -47,6 +47,13 @@ internal static class WindowsNative
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static extern bool SetForegroundWindow(nint hWnd);
 
+    // 显示/恢复窗口（SW_RESTORE=9：从最小化恢复；用于把专用 Edge 带回前台）
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ShowWindow(nint hWnd, int nCmdShow);
+
+    internal const int SwRestore = 9;
+
     // 向系统注入合成键盘/鼠标输入
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern uint SendInput(uint numberOfInputs, Input[] inputs, int sizeOfInput);
