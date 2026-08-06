@@ -1475,7 +1475,17 @@ static void TestDouyinPageParser()
     AssertEqual(true, !video.EmptyShell && !video.LoginRequired, "video page not shell or login");
     AssertEqual(1, video.Assets.Count, "video single asset");
     AssertEqual(MediaKind.Video, video.Assets[0].Kind, "video asset kind");
-    AssertEqual(3, video.Assets[0].Variants.Count, "video variants (high/low/dl, cover excluded)");
+    // play_addr(2) + bit_rate 档位(1080p/4K) + download_addr，封面排除
+    AssertEqual(5, video.Assets[0].Variants.Count, "video variants include bit rate tiers");
+    AssertEqual(true, video.Assets[0].Variants.Any(v => v.Url.Contains("4k-abc") && v.Width == 3840 && v.Height == 2160), "4k tier parsed with resolution");
+    AssertEqual(true, video.Assets[0].Variants.Any(v => v.Url.Contains("4k-abc") && v.Bitrate == 12000000), "4k tier bitrate parsed");
+    AssertEqual(true, video.Assets[0].Variants.All(v => v.Source != MediaVariantSource.Thumbnail), "cover excluded");
+
+    // 质量选择：Highest 应选中 4K 档（面积最大）
+    var normalizedVideo = DouyinMediaNormalizer.Normalize(new Uri("https://www.douyin.com/video/7123456789012345678"), video);
+    var selection = MediaQualitySelector.SelectBest(normalizedVideo.Assets[0], MediaQualityPreference.Highest);
+    AssertEqual(MediaSelectionStatus.Selected, selection.Status, "video selection status");
+    AssertEqual(true, selection.Variant!.Uri.ToString().Contains("4k-abc"), "highest quality selects 4k tier");
 
     var carousel = DouyinPageParser.Parse(ReadFixture("douyin-image-carousel-page.html"));
     AssertEqual(9, carousel.Assets.Count, "nine image assets");

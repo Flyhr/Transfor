@@ -221,8 +221,9 @@ internal static class DouyinPageParser
         }
         else if (hasVideo)
         {
-            // 视频作品：play_addr / download_addr 为可下载变体；
-            // cover 是封面图（JPEG），不得作为视频变体参与下载
+            // 视频作品：play_addr / bit_rate（各清晰度档）/ download_addr 为可下载变体；
+            // cover 是封面图（JPEG），不得作为视频变体参与下载。
+            // 高清档位（1080p/2K/4K 等）位于 video.bit_rate 数组，顶层 play_addr 通常只是默认低清档
             var variants = new List<DouyinVariantCandidate>();
             var width = GetInt(video, "width") ?? GetNestedInt(video, "play_addr", "width");
             var height = GetInt(video, "height") ?? GetNestedInt(video, "play_addr", "height");
@@ -231,6 +232,24 @@ internal static class DouyinPageParser
             if (video.TryGetProperty("play_addr", out var playAddr))
             {
                 CollectUrlList(playAddr, "url_list", "video/mp4", width, height, fps, MediaVariantSource.StructuredData, variants);
+            }
+
+            // 高清档位：bit_rate 数组每项含 play_addr（带该档分辨率/码率）
+            if (video.TryGetProperty("bit_rate", out var bitRates) && bitRates.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var bitRate in bitRates.EnumerateArray())
+                {
+                    var bitrateValue = GetInt(bitRate, "bit_rate");
+                    if (bitRate.TryGetProperty("play_addr", out var bitRatePlayAddr))
+                    {
+                        var bitRateWidth = GetInt(bitRate, "width") ?? GetNestedInt(bitRate, "play_addr", "width");
+                        var bitRateHeight = GetInt(bitRate, "height") ?? GetNestedInt(bitRate, "play_addr", "height");
+                        CollectUrlList(
+                            bitRatePlayAddr, "url_list", "video/mp4",
+                            bitRateWidth, bitRateHeight, fps, MediaVariantSource.StructuredData, variants,
+                            bitrateValue);
+                    }
+                }
             }
 
             if (video.TryGetProperty("download_addr", out var downloadAddr))
@@ -370,7 +389,8 @@ internal static class DouyinPageParser
         int? height,
         int? fps,
         MediaVariantSource source,
-        List<DouyinVariantCandidate> variants)
+        List<DouyinVariantCandidate> variants,
+        long? bitrate = null)
     {
         if (!container.TryGetProperty(propertyName, out var urls) || urls.ValueKind != JsonValueKind.Array)
         {
@@ -381,7 +401,7 @@ internal static class DouyinPageParser
         {
             if (url.GetString() is { Length: > 0 } text)
             {
-                variants.Add(new DouyinVariantCandidate(text, contentType, width, height, fps, null, null, null, source));
+                variants.Add(new DouyinVariantCandidate(text, contentType, width, height, fps, bitrate, null, null, source));
             }
         }
     }
