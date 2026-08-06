@@ -482,13 +482,62 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         downloadButton.Enabled = state == MediaPageState.Resolved;
     }
 
+    // 进度事件可能在后台线程触发：经 BeginInvoke 切回 UI 线程更新控件；
+    // 响应头已知总大小时回填资产表「预计大小」
     private void DownloadCoordinator_TaskProgressChanged(object? sender, MediaDownloadProgress e)
     {
-        queueGrid.UpdateProgress(e.TaskId, e.Percent);
+        BeginInvoke(() =>
+        {
+            queueGrid.UpdateProgress(e.TaskId, e.Percent);
+            if (e.TotalBytes is { } totalBytes && queueGrid.FindTask(e.TaskId) is { } task)
+            {
+                assetGrid.UpdateEstimatedSize(task.SelectedVariant.Uri, totalBytes);
+            }
+        });
     }
 
+    // 完成事件：更新队列状态；成功后用实际文件信息回填资产表「尺寸/预计大小」
     private void DownloadCoordinator_TaskCompleted(object? sender, MediaDownloadTaskCompleted e)
     {
-        queueGrid.CompleteTask(e.TaskId, e.Result.Status, e.Result.Error);
+        BeginInvoke(() =>
+        {
+            queueGrid.CompleteTask(e.TaskId, e.Result.Status, e.Result.Error);
+            if (e.Result.Status != MediaDownloadStatus.Succeeded
+                || e.Result.SavedPath is null
+                || queueGrid.FindTask(e.TaskId) is not { } task)
+            {
+                return;
+            }
+
+            long bytes;
+            try
+            {
+                bytes = new FileInfo(e.Result.SavedPath).Length;
+            }
+            catch
+            {
+                return;
+            }
+
+            var (width, height) = task.Asset.Kind == MediaKind.Image
+                ? TryReadImageSize(e.Result.SavedPath)
+                : (null, null);
+            assetGrid.UpdateFileInfo(task.SelectedVariant.Uri, bytes, width, height);
+        });
+    }
+
+    // 轻量读取图片尺寸（仅解码头部）；失败（HEIC 等 GDI+ 不支持格式）返回空
+    private static (int? Width, int? Height) TryReadImageSize(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var image = Image.FromStream(stream);
+            return (image.Width, image.Height);
+        }
+        catch
+        {
+            return (null, null);
+        }
     }
 }

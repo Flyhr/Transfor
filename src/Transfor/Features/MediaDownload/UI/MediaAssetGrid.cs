@@ -33,6 +33,10 @@ internal sealed class MediaAssetGrid : UserControl
 
     public bool HasAssets => grid.Rows.Count > 0;
 
+    // 测试入口：读取指定行列的单元格值
+    internal object? GetCellValueForTest(int rowIndex, int columnIndex)
+        => grid.Rows[rowIndex].Cells[columnIndex].Value;
+
     private void Grid_CellContentClick(object? sender, DataGridViewCellEventArgs e)
     {
         if (e.RowIndex < 0 || e.ColumnIndex != 6)
@@ -115,6 +119,45 @@ internal sealed class MediaAssetGrid : UserControl
             }
         }
         return result;
+    }
+
+    // 下载开始时回填「预计大小」（响应头 Content-Length）
+    public void UpdateEstimatedSize(Uri variantUri, long bytes)
+    {
+        if (FindRowByVariant(variantUri) is not { } row)
+        {
+            return;
+        }
+
+        row.Cells[4].Value = FormatSize(bytes);
+    }
+
+    // 下载完成后回填「尺寸」与「预计大小」（实际文件信息）
+    public void UpdateFileInfo(Uri variantUri, long bytes, int? width, int? height)
+    {
+        if (FindRowByVariant(variantUri) is not { } row)
+        {
+            return;
+        }
+
+        row.Cells[4].Value = FormatSize(bytes);
+        if (width.HasValue && height.HasValue)
+        {
+            row.Cells[3].Value = $"{width}×{height}";
+        }
+    }
+
+    private DataGridViewRow? FindRowByVariant(Uri variantUri)
+    {
+        foreach (DataGridViewRow row in grid.Rows)
+        {
+            if (row.Tag is (MediaAsset, MediaVariant variant) && variant is not null
+                && string.Equals(variant.Uri.ToString(), variantUri.ToString(), StringComparison.Ordinal))
+            {
+                return row;
+            }
+        }
+        return null;
     }
 
     private static string FormatSize(long bytes)
