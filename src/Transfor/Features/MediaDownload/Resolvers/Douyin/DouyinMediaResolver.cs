@@ -127,15 +127,18 @@ internal sealed class DouyinMediaResolver : IMediaResolver
 
         // 结构化数据缺失时：用浏览器捕获的 DOM/网络候选兜底构造资产；
         // 按页面 URL 形态判断作品类型（/video/ 视频、/note/ 图文/实况）
+        var usedCandidateFallback = false;
         if (data.Assets.Count == 0 && capture.Candidates.Count > 0)
         {
             data = DouyinMediaNormalizer.NormalizeCandidatesToPageData(capture.Candidates, InferVideoPreferred(request.SourceUri));
+            usedCandidateFallback = true;
         }
+
+        // 临时诊断：每次浏览器解析完成都记录捕获现场与资产摘要（定位后移除）
+        CaptureDiagnostics.Write(capture, request.SourceUri, data, usedCandidateFallback);
 
         if (data.Assets.Count == 0)
         {
-            // 临时诊断：记录捕获现场供排查结构化路径（定位后移除）
-            CaptureDiagnostics.Write(capture, request.SourceUri);
             return MediaResolveResult.RequiresUserInteraction(
                 capture.StructuredDataJson is null
                     ? "页面未提供可直接解析的数据，请确认已登录后重试。"
