@@ -855,6 +855,14 @@ static void TestDownloadFileNameBuilder()
     AssertEqual("a_b_c.mp4", DownloadFileNameBuilder.SanitizeFileName("a:b\\c.mp4"), "invalid chars replaced");
     AssertEqual("a_b_c", DownloadFileNameBuilder.SanitizeFileName("a:b\\c."), "trailing dot trimmed");
     AssertEqual("download", DownloadFileNameBuilder.SanitizeFileName("...."), "empty name falls back");
+
+    // # 话题标签清理
+    AssertEqual("波比情绪零碎", DownloadFileNameBuilder.StripHashtags("波比情绪零碎 # 猪猪侠 # 动漫 # 配音"), "spaced hashtags stripped");
+    AssertEqual("波比情绪零碎", DownloadFileNameBuilder.StripHashtags("波比情绪零碎#猪猪侠#动漫"), "compact hashtags stripped");
+    AssertEqual("标题", DownloadFileNameBuilder.StripHashtags("标题#话题"), "trailing hashtag stripped");
+    AssertEqual("纯标题", DownloadFileNameBuilder.StripHashtags("纯标题"), "plain title unchanged");
+    AssertEqual("标题", DownloadFileNameBuilder.StripHashtags("标题 # 话题1 #话题2"), "mixed spaced and compact hashtags");
+    AssertEqual("", DownloadFileNameBuilder.StripHashtags("# 仅标签"), "hashtag-only title emptied");
     AssertEqual(".jpg", DownloadFileNameBuilder.ResolveExtension("image/jpeg", MediaKind.Image), "jpeg extension");
     AssertEqual(".webp", DownloadFileNameBuilder.ResolveExtension("image/webp", MediaKind.Image), "webp extension");
     AssertEqual(".mp4", DownloadFileNameBuilder.ResolveExtension("video/mp4", MediaKind.Video), "mp4 extension");

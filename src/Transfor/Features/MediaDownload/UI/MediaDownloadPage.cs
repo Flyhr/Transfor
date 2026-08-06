@@ -448,7 +448,7 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     {
         var baseName = string.IsNullOrWhiteSpace(post.Title)
             ? "media"
-            : DownloadFileNameBuilder.SanitizeFileName(post.Title);
+            : DownloadFileNameBuilder.SanitizeFileName(DownloadFileNameBuilder.StripHashtags(post.Title));
         var ext = DownloadFileNameBuilder.ResolveExtension(variant.ContentType, asset.Kind, variant.Uri.AbsolutePath);
         return asset.Index == 0 ? $"{baseName}{ext}" : $"{baseName}_{asset.Index + 1}{ext}";
     }

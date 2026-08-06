@@ -32,6 +32,20 @@ internal static class DownloadFileNameBuilder
         return name;
     }
 
+    // 移除标题中的 # 话题标签（如 "标题 # 话题1 # 话题2" → "标题"）；
+    // 支持 # 与话题间有无空格；纯文本清理，不涉及 HTML 解析
+    public static string StripHashtags(string raw)
+    {
+        if (string.IsNullOrEmpty(raw))
+        {
+            return raw;
+        }
+
+        var cleaned = System.Text.RegularExpressions.Regex.Replace(raw, @"#\s*[^#\s]+", " ");
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"\s{2,}", " ").Trim();
+        return cleaned;
+    }
+
     // 根据 Content-Type 与媒体类型解析扩展名；
     // Content-Type 缺失或为泛化类型（如抖音 RENDER_DATA 图片的裸 "image"）时，
     // 按 URL 路径扩展名推断（抖音 CDN 图片 URL 带格式后缀，如 q80.jpeg）；
