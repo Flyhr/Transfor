@@ -34,8 +34,7 @@ internal static class EdgeCdpResourceDownloader
             return await ReadStreamToFileAsync(session, stream, partPath, cancellationToken, progress);
         }
 
-        var netError = resource?["netError"]?.GetValue<int>();
-        return await FetchFallbackAsync(session, mediaUri, partPath, cancellationToken, progress, netError);
+        return await FetchFallbackAsync(session, mediaUri, partPath, cancellationToken, progress);
     }
 
     // 通过 IO.read 把浏览器网络栈收到的响应流式写入文件
@@ -86,23 +85,44 @@ internal static class EdgeCdpResourceDownloader
         }
     }
 
-    // 回退：在页面上下文发起 fetch，用 Fetch 域捕获响应流
+    // 回退：在页面上下文发起 fetch，用 Fetch 域拦截响应流；
+    // 统一从 Request 阶段拦截（流式/大响应时 Response 阶段拦截可能回退），
+    // 对 Request 阶段暂停使用 continueRequest(interceptResponse) 两阶段模式，
+    // 在 Response 阶段再次暂停后取响应体流
     private static async Task<long> FetchFallbackAsync(
         CdpTargetSession session,
         Uri mediaUri,
         string partPath,
         CancellationToken cancellationToken,
-        IProgress<long>? progress,
-        int? netError)
+        IProgress<long>? progress)
     {
-        var paused = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstPause = new TaskCompletionSource<(string RequestId, bool AtResponse, string? ErrorReason)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondPause = new TaskCompletionSource<(string RequestId, string? ErrorReason)>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var url = mediaUri.ToString();
+
         void OnEvent(string method, JsonNode? parameters, string? eventSessionId)
         {
-            if (method == "Fetch.requestPaused"
-                && eventSessionId == session.SessionId
-                && parameters?["request"]?["url"]?.GetValue<string>() == mediaUri.ToString())
+            if (method != "Fetch.requestPaused" || eventSessionId != session.SessionId)
             {
-                paused.TrySetResult(parameters["requestId"]!.GetValue<string>());
+                return;
+            }
+            if (parameters?["request"]?["url"]?.GetValue<string>() != url)
+            {
+                return;
+            }
+
+            var requestId = parameters["requestId"]!.GetValue<string>();
+            var atResponse = parameters["responseStatusCode"] is not null;
+            var errorReason = parameters["responseErrorReason"]?.GetValue<string>();
+            if (!firstPause.Task.IsCompleted)
+            {
+                firstPause.TrySetResult((requestId, atResponse, errorReason));
+            }
+            else
+            {
+                secondPause.TrySetResult((requestId, errorReason));
             }
         }
 
@@ -113,27 +133,31 @@ internal static class EdgeCdpResourceDownloader
             {
                 patterns = new[]
                 {
-                    new { urlPattern = mediaUri.ToString(), requestStage = "Response" },
+                    new { urlPattern = url, requestStage = "Request" },
                 },
             }, cancellationToken);
 
             // 页面上下文发起 fetch（携带页面 Cookie/Referer）；no-cors 避免 CORS 拦截
             _ = session.CommandAsync("Runtime.evaluate", new
             {
-                expression = $"fetch({System.Text.Json.JsonSerializer.Serialize(mediaUri.ToString())}, {{ credentials: 'include', mode: 'no-cors' }})",
+                expression = $"fetch({System.Text.Json.JsonSerializer.Serialize(url)}, {{ credentials: 'include', mode: 'no-cors' }})",
                 returnByValue = false,
             }, cancellationToken);
 
-            string requestId;
-            try
+            var (requestId, atResponse, errorReason) = await firstPause.Task.WaitAsync(
+                TimeSpan.FromSeconds(EventWaitTimeoutSeconds), cancellationToken);
+
+            if (!atResponse)
             {
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                timeout.CancelAfter(TimeSpan.FromSeconds(EventWaitTimeoutSeconds));
-                requestId = await paused.Task.WaitAsync(timeout.Token);
+                // Request 阶段暂停：两阶段模式，续传并拦截响应
+                await session.CommandAsync("Fetch.continueRequest", new { requestId, interceptResponse = true }, cancellationToken);
+                (requestId, errorReason) = await secondPause.Task.WaitAsync(
+                    TimeSpan.FromSeconds(EventWaitTimeoutSeconds), cancellationToken);
             }
-            catch (TimeoutException)
+
+            if (errorReason is not null)
             {
-                throw new InvalidOperationException($"媒体请求未触发浏览器拦截（netError={netError}）。");
+                throw new InvalidOperationException($"媒体请求被网络层拒绝（{errorReason}）。");
             }
 
             var streamResult = await session.CommandAsync("Fetch.takeResponseBodyAsStream", new { requestId }, cancellationToken);
