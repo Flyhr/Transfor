@@ -68,9 +68,12 @@ internal static class DouyinMediaNormalizer
     }
 
     // 浏览器捕获候选 → 页面数据兜底：结构化数据缺失时按候选构造资产；
-    // 视频作品页只取视频（页面 img 均为封面/头像/表情包/推荐等装饰，不属作品内容）；
-    // 图文页图片按 DOM 顺序保持多图次序，过滤小尺寸（头像/表情包）与非作品 URL
-    public static DouyinPageData NormalizeCandidatesToPageData(IReadOnlyList<BrowserCapturedCandidate> candidates)
+    // 先判断作品类型：视频 → 只取主视频；图片/实况 → 取全部图片（忽略封面/预览视频）；
+    // videoPreferred 由页面 URL 形态给出（/video/ 视频、/note/ 图文/实况），
+    // 未知时用启发式：有效图片候选 ≥ 2 且含视频候选 → 图片优先（实况/图文页多图+预览视频），否则视频优先
+    public static DouyinPageData NormalizeCandidatesToPageData(
+        IReadOnlyList<BrowserCapturedCandidate> candidates,
+        bool? videoPreferred = null)
     {
         var imageCandidates = new List<(int Order, DouyinVariantCandidate Variant)>();
         var videoVariants = new List<DouyinVariantCandidate>();
@@ -115,14 +118,19 @@ internal static class DouyinMediaNormalizer
             }
         }
 
+        // 作品类型判断：显式偏好 > 启发式
+        var imageFirst = videoPreferred == false
+            || (videoPreferred is null && videoVariants.Count > 0 && imageCandidates.Count >= 2);
+
         var assets = new List<DouyinAssetCandidate>();
-        if (videoVariants.Count > 0)
+        if (!imageFirst && videoVariants.Count > 0)
         {
-            // 视频优先：视频作品页的图片候选（封面/头像/表情包/推荐）一律不收
+            // 视频作品：只取主视频，页面图片（封面/头像/表情包/推荐）一律不收
             assets.Add(new DouyinAssetCandidate(0, MediaKind.Video, videoVariants));
         }
         else
         {
+            // 图片/实况作品：全部图片按 DOM 顺序，忽略封面/预览视频
             var imageIndex = 0;
             foreach (var image in imageCandidates.OrderBy(item => item.Order))
             {

@@ -2021,6 +2021,12 @@ static void TestDouyinStructuredDataFallbacks()
     AssertEqual(3, apiData.Assets.Count, "detail api image count");
     AssertEqual("fixture 详情接口图文", apiData.Title, "detail api title");
 
+    // 实况作品：images + video 混合 → 只产出图片资产，忽略封面/预览视频
+    var liveData = DouyinPageParser.ParseStructuredData(ReadFixture("douyin-live-photo.json"));
+    AssertEqual(3, liveData.Assets.Count, "live photo: three image assets");
+    AssertEqual(MediaKind.Image, liveData.Assets[0].Kind, "live photo: image kind");
+    AssertEqual(true, liveData.Assets.All(a => a.Variants.All(v => v.Url.Contains("live-"))), "live photo: preview video excluded");
+
     // URL 编码的 JSON：解码后解析
     var encoded = Uri.EscapeDataString(ReadFixture("douyin-detail-api.json"));
     var decodedData = DouyinPageParser.ParseStructuredData(encoded);
@@ -2086,6 +2092,36 @@ static void TestDouyinCandidateFallback()
     var unknownSizeData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(unknownSizeCandidates);
     AssertEqual(1, unknownSizeData.Assets.Count, "unknown-size image kept");
 
+    // 显式类型偏好：/note/（图文/实况）即使含视频候选也只取图片
+    var noteCandidates = new BrowserCapturedCandidate[]
+    {
+        new(new Uri("https://media.example/img/1.webp"), MediaKind.Image, 0, 1080, 1440, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/img/2.webp"), MediaKind.Image, 1, 1080, 1440, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/live-preview.mp4"), MediaKind.Video, 0, null, null, null, null, BrowserCandidateSource.Dom),
+    };
+    var noteData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(noteCandidates, videoPreferred: false);
+    AssertEqual(2, noteData.Assets.Count, "note page: images only");
+    AssertEqual(true, noteData.Assets.All(a => a.Kind == MediaKind.Image), "note page: preview video excluded");
+
+    // 无偏好启发式：多张有效图 + 视频候选 → 图片优先（实况/图文形态）
+    var heuristicImageData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(noteCandidates);
+    AssertEqual(2, heuristicImageData.Assets.Count, "heuristic: multi-image + video prefers images");
+
+    // 无偏好启发式：单张有效图 + 视频候选 → 视频优先（视频页封面形态）
+    var heuristicVideoCandidates = new BrowserCapturedCandidate[]
+    {
+        new(new Uri("https://media.example/cover/1.webp"), MediaKind.Image, 0, 1080, 1920, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/video/main.mp4"), MediaKind.Video, 0, null, null, null, null, BrowserCandidateSource.Dom),
+    };
+    var heuristicVideoData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(heuristicVideoCandidates);
+    AssertEqual(1, heuristicVideoData.Assets.Count, "heuristic: single image + video prefers video");
+    AssertEqual(MediaKind.Video, heuristicVideoData.Assets[0].Kind, "heuristic: video kind");
+
+    // 显式类型偏好：/video/ 即使有多张图也只取视频
+    var videoPrefData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(noteCandidates, videoPreferred: true);
+    AssertEqual(1, videoPrefData.Assets.Count, "video url: video only");
+    AssertEqual(MediaKind.Video, videoPrefData.Assets[0].Kind, "video url: kind");
+
     // Resolver 端到端：结构化数据缺失但 DOM 候选存在 → 解析成功
     var validator = new SafeUriValidator(new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("8.8.8.8") })));
     var proxy = new BrowserSessionAccessorProxy();
@@ -2100,6 +2136,17 @@ static void TestDouyinCandidateFallback()
     AssertEqual(2, result.Post!.Assets.Count, "candidate fallback two images");
     AssertEqual(MediaKind.Image, result.Post.Assets[0].Kind, "candidate fallback image kind");
     AssertEqual("session-1", result.Post.Assets[0].Variants[0].RequestContext.BrowserSessionId, "candidate fallback session id");
+
+    // Resolver 端到端：/video/ URL + 视频候选 → 只取视频
+    proxy.Attach(new CapturingBrowserSession(null, new BrowserCapturedCandidate[]
+    {
+        new(new Uri("https://media.example/cover/1.webp"), MediaKind.Image, 0, 1080, 1920, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/video/main.mp4"), MediaKind.Video, 0, null, null, null, null, BrowserCandidateSource.Dom),
+    }));
+    var videoResult = resolver.ResolveAsync(new MediaResolveRequest(new Uri("https://www.douyin.com/video/7200000000000000005"), MediaResolveMode.BrowserInteractive, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Succeeded, videoResult.Status, "video url fallback resolves");
+    AssertEqual(1, videoResult.Post!.Assets.Count, "video url: single video asset");
+    AssertEqual(MediaKind.Video, videoResult.Post.Assets[0].Kind, "video url: video kind");
 }
 
 // 场景：魔数识别扩展名与终化修正（.img/.bin → 真实格式）

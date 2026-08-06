@@ -171,7 +171,9 @@ internal static class DouyinPageParser
 
     // 从作品 JSON 中提取数据；识别 aweme_detail / aweme 结构；
     // 真实抖音 RENDER_DATA 为嵌套结构（如 {"app":{"aweme":{"detail":{"aweme_detail":{...}}}}}），
-    // 因此 aweme_detail 做递归查找（该键语义特定，不会误匹配推荐流），aweme 仅根级匹配
+    // 因此 aweme_detail 做递归查找（该键语义特定，不会误匹配推荐流），aweme 仅根级匹配；
+    // 作品类型互斥：存在 images（图文/实况）时只产出图片资产，忽略封面/预览视频；
+    // 仅有 video 时才是视频作品，只产出视频资产
     private static bool TryParseWork(JsonElement root, out DouyinPageData data)
     {
         data = default!;
@@ -185,10 +187,15 @@ internal static class DouyinPageParser
         var authorName = detail.TryGetProperty("author", out var author) ? GetString(author, "nickname") : null;
 
         var assets = new List<DouyinAssetCandidate>();
+        var hasImages = detail.TryGetProperty("images", out var images)
+            && images.ValueKind == JsonValueKind.Array
+            && images.GetArrayLength() > 0;
+        var hasVideo = detail.TryGetProperty("video", out var video);
 
-        // 图片：按数组顺序为资产，url_list 为变体
-        if (detail.TryGetProperty("images", out var images) && images.ValueKind == JsonValueKind.Array)
+        if (hasImages)
         {
+            // 图片/实况作品：按数组顺序为资产，url_list 为变体；
+            // 忽略同作品的封面/预览视频（不是主要内容）
             var index = 0;
             foreach (var image in images.EnumerateArray())
             {
@@ -212,10 +219,9 @@ internal static class DouyinPageParser
                 }
             }
         }
-
-        // 视频：play_addr / download_addr / cover
-        if (detail.TryGetProperty("video", out var video))
+        else if (hasVideo)
         {
+            // 视频作品：play_addr / download_addr / cover
             var variants = new List<DouyinVariantCandidate>();
             var width = GetInt(video, "width") ?? GetNestedInt(video, "play_addr", "width");
             var height = GetInt(video, "height") ?? GetNestedInt(video, "play_addr", "height");

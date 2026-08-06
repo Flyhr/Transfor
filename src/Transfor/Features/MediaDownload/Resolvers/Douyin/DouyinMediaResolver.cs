@@ -125,10 +125,11 @@ internal sealed class DouyinMediaResolver : IMediaResolver
             return MediaResolveResult.Failure(data.FailureReason);
         }
 
-        // 结构化数据缺失时：用浏览器捕获的 DOM/网络候选兜底构造资产
+        // 结构化数据缺失时：用浏览器捕获的 DOM/网络候选兜底构造资产；
+        // 按页面 URL 形态判断作品类型（/video/ 视频、/note/ 图文/实况）
         if (data.Assets.Count == 0 && capture.Candidates.Count > 0)
         {
-            data = DouyinMediaNormalizer.NormalizeCandidatesToPageData(capture.Candidates);
+            data = DouyinMediaNormalizer.NormalizeCandidatesToPageData(capture.Candidates, InferVideoPreferred(request.SourceUri));
         }
 
         if (data.Assets.Count == 0)
@@ -165,6 +166,24 @@ internal sealed class DouyinMediaResolver : IMediaResolver
         TryPrefetchImages(post);
 
         return MediaResolveResult.Success(post);
+    }
+
+    // 按页面 URL 形态推断作品类型：/video/ 为视频作品，/note/（含 share/note）为图文/实况作品；
+    // 无法判断时返回 null，由候选启发式决定
+    private static bool? InferVideoPreferred(Uri sourceUri)
+    {
+        var path = sourceUri.AbsolutePath;
+        if (path.Contains("/video/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (path.Contains("/note/", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return null;
     }
 
     // 预取图片媒体到本地缓存；失败不影响解析结果
