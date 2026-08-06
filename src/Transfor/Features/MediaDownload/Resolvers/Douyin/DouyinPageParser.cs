@@ -194,8 +194,7 @@ internal static class DouyinPageParser
 
         if (hasImages)
         {
-            // 图片/实况作品：按数组顺序为资产，url_list 为变体；
-            // 忽略同作品的封面/预览视频（不是主要内容）
+            // 图片/实况作品：按数组顺序为资产，url_list 为变体
             var index = 0;
             foreach (var image in images.EnumerateArray())
             {
@@ -219,11 +218,12 @@ internal static class DouyinPageParser
                 }
             }
         }
-        else if (hasVideo)
+
+        if (hasVideo)
         {
-            // 视频作品：play_addr / bit_rate（各清晰度档）/ download_addr 为可下载变体；
-            // cover 是封面图（JPEG），不得作为视频变体参与下载。
-            // 高清档位（1080p/2K/4K 等）位于 video.bit_rate 数组，顶层 play_addr 通常只是默认低清档
+            // 视频/实况动态视频：play_addr / bit_rate（各清晰度档）/ download_addr 为可下载变体；
+            // 实况作品（images + video 共存）同时产出全部帧图与动态视频；
+            // cover 是封面图（JPEG），不得作为视频变体参与下载
             var variants = new List<DouyinVariantCandidate>();
             var width = GetInt(video, "width") ?? GetNestedInt(video, "play_addr", "width");
             var height = GetInt(video, "height") ?? GetNestedInt(video, "play_addr", "height");

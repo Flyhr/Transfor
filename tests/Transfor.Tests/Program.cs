@@ -2073,11 +2073,13 @@ static void TestDouyinStructuredDataFallbacks()
     AssertEqual(3, apiData.Assets.Count, "detail api image count");
     AssertEqual("fixture 详情接口图文", apiData.Title, "detail api title");
 
-    // 实况作品：images + video 混合 → 只产出图片资产，忽略封面/预览视频
+    // 实况作品：images + video 共存 → 同时产出全部帧图与动态视频
     var liveData = DouyinPageParser.ParseStructuredData(ReadFixture("douyin-live-photo.json"));
-    AssertEqual(3, liveData.Assets.Count, "live photo: three image assets");
-    AssertEqual(MediaKind.Image, liveData.Assets[0].Kind, "live photo: image kind");
-    AssertEqual(true, liveData.Assets.All(a => a.Variants.All(v => v.Url.Contains("live-"))), "live photo: preview video excluded");
+    AssertEqual(4, liveData.Assets.Count, "live photo: three images + one dynamic video");
+    AssertEqual(3, liveData.Assets.Count(a => a.Kind == MediaKind.Image), "live photo: three image assets");
+    AssertEqual(1, liveData.Assets.Count(a => a.Kind == MediaKind.Video), "live photo: one dynamic video asset");
+    AssertEqual(true, liveData.Assets.Where(a => a.Kind == MediaKind.Image).All(a => a.Variants.All(v => v.Url.Contains("live-"))), "live photo: frames are live images");
+    AssertEqual(true, liveData.Assets.Where(a => a.Kind == MediaKind.Video).All(a => a.Variants.All(v => v.Url.Contains("live-preview"))), "live photo: dynamic video present");
 
     // URL 编码的 JSON：解码后解析
     var encoded = Uri.EscapeDataString(ReadFixture("douyin-detail-api.json"));
