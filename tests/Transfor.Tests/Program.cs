@@ -1,5 +1,6 @@
 using Transfor;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Windows.Forms;
 using System.Net;
 
@@ -81,8 +82,7 @@ TestDouyinMediaResolver();
 TestDouyinTransportClassifier();
 TestDouyinTransportPreference();
 TestErrorChainFormatter();
-TestWebView2EnvironmentProvider();
-TestUiDispatcher();
+TestCdpConnection();
 TestMediaSettingsForm();
 TestMediaPreviewService();
 TestMediaAssetGrid();
@@ -1037,29 +1037,34 @@ static void TestMediaDownloadService()
         AssertEqual(false, File.Exists(cancelTarget), "no target file after cancel");
         AssertEqual(false, File.Exists(cancelTarget + ".part." + cancelResult.TaskId.ToString("N")), "part cleaned after cancel");
 
-        // Referer 正确 + Cookie 仅发送到匹配域 + 每跳重新获取 Cookie
+        // 会话变体（浏览器解析出的媒体）：直接走浏览器网络栈下载，不发起 HttpClient 请求
         var referer = new Uri("https://v.douyin.com/video/1");
-        var session = new FakeBrowserSession(
-            new BrowserCookie("douyin.com", "/", "sid", "abc", false),
-            new BrowserCookie("evil.com", "/", "sid", "stolen", false));
+        var directBrowserSession = new BrowserDownloadSession();
+        var sessionTarget = Path.Combine(root, "session.mp4");
+        var sessionHandler = new StubHttpHandler(_ => OkMediaResponse(mp4Body));
+        var sessionService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(sessionHandler), validator), directBrowserSession);
+        var sessionVariant = VariantWith(new Uri("https://v.douyin.com/redirect"), new MediaRequestContext(referer, "session-1"));
+        var sessionTask = TaskFor(sessionTarget, sessionVariant, Mp4Asset());
+        var sessionResult = sessionService.DownloadAsync(sessionTask, CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Succeeded, sessionResult.Status, "session variant downloads via browser");
+        AssertEqual(0, sessionHandler.Requests.Count, "no http request for session variant");
+        AssertEqual(1, directBrowserSession.DownloadRequests.Count, "browser download invoked for session variant");
+        AssertEqual(sessionTask.Id, directBrowserSession.DownloadRequests[0], "browser download receives task id");
+        AssertEqual(true, File.Exists(sessionTarget), "session variant file saved");
+
+        // 非会话变体：仍走 HttpClient，Referer 同源保留、跨源清除
         var cookieTarget = Path.Combine(root, "cookie.mp4");
         var cookieHandler = new StubHttpHandler(
             _ => RedirectResponseAbs("https://cdn.example.com/v.mp4"),
             _ => OkMediaResponse(mp4Body));
-        var cookieService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(cookieHandler), validator), session);
-        var variant = VariantWith(new Uri("https://v.douyin.com/redirect"), new MediaRequestContext(referer, "session-1"));
+        var cookieService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(cookieHandler), validator), null);
+        var variant = VariantWith(new Uri("https://v.douyin.com/redirect"), new MediaRequestContext(referer, null));
         var cookieResult = cookieService.DownloadAsync(TaskFor(cookieTarget, variant, Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
-        AssertEqual(MediaDownloadStatus.Succeeded, cookieResult.Status, "cookie download success");
-        // 每跳都重新获取 Cookie
-        AssertEqual(2, session.CookieRequests.Count, "cookies re-fetched per hop");
+        AssertEqual(MediaDownloadStatus.Succeeded, cookieResult.Status, "non-session variant downloads via http");
         // 第一跳 Referer 保留（同源 douyin）
         AssertEqual(referer.ToString(), cookieHandler.Requests[0].Headers.Referrer?.ToString(), "referer sent on first hop");
         // 跨源跳到 cdn.example.com：Referer 被清除
         AssertEqual(true, cookieHandler.Requests[1].Headers.Referrer is null, "cross-origin referer cleared on redirect");
-        // 只有匹配域的 Cookie 被发送
-        var firstCookie = cookieHandler.Requests[0].Headers.TryGetValues("Cookie", out var firstCookieValues) ? string.Join(";", firstCookieValues) : string.Empty;
-        AssertEqual(true, firstCookie.Contains("sid=abc"), "matching domain cookie sent");
-        AssertEqual(true, !firstCookie.Contains("stolen"), "foreign cookie not sent");
 
         // 相同目标内容：幂等成功
         var dupeTarget = Path.Combine(root, "dupe.mp4");
@@ -1636,105 +1641,66 @@ static void TestErrorChainFormatter()
     AssertEqual(401, longText.Length, "long chain truncated to limit plus ellipsis");
 }
 
-// 场景：UI 调度器（取消、投递失败均在超时内结束）
-static void TestUiDispatcher()
+// 场景：CDP 连接（命令匹配、错误传播、事件分发、超时）
+static void TestCdpConnection()
 {
-    RunSta(() =>
+    using var server = new FakeCdpServer();
+    var url = server.Start();
+
+    var connection = new CdpConnection(url);
+    var events = new List<(string Method, string? SessionId, int Value)>();
+    connection.EventReceived += (method, parameters, sessionId) =>
     {
-        using var owner = new Form { ShowInTaskbar = false };
-        _ = owner.Handle; // 强制创建窗口句柄
+        events.Add((method, sessionId, parameters?["value"]?.GetValue<int>() ?? -1));
+    };
 
-        // 正常调度：在 UI 线程执行并返回结果（轮询消息泵驱动 BeginInvoke）
-        var dispatcher = new WinFormsUiDispatcher(owner);
-        var normalTask = dispatcher.InvokeAsync(token => Task.FromResult(42), CancellationToken.None);
-        AssertEqual(42, PumpUi(normalTask, owner), "dispatcher invokes on ui thread");
-
-        // 取消：任务在有限时间内结束
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-        var cancelled = false;
-        try
-        {
-            var cancelTask = dispatcher.InvokeAsync(token => Task.FromResult(1), cts.Token);
-            PumpUi(cancelTask, owner);
-            cancelTask.GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException)
-        {
-            cancelled = true;
-        }
-        AssertEqual(true, cancelled, "dispatcher honours cancellation");
-
-        // 控件销毁：返回明确错误而非无限等待
-        var disposedOwner = new Form { ShowInTaskbar = false };
-        _ = disposedOwner.Handle;
-        var disposedDispatcher = new WinFormsUiDispatcher(disposedOwner);
-        disposedOwner.Dispose();
-        var disposeFailed = false;
-        try
-        {
-            disposedDispatcher.InvokeAsync(token => Task.FromResult(1), CancellationToken.None).GetAwaiter().GetResult();
-        }
-        catch (InvalidOperationException)
-        {
-            disposeFailed = true;
-        }
-        AssertEqual(true, disposeFailed, "disposed owner fails fast");
-    });
-
-    // 轮询消息泵直到任务完成或超时
-    static T PumpUi<T>(Task<T> task, Form owner)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (!task.IsCompleted && DateTime.UtcNow < deadline)
-        {
-            Application.DoEvents();
-            Thread.Sleep(10);
-        }
-        return task.GetAwaiter().GetResult();
-    }
-}
-
-// 场景：WebView2 环境参数（代理读取与浏览器参数组装）
-static void TestWebView2EnvironmentProvider()
-{
-    var saved = new Dictionary<string, string?>();
-    foreach (var name in new[] { "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy" })
-    {
-        saved[name] = Environment.GetEnvironmentVariable(name);
-        Environment.SetEnvironmentVariable(name, null);
-    }
-
+    connection.ConnectAsync(CancellationToken.None).GetAwaiter().GetResult();
     try
     {
-        // 未设置代理：仅伪装参数
-        var args = WebView2EnvironmentProvider.BuildBrowserArguments();
-        AssertEqual(true, args.Contains("--disable-blink-features=UserAgentClientHint"), "client hint disable always present");
-        AssertEqual(false, args.Contains("--proxy-server"), "no proxy args when unset");
-        AssertEqual(true, WebView2EnvironmentProvider.ReadProxyServer() is null, "no proxy read when unset");
+        // 命令响应按 id 匹配
+        var echo = connection.CommandAsync("Test.echo", new { x = 1 }, null, CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(true, echo?["ok"]?.GetValue<bool>() == true, "command response matched by id");
+        AssertEqual("Test.echo", echo?["echo"]?.GetValue<string>(), "command echo payload");
 
-        // HTTPS_PROXY 优先
-        Environment.SetEnvironmentVariable("HTTPS_PROXY", "http://127.0.0.1:7897");
-        Environment.SetEnvironmentVariable("HTTP_PROXY", "http://127.0.0.1:8080");
-        AssertEqual("http://127.0.0.1:7897", WebView2EnvironmentProvider.ReadProxyServer(), "https proxy preferred");
-        var withProxy = WebView2EnvironmentProvider.BuildBrowserArguments();
-        AssertEqual(true, withProxy.Contains("--proxy-server=http://127.0.0.1:7897"), "proxy in browser args");
+        // sessionId 透传
+        var withSession = connection.CommandAsync("Test.echo", null, "session-9", CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual("session-9", withSession?["session"]?.GetValue<string>(), "session id passed through");
 
-        // 无效值忽略
-        Environment.SetEnvironmentVariable("HTTPS_PROXY", null);
-        Environment.SetEnvironmentVariable("HTTP_PROXY", "not-a-uri");
-        AssertEqual(true, WebView2EnvironmentProvider.ReadProxyServer() is null, "invalid proxy ignored");
+        // CDP 错误转换为异常
+        var errorThrown = false;
+        try
+        {
+            connection.CommandAsync("Test.error", null, null, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("boom"))
+        {
+            errorThrown = true;
+        }
+        AssertEqual(true, errorThrown, "cdp error becomes exception");
 
-        // socks 代理支持
-        Environment.SetEnvironmentVariable("ALL_PROXY", "socks5://127.0.0.1:1080");
-        AssertEqual("socks5://127.0.0.1:1080", WebView2EnvironmentProvider.ReadProxyServer(), "socks proxy accepted");
+        // 事件按方法 + sessionId 分发
+        connection.CommandAsync("Test.event", null, null, CancellationToken.None).GetAwaiter().GetResult();
+        Thread.Sleep(300);
+        AssertEqual(1, events.Count, "event delivered once");
+        AssertEqual("Test.emitted", events[0].Method, "event method delivered");
+        AssertEqual("s1", events[0].SessionId, "event session id delivered");
+        AssertEqual(42, events[0].Value, "event parameters delivered");
+
+        // 无响应的命令按超时失败
+        var timeoutThrown = false;
+        try
+        {
+            connection.CommandAsync("Test.silent", null, null, CancellationToken.None, timeoutSeconds: 1).GetAwaiter().GetResult();
+        }
+        catch (TimeoutException)
+        {
+            timeoutThrown = true;
+        }
+        AssertEqual(true, timeoutThrown, "silent command times out");
     }
     finally
     {
-        foreach (var pair in saved)
-        {
-            Environment.SetEnvironmentVariable(pair.Key, pair.Value);
-        }
+        connection.DisposeAsync().AsTask().GetAwaiter().GetResult();
     }
 }
 
@@ -2377,4 +2343,129 @@ file sealed class BrowserDownloadSession : IBrowserSessionAccessor
         => Task.FromResult<IReadOnlyList<BrowserCookie>>(Array.Empty<BrowserCookie>());
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+// 测试替身：进程内模拟 CDP 服务器的 HttpListener WebSocket 端点
+file sealed class FakeCdpServer : IDisposable
+{
+    private readonly HttpListener listener = new();
+    private Task? serverTask;
+    private volatile bool running = true;
+
+    public string Start()
+    {
+        var portListener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        portListener.Start();
+        var port = ((System.Net.IPEndPoint)portListener.LocalEndpoint).Port;
+        portListener.Stop();
+
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        serverTask = Task.Run(RunAsync);
+        return $"ws://127.0.0.1:{port}/devtools";
+    }
+
+    private async Task RunAsync()
+    {
+        while (running)
+        {
+            HttpListenerContext context;
+            try
+            {
+                context = await listener.GetContextAsync();
+            }
+            catch
+            {
+                break;
+            }
+
+            var wsContext = await context.AcceptWebSocketAsync(null);
+            _ = Task.Run(() => ServeAsync(wsContext.WebSocket));
+        }
+    }
+
+    private async Task ServeAsync(System.Net.WebSockets.WebSocket ws)
+    {
+        var buffer = new byte[64 * 1024];
+        try
+        {
+            while (ws.State == System.Net.WebSockets.WebSocketState.Open)
+            {
+                using var ms = new MemoryStream();
+                System.Net.WebSockets.WebSocketReceiveResult result;
+                do
+                {
+                    result = await ws.ReceiveAsync(buffer, CancellationToken.None);
+                    ms.Write(buffer, 0, result.Count);
+                } while (!result.EndOfMessage);
+
+                // 客户端发起关闭：回 close 帧（否则客户端 CloseAsync 会一直等待）
+                if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Close)
+                {
+                    await ws.CloseOutputAsync(System.Net.WebSockets.WebSocketCloseStatus.NormalClosure, "bye", CancellationToken.None);
+                    return;
+                }
+
+                var node = JsonNode.Parse(System.Text.Encoding.UTF8.GetString(ms.ToArray()))!;
+                var id = node["id"]?.GetValue<int>() ?? 0;
+                var method = node["method"]?.GetValue<string>() ?? string.Empty;
+                var sessionId = node["sessionId"]?.GetValue<string>();
+
+                switch (method)
+                {
+                    case "Test.error":
+                        await SendAsync(ws, new JsonObject
+                        {
+                            ["id"] = id,
+                            ["error"] = new JsonObject { ["code"] = -32601, ["message"] = "boom" },
+                        });
+                        break;
+
+                    case "Test.event":
+                        await SendAsync(ws, new JsonObject
+                        {
+                            ["method"] = "Test.emitted",
+                            ["params"] = new JsonObject { ["value"] = 42 },
+                            ["sessionId"] = "s1",
+                        });
+                        await SendAsync(ws, new JsonObject { ["id"] = id, ["result"] = new JsonObject() });
+                        break;
+
+                    case "Test.silent":
+                        // 不响应：客户端应超时
+                        break;
+
+                    default:
+                        await SendAsync(ws, new JsonObject
+                        {
+                            ["id"] = id,
+                            ["result"] = new JsonObject
+                            {
+                                ["ok"] = true,
+                                ["echo"] = method,
+                                ["session"] = sessionId,
+                            },
+                        });
+                        break;
+                }
+            }
+        }
+        catch
+        {
+            // 客户端断开等场景忽略
+        }
+    }
+
+    private static Task SendAsync(System.Net.WebSockets.WebSocket ws, JsonObject message)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(message.ToJsonString());
+        return ws.SendAsync(bytes, System.Net.WebSockets.WebSocketMessageType.Text, true, CancellationToken.None);
+    }
+
+    public void Dispose()
+    {
+        running = false;
+        try { listener.Stop(); } catch { }
+        try { listener.Close(); } catch { }
+        try { serverTask.Wait(1000); } catch { }
+    }
 }
