@@ -18,7 +18,8 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - 粘贴抖音分享文本/链接，解析单视频与多图作品（保持原始顺序），过滤头像、Logo 与相关推荐
 - 每个媒体按「资产—变体」模型管理，自动选择当前可访问的最高质量直接下载版本；`Balanced` 策略优先至少 720p
 - 支持直接图片/视频 URL（`DirectMediaResolver` 兜底）
-- 需要登录或验证码时，通过 WebView2 浏览器窗口由用户自行完成登录（独立用户数据目录，不写入普通 JSON）
+- 抖音边缘会对非浏览器 TLS 客户端拒绝握手：应用检测到该拦截（TLS/DNS/连接重置等）时自动改用隐藏 WebView2 网络栈解析页面并下载媒体，本次会话熔断为浏览器优先；无需用户干预
+- 需要登录或验证码时，通过 WebView2 浏览器窗口由用户自行完成登录（独立用户数据目录，不写入普通 JSON；同一实例登录后自动重新加载页面继续解析）
 - 流式下载（`.part` 临时文件 + 原子落盘）、队列进度、单个/全部取消、失败重试；重名文件自动编号不覆盖
 - 图片预览走与正式下载相同的安全链路；媒体设置可配置默认下载目录、并发数（1–8）、默认全选、下载后打开目录与质量策略
 - 关闭主窗口到托盘时下载继续；真正退出且有任务时会先确认再取消任务
@@ -96,10 +97,10 @@ src/Transfor/
     │   └── WindowsNative.cs                 # user32.dll 互操作声明与输入结构
     └── WebView/                             # WebView2 浏览器会话（独立用户数据目录、UI 线程调度）
         ├── WebView2EnvironmentProvider.cs   # 独立用户数据目录环境创建
-        ├── WebView2BrowserSessionAccessor.cs# 捕获/取 Cookie 实现（UI 线程经调度器访问）
+        ├── WebView2BrowserSessionAccessor.cs# 捕获/下载/取 Cookie 实现（UI 线程经调度器访问）
         ├── WinFormsUiDispatcher.cs          # BeginInvoke 异步 UI 调度（取消/控件销毁防护）
         ├── IUiDispatcher.cs                 # UI 调度抽象（测试可注入 Fake）
-        └── DouyinBrowserForm.cs             # 登录/验证码时显示给用户的浏览器窗口
+        └── DouyinBrowserForm.cs             # 单实例浏览器宿主（隐藏解析与可见登录共用）
 
 tests/
 └── Transfor.Tests/                          # 控制台式测试运行器（无框架依赖，全部离线）
