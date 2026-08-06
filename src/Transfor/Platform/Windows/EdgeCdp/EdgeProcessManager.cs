@@ -16,7 +16,7 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
 
     // 启动参数版本标记：启动策略（网络模式等）变更时递增，
     // 复用检查要求旧实例含同标记，避免复用旧参数策略的实例
-    private const string EditionMarker = "--transfor-edition=4";
+    private const string EditionMarker = "--transfor-edition=5";
 
     private readonly string profileDirectory;
     private readonly string edgeExecutable;
@@ -104,6 +104,12 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
             {
                 case MediaNetworkMode.Direct:
                     arguments.Add("--no-proxy-server");
+                    // 系统 DNS 对抖音域不返回 AAAA（IPv6 记录被本地递归 DNS 过滤），
+                    // 而 IPv4 路径可能被服务端封锁——启用 DoH（阿里公共 DNS）动态取得
+                    // AAAA 记录，使 Edge 走 IPv6 路径；DoH 不可用时自动回退系统 DNS
+                    arguments.Add("--enable-features=\"dns-over-https<DoHTrial\"");
+                    arguments.Add("--force-fieldtrials=\"DoHTrial/Group1\"");
+                    arguments.Add("--force-fieldtrial-params=\"DoHTrial.Group1:server/https%3A%2F%2Fdns.alidns.com%2Fdns-query/method/POST\"");
                     break;
 
                 case MediaNetworkMode.System:
