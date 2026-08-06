@@ -133,6 +133,8 @@ internal sealed class DouyinMediaResolver : IMediaResolver
 
         if (data.Assets.Count == 0)
         {
+            // 临时诊断：记录捕获现场供排查结构化路径（定位后移除）
+            CaptureDiagnostics.Write(capture, request.SourceUri);
             return MediaResolveResult.RequiresUserInteraction(
                 capture.StructuredDataJson is null
                     ? "页面未提供可直接解析的数据，请确认已登录后重试。"

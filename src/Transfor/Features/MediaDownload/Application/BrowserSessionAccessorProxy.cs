@@ -120,6 +120,18 @@ internal sealed class BrowserSessionAccessorProxy : IBrowserSessionAccessor
         return current.PrefetchImagesAsync(imageUris, cancellationToken);
     }
 
+    // 可恢复关闭：转发给已附加的会话；未附加时为无操作
+    public ValueTask CloseBrowserAsync(CancellationToken cancellationToken)
+    {
+        IBrowserSessionAccessor? current;
+        lock (sync)
+        {
+            current = inner;
+        }
+
+        return current?.CloseBrowserAsync(cancellationToken) ?? ValueTask.CompletedTask;
+    }
+
     public async ValueTask DisposeAsync()
     {
         IBrowserSessionAccessor? current;

@@ -38,6 +38,9 @@ internal sealed class MediaDownloadCoordinator : IDisposable
     public event EventHandler<MediaDownloadProgress>? TaskProgressChanged;
     public event EventHandler<MediaDownloadTaskCompleted>? TaskCompleted;
 
+    // 批次全部落定后触发（参数为批次 ID）；用于资源收尾（如关闭浏览器会话）
+    public event EventHandler<Guid>? BatchCompleted;
+
     // 入队一个批次；批次串行执行，返回批次全部落定的完成信号
     public Task EnqueueBatchAsync(
         MediaDownloadBatch batch,
@@ -189,6 +192,7 @@ internal sealed class MediaDownloadCoordinator : IDisposable
                 results.Count(r => r.Status == MediaDownloadStatus.Cancelled),
                 DateTimeOffset.UtcNow);
             stateStore.Add(entry);
+            BatchCompleted?.Invoke(this, batch.Id);
         }
         finally
         {

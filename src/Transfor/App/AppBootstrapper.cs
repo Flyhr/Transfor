@@ -37,6 +37,18 @@ internal static class AppBootstrapper
         });
         var resolveCoordinator = new MediaResolveCoordinator(registry);
         var downloadCoordinator = new MediaDownloadCoordinator(downloadService, mediaState);
+        // 批次下载完成即关闭浏览器会话（可恢复：下次解析/下载自动重启，Cookie 保留）
+        downloadCoordinator.BatchCompleted += async (_, _) =>
+        {
+            try
+            {
+                await browserSessions.CloseBrowserAsync(CancellationToken.None);
+            }
+            catch
+            {
+                // 关闭失败不影响下载结果
+            }
+        };
 
         return new AppServices
         {

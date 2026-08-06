@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Transfor;
@@ -281,6 +282,29 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
         }
     }
 
+    // 可恢复关闭：释放 CDP 连接并结束 Edge 进程（批次下载完成后调用）；
+    // 不置终结态，下次使用自动重启，会话 Cookie 保留在独立配置目录
+    public async ValueTask CloseBrowserAsync(CancellationToken cancellationToken)
+    {
+        var conn = connection;
+        connection = null;
+        session = null;
+        initialized = false;
+        if (conn is not null)
+        {
+            try
+            {
+                await conn.DisposeAsync();
+            }
+            catch
+            {
+                // 释放失败不阻断关闭
+            }
+        }
+
+        await processManager.ShutdownAsync();
+    }
+
     public async ValueTask DisposeAsync()
     {
         var conn = connection;
@@ -377,7 +401,8 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
         return raw.StartsWith('{') ? raw : Uri.UnescapeDataString(raw);
     }
 
-    // 通过 Runtime.evaluate 收集页面 DOM 中的媒体元素（轮播图 img 顺序即作品顺序）
+    // 通过 Runtime.evaluate 收集页面 DOM 中的媒体元素（轮播图 img 顺序即作品顺序）；
+    // 携带 naturalWidth/Height 供小尺寸装饰图（头像/表情包）过滤
     private static async Task<IReadOnlyList<BrowserCapturedCandidate>> ExtractDomCandidatesAsync(
         CdpTargetSession target,
         CancellationToken cancellationToken)
@@ -385,14 +410,16 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
         const string script = @"(() => {
             const pick = (el) => {
                 const src = el.currentSrc || el.src;
-                return src && src.startsWith('http') ? src : null;
+                if (!src || !src.startsWith('http')) return null;
+                return { src, w: el.naturalWidth || el.width || 0, h: el.naturalHeight || el.height || 0 };
             };
             const imgs = [...document.querySelectorAll('img')]
                 .map(pick).filter(Boolean);
             const videos = [...document.querySelectorAll('video')]
                 .map(pick).filter(Boolean);
             const sources = [...document.querySelectorAll('video source')]
-                .map(s => s.src).filter(u => u && u.startsWith('http'));
+                .map(s => s.src).filter(u => u && u.startsWith('http'))
+                .map(u => ({ src: u, w: 0, h: 0 }));
             return JSON.stringify({ images: imgs, videos: [...videos, ...sources] });
         })()";
 
@@ -407,35 +434,40 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
             using var document = System.Text.Json.JsonDocument.Parse(raw);
             var root = document.RootElement;
             var results = new List<BrowserCapturedCandidate>();
-            if (root.TryGetProperty("images", out var images) && images.ValueKind == System.Text.Json.JsonValueKind.Array)
-            {
-                var index = 0;
-                foreach (var image in images.EnumerateArray())
-                {
-                    if (image.GetString() is { Length: > 0 } url && Uri.TryCreate(url, UriKind.Absolute, out var uri))
-                    {
-                        results.Add(new BrowserCapturedCandidate(uri, MediaKind.Image, index++, null, null, null, null, BrowserCandidateSource.Dom));
-                    }
-                }
-            }
-
-            if (root.TryGetProperty("videos", out var videos) && videos.ValueKind == System.Text.Json.JsonValueKind.Array)
-            {
-                var index = 0;
-                foreach (var video in videos.EnumerateArray())
-                {
-                    if (video.GetString() is { Length: > 0 } url && Uri.TryCreate(url, UriKind.Absolute, out var uri))
-                    {
-                        results.Add(new BrowserCapturedCandidate(uri, MediaKind.Video, index++, null, null, null, null, BrowserCandidateSource.Dom));
-                    }
-                }
-            }
-
+            CollectFromArray(root, "images", MediaKind.Image, results);
+            CollectFromArray(root, "videos", MediaKind.Video, results);
             return results;
         }
         catch
         {
             return Array.Empty<BrowserCapturedCandidate>();
+        }
+    }
+
+    // 解析 {src,w,h} 候选数组为 BrowserCapturedCandidate（带 DOM 顺序）
+    private static void CollectFromArray(
+        JsonElement root,
+        string propertyName,
+        MediaKind kind,
+        List<BrowserCapturedCandidate> results)
+    {
+        if (!root.TryGetProperty(propertyName, out var array) || array.ValueKind != System.Text.Json.JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var index = 0;
+        foreach (var item in array.EnumerateArray())
+        {
+            var url = item.TryGetProperty("src", out var src) ? src.GetString() : null;
+            if (string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            {
+                continue;
+            }
+
+            int? width = item.TryGetProperty("w", out var w) && w.ValueKind == System.Text.Json.JsonValueKind.Number && w.GetInt32() > 0 ? w.GetInt32() : null;
+            int? height = item.TryGetProperty("h", out var h) && h.ValueKind == System.Text.Json.JsonValueKind.Number && h.GetInt32() > 0 ? h.GetInt32() : null;
+            results.Add(new BrowserCapturedCandidate(uri, kind, index++, width, height, null, null, BrowserCandidateSource.Dom));
         }
     }
 }

@@ -93,6 +93,7 @@ TestDouyinStructuredDataFallbacks();
 TestDouyinDetailEndpointMatcher();
 TestDouyinCandidateFallback();
 TestMagicExtensionDetection();
+TestBatchCompletedEvent();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -2043,27 +2044,47 @@ static void TestDouyinDetailEndpointMatcher()
     AssertEqual(false, DouyinDetailEndpointMatcher.IsDetailEndpoint("https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=1", "Image"), "image type rejected");
 }
 
-// 场景：浏览器候选兜底（DOM 图片顺序、过滤、视频合并；Resolver 端到端）
+// 场景：浏览器候选兜底（视频优先、DOM 图片顺序、小图/特征过滤、Resolver 端到端）
 static void TestDouyinCandidateFallback()
 {
-    // 归一化：DOM 图片顺序保持、去重、头像/Logo 过滤、视频合并
-    var candidates = new BrowserCapturedCandidate[]
+    // 视频优先：视频作品页的 img（封面/头像/表情包）一律不收
+    var videoPageCandidates = new BrowserCapturedCandidate[]
     {
-        new(new Uri("https://media.example/avatar/1.webp"), MediaKind.Image, 0, null, null, null, null, BrowserCandidateSource.Dom),
-        new(new Uri("https://media.example/img/1.webp"), MediaKind.Image, 1, null, null, null, null, BrowserCandidateSource.Dom),
-        new(new Uri("https://media.example/img/2.webp"), MediaKind.Image, 2, null, null, null, null, BrowserCandidateSource.Dom),
-        new(new Uri("https://media.example/img/2.webp"), MediaKind.Image, 3, null, null, null, null, BrowserCandidateSource.Dom),
-        new(new Uri("https://media.example/logo/x.png"), MediaKind.Image, 4, null, null, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/avatar/1.webp"), MediaKind.Image, 0, 50, 50, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/emoji/x.webp"), MediaKind.Image, 1, 100, 100, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/cover/1.webp"), MediaKind.Image, 2, 1080, 1920, null, null, BrowserCandidateSource.Dom),
         new(new Uri("https://media.example/video/main.mp4"), MediaKind.Video, 0, null, null, null, null, BrowserCandidateSource.Dom),
         new(new Uri("https://media.example/video/sub.mp4"), MediaKind.Video, 1, null, null, null, null, BrowserCandidateSource.Dom),
     };
-    var pageData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(candidates);
-    AssertEqual(3, pageData.Assets.Count, "candidate assets: two images + one video");
-    AssertEqual(MediaKind.Image, pageData.Assets[0].Kind, "first asset image");
-    AssertEqual("https://media.example/img/1.webp", pageData.Assets[0].Variants[0].Url, "image order preserved");
-    AssertEqual("https://media.example/img/2.webp", pageData.Assets[1].Variants[0].Url, "second image preserved and deduped");
-    AssertEqual(MediaKind.Video, pageData.Assets[2].Kind, "video asset present");
-    AssertEqual(2, pageData.Assets[2].Variants.Count, "video variants merged");
+    var videoPageData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(videoPageCandidates);
+    AssertEqual(1, videoPageData.Assets.Count, "video page: only video asset");
+    AssertEqual(MediaKind.Video, videoPageData.Assets[0].Kind, "video page: video kind");
+    AssertEqual(2, videoPageData.Assets[0].Variants.Count, "video page: variants merged");
+    AssertEqual(true, videoPageData.Assets[0].Variants.All(v => !v.Url.Contains("avatar") && !v.Url.Contains("emoji") && !v.Url.Contains("cover")), "video page: page images excluded");
+
+    // 图文页：DOM 图片顺序保持、去重、小图（头像/表情包）过滤
+    var imagePageCandidates = new BrowserCapturedCandidate[]
+    {
+        new(new Uri("https://media.example/avatar/1.webp"), MediaKind.Image, 0, 50, 50, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/img/1.webp"), MediaKind.Image, 1, 1080, 1440, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/img/2.webp"), MediaKind.Image, 2, 1080, 1440, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/img/2.webp"), MediaKind.Image, 3, 1080, 1440, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/sticker/x.webp"), MediaKind.Image, 4, 120, 120, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/logo/x.png"), MediaKind.Image, 5, 200, 200, null, null, BrowserCandidateSource.Dom),
+    };
+    var imagePageData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(imagePageCandidates);
+    AssertEqual(2, imagePageData.Assets.Count, "image page: two work images kept");
+    AssertEqual(MediaKind.Image, imagePageData.Assets[0].Kind, "image page: image kind");
+    AssertEqual("https://media.example/img/1.webp", imagePageData.Assets[0].Variants[0].Url, "image order preserved");
+    AssertEqual("https://media.example/img/2.webp", imagePageData.Assets[1].Variants[0].Url, "second image preserved and deduped");
+
+    // 尺寸未知的图片候选保留（交由 URL 特征过滤）
+    var unknownSizeCandidates = new BrowserCapturedCandidate[]
+    {
+        new(new Uri("https://media.example/img/1.webp"), MediaKind.Image, 0, null, null, null, null, BrowserCandidateSource.Dom),
+    };
+    var unknownSizeData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(unknownSizeCandidates);
+    AssertEqual(1, unknownSizeData.Assets.Count, "unknown-size image kept");
 
     // Resolver 端到端：结构化数据缺失但 DOM 候选存在 → 解析成功
     var validator = new SafeUriValidator(new FakeDnsResolver(_ => Task.FromResult(new IPAddress[] { IPAddress.Parse("8.8.8.8") })));
@@ -2071,8 +2092,8 @@ static void TestDouyinCandidateFallback()
     var resolver = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(), validator)), proxy);
     proxy.Attach(new CapturingBrowserSession(null, new BrowserCapturedCandidate[]
     {
-        new(new Uri("https://media.example/img/1.webp"), MediaKind.Image, 0, null, null, null, null, BrowserCandidateSource.Dom),
-        new(new Uri("https://media.example/img/2.webp"), MediaKind.Image, 1, null, null, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/img/1.webp"), MediaKind.Image, 0, 1080, 1440, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/img/2.webp"), MediaKind.Image, 1, 1080, 1440, null, null, BrowserCandidateSource.Dom),
     }));
     var result = resolver.ResolveAsync(new MediaResolveRequest(new Uri("https://www.douyin.com/note/7200000000000000003"), MediaResolveMode.BrowserInteractive, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
     AssertEqual(MediaResolveStatus.Succeeded, result.Status, "candidate fallback resolves");
@@ -2134,6 +2155,37 @@ static void TestMagicExtensionDetection()
         var (saved3, err3) = MediaFileFinalizer.TryFinalizeAsync(part3, Path.Combine(root, "explicit.jpg"), MediaKind.Image, CancellationToken.None).GetAwaiter().GetResult();
         AssertEqual(true, err3 is null && saved3 is not null, "explicit extension finalize succeeds");
         AssertEqual("explicit.jpg", Path.GetFileName(saved3), "explicit extension unchanged");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
+// 场景：批次完成事件（资源收尾信号）
+static void TestBatchCompletedEvent()
+{
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var state = MediaStateStore.Load(new AppPaths(root));
+        using var coordinator = new MediaDownloadCoordinator(new FakeSucceedDownloadService(), state);
+        var post = BuildValidPostForTest();
+        var batch = BuildBatchForTest(post, 2, root);
+
+        var completed = new List<Guid>();
+        coordinator.BatchCompleted += (_, batchId) => completed.Add(batchId);
+
+        coordinator.EnqueueBatchAsync(batch, CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(1, completed.Count, "batch completed fired once");
+        AssertEqual(batch.Id, completed[0], "batch completed carries batch id");
+
+        // 第二个批次再次触发
+        var batch2 = BuildBatchForTest(post, 1, root);
+        coordinator.EnqueueBatchAsync(batch2, CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(2, completed.Count, "second batch completed fired");
+        AssertEqual(batch2.Id, completed[1], "second batch id");
     }
     finally
     {
@@ -2398,6 +2450,8 @@ file sealed class FakeBrowserSession : IBrowserSessionAccessor
         => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    public ValueTask CloseBrowserAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
 }
 
 // 测试替身：读取时抛 IOException 的流内容
@@ -2550,6 +2604,8 @@ file sealed class CapturingBrowserSession : IBrowserSessionAccessor
         => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    public ValueTask CloseBrowserAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
 }
 
 // 测试替身：尚未初始化（IsAvailable=false）但捕获可用的浏览器会话；
@@ -2590,6 +2646,8 @@ file sealed class LazyBrowserSession : IBrowserSessionAccessor
         => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    public ValueTask CloseBrowserAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
 }
 
 // 测试替身：浏览器下载成功的会话（写入一个合法媒体文件并返回）
@@ -2634,6 +2692,8 @@ file sealed class BrowserDownloadSession : IBrowserSessionAccessor
         => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+    public ValueTask CloseBrowserAsync(CancellationToken cancellationToken) => ValueTask.CompletedTask;
 }
 // 测试替身：进程内模拟 CDP 服务器的 HttpListener WebSocket 端点
 file sealed class FakeCdpServer : IDisposable

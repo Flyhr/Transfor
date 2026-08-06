@@ -194,22 +194,28 @@ internal sealed class EdgeProcessManager : IAsyncDisposable
 
         try
         {
-            await startGate.WaitAsync(CancellationToken.None);
-            try
-            {
-                // 结束所有使用本应用 profile 的 msedge 主进程（覆盖句柄失效/复用实例未记录的情况）
-                KillAllByProfile();
-                process = null;
-                browserWsUrl = null;
-            }
-            finally
-            {
-                startGate.Release();
-            }
+            await ShutdownAsync();
         }
         catch
         {
             // 释放失败不掩盖退出流程
+        }
+    }
+
+    // 可恢复关闭：结束所有使用本应用 profile 的 msedge 主进程，
+    // 不置终结态——下次 EnsureStartedAsync 会按当前配置重新启动（会话 Cookie 保留）
+    public async ValueTask ShutdownAsync()
+    {
+        await startGate.WaitAsync(CancellationToken.None);
+        try
+        {
+            KillAllByProfile();
+            process = null;
+            browserWsUrl = null;
+        }
+        finally
+        {
+            startGate.Release();
         }
     }
 

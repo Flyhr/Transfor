@@ -5,10 +5,11 @@ namespace Transfor;
 // 过滤头像/Logo/相关推荐等非作品媒体、不按文件扩展名单独判断媒体类型
 internal static class DouyinMediaNormalizer
 {
-    // URL 中包含这些关键字的候选视为非作品媒体（头像/Logo/相关推荐等）
+    // URL 中包含这些关键字的候选视为非作品媒体（头像/Logo/表情包/评论/相关推荐等）
     private static readonly string[] FilterKeywords =
     {
         "avatar", "icon", "logo", "recommend", "related", "suggest",
+        "emoji", "emoticon", "sticker", "comment", "reply", "face",
     };
 
     public static ResolvedMediaPost Normalize(Uri sourceUri, DouyinPageData data)
@@ -67,7 +68,8 @@ internal static class DouyinMediaNormalizer
     }
 
     // 浏览器捕获候选 → 页面数据兜底：结构化数据缺失时按候选构造资产；
-    // 图片按 DOM 顺序保持多图次序，视频合并为单资产多变体；过滤非作品媒体
+    // 视频作品页只取视频（页面 img 均为封面/头像/表情包/推荐等装饰，不属作品内容）；
+    // 图文页图片按 DOM 顺序保持多图次序，过滤小尺寸（头像/表情包）与非作品 URL
     public static DouyinPageData NormalizeCandidatesToPageData(IReadOnlyList<BrowserCapturedCandidate> candidates)
     {
         var imageCandidates = new List<(int Order, DouyinVariantCandidate Variant)>();
@@ -106,24 +108,39 @@ internal static class DouyinMediaNormalizer
             {
                 videoVariants.Add(variant);
             }
-            else if (kind == MediaKind.Image)
+            else if (kind == MediaKind.Image && !IsLikelySmallImage(candidate))
             {
+                // 头像/表情包等小图（宽或高 < 200px）不作为作品图片
                 imageCandidates.Add((candidate.OrderIndex ?? imageCandidates.Count, variant));
             }
         }
 
         var assets = new List<DouyinAssetCandidate>();
-        var imageIndex = 0;
-        foreach (var image in imageCandidates.OrderBy(item => item.Order))
-        {
-            assets.Add(new DouyinAssetCandidate(imageIndex++, MediaKind.Image, new[] { image.Variant }));
-        }
         if (videoVariants.Count > 0)
         {
+            // 视频优先：视频作品页的图片候选（封面/头像/表情包/推荐）一律不收
             assets.Add(new DouyinAssetCandidate(0, MediaKind.Video, videoVariants));
+        }
+        else
+        {
+            var imageIndex = 0;
+            foreach (var image in imageCandidates.OrderBy(item => item.Order))
+            {
+                assets.Add(new DouyinAssetCandidate(imageIndex++, MediaKind.Image, new[] { image.Variant }));
+            }
         }
 
         return new DouyinPageData(null, null, null, assets, assets.Count == 0, false, null);
+    }
+
+    // 头像/表情包等小尺寸装饰图：宽高均已知且任一维度小于阈值时排除；
+    // 尺寸未知（null）时保留（交由 URL 特征过滤）
+    private static bool IsLikelySmallImage(BrowserCapturedCandidate candidate)
+    {
+        const int MinImageDimension = 200;
+        return candidate.Width.HasValue
+            && candidate.Height.HasValue
+            && (candidate.Width.Value < MinImageDimension || candidate.Height.Value < MinImageDimension);
     }
 
     // 未标注类型的候选按 Content-Type 推断

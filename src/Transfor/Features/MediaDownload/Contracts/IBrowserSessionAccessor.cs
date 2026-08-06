@@ -32,4 +32,8 @@ internal interface IBrowserSessionAccessor : IAsyncDisposable
     Task PrefetchImagesAsync(
         IReadOnlyList<Uri> imageUris,
         CancellationToken cancellationToken);
+
+    // 可恢复关闭：结束浏览器进程与会话（下载批次完成后调用）；
+    // 不置终结态，下次 Capture/Download 时自动重启，会话 Cookie 保留在独立配置目录
+    ValueTask CloseBrowserAsync(CancellationToken cancellationToken);
 }
