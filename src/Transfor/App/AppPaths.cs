@@ -35,6 +35,9 @@ internal sealed class AppPaths
     // 专用 Edge 持久化配置目录（登录态/Cookie/缓存只存于此，不写入普通 JSON）
     public string EdgeProfileDirectory => Path.Combine(ApplicationDirectory, "Edge", "Douyin");
 
+    // 媒体本地缓存目录（解析阶段预取的图片响应，按 URL 哈希命名）
+    public string MediaCacheDirectory => Path.Combine(ApplicationDirectory, "MediaCache");
+
     // 默认状态目录：%LOCALAPPDATA%\Transfor
     public static AppPaths Default => new(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Transfor"));
 }

@@ -84,6 +84,7 @@ TestDouyinTransportPreference();
 TestErrorChainFormatter();
 TestCdpConnection();
 TestEdgeProxyComparison();
+TestMediaCache();
 TestMediaSettingsForm();
 TestMediaPreviewService();
 TestMediaAssetGrid();
@@ -1067,6 +1068,34 @@ static void TestMediaDownloadService()
         // 跨源跳到 cdn.example.com：Referer 被清除
         AssertEqual(true, cookieHandler.Requests[1].Headers.Referrer is null, "cross-origin referer cleared on redirect");
 
+        // 缓存命中：直接从缓存复制，不发起任何网络请求
+        var cacheUri = new Uri("https://cdn.example.com/cached.mp4");
+        var cacheRoot = Path.Combine(root, "cache");
+        var mediaCache = new MediaCache(cacheRoot);
+        using (var ms = new MemoryStream(mp4Body))
+        {
+            mediaCache.SaveAsync(cacheUri, ms, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        var cacheTarget = Path.Combine(root, "cached.mp4");
+        var cacheHandler = new StubHttpHandler(_ => OkMediaResponse(mp4Body));
+        var cacheService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(cacheHandler), validator), null, mediaCache: mediaCache);
+        var cacheResult = cacheService.DownloadAsync(TaskFor(cacheTarget, VariantWith(cacheUri, new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Succeeded, cacheResult.Status, "cache hit downloads from cache");
+        AssertEqual(true, File.Exists(cacheTarget), "cached file saved");
+        AssertEqual(0, cacheHandler.Requests.Count, "no http request when cache hit");
+
+        // 缓存内容无效：清理缓存并回退到网络下载
+        var badCacheUri = new Uri("https://cdn.example.com/badcached.mp4");
+        using (var ms = new MemoryStream(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }))
+        {
+            mediaCache.SaveAsync(badCacheUri, ms, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        var badCacheTarget = Path.Combine(root, "badcached.mp4");
+        var badCacheService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(cacheHandler), validator), null, mediaCache: mediaCache);
+        var badCacheResult = badCacheService.DownloadAsync(TaskFor(badCacheTarget, VariantWith(badCacheUri, new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Succeeded, badCacheResult.Status, "invalid cache falls back to network");
+        AssertEqual(true, mediaCache.GetCachedPath(badCacheUri) is null, "invalid cache entry removed");
+
         // 相同目标内容：幂等成功
         var dupeTarget = Path.Combine(root, "dupe.mp4");
         File.WriteAllBytes(dupeTarget, mp4Body);
@@ -1720,6 +1749,40 @@ static void TestEdgeProxyComparison()
     AssertEqual(false, EdgeProcessManager.ProxyEquals("not-a-proxy", "http://127.0.0.1:7897"), "invalid value treated as different");
 }
 
+// 场景：媒体本地缓存（哈希命名、命中/写入/失效）
+static void TestMediaCache()
+{
+    var root = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        var cache = new MediaCache(Path.Combine(root, "MediaCache"));
+        var uri = new Uri("https://cdn.example.com/1.jpg?x=1");
+
+        // 未命中
+        AssertEqual(true, cache.GetCachedPath(uri) is null, "cache miss initially");
+
+        // 写入后可命中，且同一 URL 哈希稳定
+        using (var ms = new MemoryStream(new byte[] { 1, 2, 3, 4 }))
+        {
+            cache.SaveAsync(uri, ms, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        var cached = cache.GetCachedPath(uri);
+        AssertEqual(true, cached is not null && File.Exists(cached), "cache hit after save");
+
+        var uri2 = new Uri("https://cdn.example.com/2.jpg?x=1");
+        AssertEqual(true, cache.GetCachedPath(uri2) is null, "different url different hash");
+
+        // 失效删除
+        cache.Invalidate(uri);
+        AssertEqual(true, cache.GetCachedPath(uri) is null, "invalidate removes entry");
+    }
+    finally
+    {
+        Directory.Delete(root, recursive: true);
+    }
+}
+
 // 场景：媒体设置窗体（STA）
 static void TestMediaSettingsForm()
 {
@@ -2129,6 +2192,8 @@ file sealed class FakeBrowserSession : IBrowserSessionAccessor
         CookieRequests.Add((browserSessionId, requestUri));
         return Task.FromResult(cookies);
     }
+    public Task PrefetchImagesAsync(IReadOnlyList<Uri> imageUris, CancellationToken cancellationToken)
+        => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
@@ -2277,6 +2342,8 @@ file sealed class CapturingBrowserSession : IBrowserSessionAccessor
 
     public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
         => Task.FromResult<IReadOnlyList<BrowserCookie>>(Array.Empty<BrowserCookie>());
+    public Task PrefetchImagesAsync(IReadOnlyList<Uri> imageUris, CancellationToken cancellationToken)
+        => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
@@ -2315,6 +2382,8 @@ file sealed class LazyBrowserSession : IBrowserSessionAccessor
 
     public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
         => Task.FromResult<IReadOnlyList<BrowserCookie>>(Array.Empty<BrowserCookie>());
+    public Task PrefetchImagesAsync(IReadOnlyList<Uri> imageUris, CancellationToken cancellationToken)
+        => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
@@ -2357,6 +2426,8 @@ file sealed class BrowserDownloadSession : IBrowserSessionAccessor
 
     public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
         => Task.FromResult<IReadOnlyList<BrowserCookie>>(Array.Empty<BrowserCookie>());
+    public Task PrefetchImagesAsync(IReadOnlyList<Uri> imageUris, CancellationToken cancellationToken)
+        => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
@@ -2482,6 +2553,6 @@ file sealed class FakeCdpServer : IDisposable
         running = false;
         try { listener.Stop(); } catch { }
         try { listener.Close(); } catch { }
-        try { serverTask.Wait(1000); } catch { }
+        try { serverTask?.Wait(1000); } catch { }
     }
 }

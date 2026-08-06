@@ -102,6 +102,24 @@ internal sealed class BrowserSessionAccessorProxy : IBrowserSessionAccessor
         return current.GetCookiesAsync(browserSessionId, requestUri, cancellationToken);
     }
 
+    public Task PrefetchImagesAsync(
+        IReadOnlyList<Uri> imageUris,
+        CancellationToken cancellationToken)
+    {
+        IBrowserSessionAccessor? current;
+        lock (sync)
+        {
+            current = inner;
+        }
+
+        if (current is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        return current.PrefetchImagesAsync(imageUris, cancellationToken);
+    }
+
     public async ValueTask DisposeAsync()
     {
         IBrowserSessionAccessor? current;

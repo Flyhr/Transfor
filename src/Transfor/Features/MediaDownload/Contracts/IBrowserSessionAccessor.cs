@@ -26,4 +26,10 @@ internal interface IBrowserSessionAccessor : IAsyncDisposable
         string browserSessionId,
         Uri requestUri,
         CancellationToken cancellationToken);
+
+    // 解析成功后预取图片媒体到本地缓存（尽力而为，不抛异常）：
+    // 页面加载成功的图片响应直接落入缓存，下载时命中即复制，避免再次访问可能失效的 CDN
+    Task PrefetchImagesAsync(
+        IReadOnlyList<Uri> imageUris,
+        CancellationToken cancellationToken);
 }

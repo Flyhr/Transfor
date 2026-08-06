@@ -5,7 +5,8 @@ namespace Transfor;
 
 // Edge CDP 资源下载器：在真实 Edge 网络栈中请求媒体并流式写入 .part；
 // 首选 Network.loadNetworkResource + IO.read（带浏览器 Cookie）；
-// 失败时回退 Fetch 域：拦截页面内 fetch 请求 → takeResponseBodyAsStream → IO.read；
+// 失败时回退页面元素形态：注入真实 <img>/<video> 元素（与页面自身加载同形态），
+// 经 Fetch 域两阶段拦截 → takeResponseBodyAsStream → IO.read；
 // 单文件下载；由调用方负责 .part 清理与最终落盘校验
 internal static class EdgeCdpResourceDownloader
 {
@@ -15,6 +16,7 @@ internal static class EdgeCdpResourceDownloader
     public static async Task<long> DownloadAsync(
         CdpTargetSession session,
         Uri mediaUri,
+        MediaKind kind,
         string partPath,
         CancellationToken cancellationToken,
         IProgress<long>? progress = null)
@@ -27,8 +29,7 @@ internal static class EdgeCdpResourceDownloader
             options = new { disableCache = true, includeCredentials = true },
         }, cancellationToken, timeoutSeconds: 60);
 
-        // 完整读取诊断字段：success/netError/netErrorName/httpStatusCode/stream，
-        // 失败时透出全部信息，避免只看到回退链路的错误而丢失主链路原因
+        // 完整读取诊断字段：success/netError/netErrorName/httpStatusCode/stream
         var resource = result?["resource"] as JsonObject
             ?? throw new InvalidOperationException("Network.loadNetworkResource 未返回 resource。");
         var success = resource["success"]?.GetValue<bool>() ?? false;
@@ -39,8 +40,18 @@ internal static class EdgeCdpResourceDownloader
 
         if (!success || string.IsNullOrWhiteSpace(stream))
         {
-            throw new InvalidOperationException(
-                $"Edge 资源请求失败：success={success}，netError={netError?.ToString() ?? "-"}，netErrorName={netErrorName ?? "-"}，httpStatus={httpStatusCode?.ToString() ?? "-"}。");
+            // 主链路失败：保留诊断信息，尝试页面元素形态回退；
+            // 回退再失败时错误信息同时包含主链路与回退链路原因
+            var primaryInfo = $"success={success}，netError={netError?.ToString() ?? "-"}，netErrorName={netErrorName ?? "-"}，httpStatus={httpStatusCode?.ToString() ?? "-"}";
+            try
+            {
+                return await PageElementFallbackAsync(session, mediaUri, kind, partPath, cancellationToken, progress);
+            }
+            catch (Exception fallbackException)
+            {
+                throw new InvalidOperationException(
+                    $"Edge 资源请求失败：{primaryInfo}（页面元素回退失败：{fallbackException.Message}）。");
+            }
         }
 
         return await ReadStreamToFileAsync(session, stream, partPath, cancellationToken, progress);
@@ -94,13 +105,15 @@ internal static class EdgeCdpResourceDownloader
         }
     }
 
-    // 回退：在页面上下文发起 fetch，用 Fetch 域拦截响应流；
+    // 回退：注入真实 <img>/<video> 页面元素（与页面自身加载同形态），用 Fetch 域拦截响应流；
     // 统一从 Request 阶段拦截（流式/大响应时 Response 阶段拦截可能回退），
     // 对 Request 阶段暂停使用 continueRequest(interceptResponse) 两阶段模式，
-    // 在 Response 阶段再次暂停后取响应体流
-    private static async Task<long> FetchFallbackAsync(
+    // 在 Response 阶段再次暂停后取响应体流；
+    // 读取完成后显式 failRequest 结束被拦截请求（不能裸 Fetch.disable）
+    private static async Task<long> PageElementFallbackAsync(
         CdpTargetSession session,
         Uri mediaUri,
+        MediaKind kind,
         string partPath,
         CancellationToken cancellationToken,
         IProgress<long>? progress)
@@ -110,6 +123,7 @@ internal static class EdgeCdpResourceDownloader
         var secondPause = new TaskCompletionSource<(string RequestId, string? ErrorReason)>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var url = mediaUri.ToString();
+        var finalRequestId = (string?)null;
 
         void OnEvent(string method, JsonNode? parameters, string? eventSessionId)
         {
@@ -146,10 +160,14 @@ internal static class EdgeCdpResourceDownloader
                 },
             }, cancellationToken);
 
-            // 页面上下文发起 fetch（携带页面 Cookie/Referer）；no-cors 避免 CORS 拦截
+            // 注入真实页面元素（图片 <img>，视频 <video preload=auto>），
+            // 请求形态与页面自身加载一致（Sec-Fetch-Dest: image/media）
+            var script = kind == MediaKind.Image
+                ? MediaPagePrefetcher.BuildImgElementScript(mediaUri)
+                : MediaPagePrefetcher.BuildVideoElementScript(mediaUri);
             _ = session.CommandAsync("Runtime.evaluate", new
             {
-                expression = $"fetch({System.Text.Json.JsonSerializer.Serialize(url)}, {{ credentials: 'include', mode: 'no-cors' }})",
+                expression = script,
                 returnByValue = false,
             }, cancellationToken);
 
@@ -164,6 +182,8 @@ internal static class EdgeCdpResourceDownloader
                     TimeSpan.FromSeconds(EventWaitTimeoutSeconds), cancellationToken);
             }
 
+            finalRequestId = requestId;
+
             if (errorReason is not null)
             {
                 throw new InvalidOperationException($"媒体请求被网络层拒绝（{errorReason}）。");
@@ -177,6 +197,18 @@ internal static class EdgeCdpResourceDownloader
         finally
         {
             session.EventReceived -= OnEvent;
+            // 取走响应体后必须明确结束被拦截请求（failRequest），否则请求悬挂
+            if (finalRequestId is not null)
+            {
+                try
+                {
+                    await session.CommandAsync("Fetch.failRequest", new { requestId = finalRequestId, errorReason = "Aborted" }, CancellationToken.None);
+                }
+                catch
+                {
+                    // 请求已结束等场景忽略
+                }
+            }
             try
             {
                 await session.CommandAsync("Fetch.disable", null, CancellationToken.None);

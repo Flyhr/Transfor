@@ -10,6 +10,7 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
     private const int NavigationTimeoutSeconds = 45;
 
     private readonly EdgeProcessManager processManager;
+    private readonly MediaCache mediaCache;
     private readonly string sessionId = Guid.NewGuid().ToString("N");
     private readonly SemaphoreSlim downloadGate = new(1, 1);
     private readonly SemaphoreSlim initGate = new(1, 1);
@@ -18,14 +19,20 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
     private volatile bool initialized;
 
     public EdgeCdpBrowserSessionAccessor(Control uiOwner, AppPaths paths)
-        : this(paths.EdgeProfileDirectory)
+        : this(paths.EdgeProfileDirectory, paths.MediaCacheDirectory)
     {
         ArgumentNullException.ThrowIfNull(uiOwner);
     }
 
     public EdgeCdpBrowserSessionAccessor(string edgeProfileDirectory)
+        : this(edgeProfileDirectory, Path.Combine(Path.GetTempPath(), "Transfor", "MediaCache"))
+    {
+    }
+
+    public EdgeCdpBrowserSessionAccessor(string edgeProfileDirectory, string mediaCacheDirectory)
     {
         processManager = new EdgeProcessManager(edgeProfileDirectory);
+        mediaCache = new MediaCache(mediaCacheDirectory);
     }
 
     public bool IsAvailable => EdgeExecutableLocator.IsAvailable;
@@ -83,9 +90,24 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
 
             try
             {
+                // 缓存命中：直接从缓存复制（解析阶段预取的图片），不再访问网络
+                var cachedPath = mediaCache.GetCachedPath(mediaUri);
+                if (cachedPath is not null)
+                {
+                    var (cachedSaved, cachedError) = await CopyFromCacheAsync(cachedPath, partPath, targetPath, kind, cancellationToken);
+                    if (cachedSaved is not null)
+                    {
+                        return BrowserDownloadResult.Succeeded(cachedSaved);
+                    }
+                    // 缓存内容无效：清理并回退到网络下载
+                    mediaCache.Invalidate(mediaUri);
+                    MediaFileFinalizer.TryDelete(partPath);
+                }
+
                 var total = await EdgeCdpResourceDownloader.DownloadAsync(
                     target,
                     mediaUri,
+                    kind,
                     partPath,
                     cancellationToken,
                     new Progress<long>(bytes => progress?.Report(MediaDownloadProgress.Create(taskId, bytes, null))));
@@ -120,6 +142,30 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
         }
     }
 
+    // 从缓存复制并终化（与网络下载共用魔数/哈希/唯一移动校验）
+    private static async Task<(string? SavedPath, string? Error)> CopyFromCacheAsync(
+        string cachedPath,
+        string partPath,
+        string targetPath,
+        MediaKind kind,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var source = new FileStream(cachedPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            await using var destination = new FileStream(
+                partPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024, useAsync: true);
+            await source.CopyToAsync(destination, cancellationToken);
+            await destination.FlushAsync(cancellationToken);
+        }
+        catch
+        {
+            return (null, "缓存复制失败。");
+        }
+
+        return await MediaFileFinalizer.TryFinalizeAsync(partPath, targetPath, kind, cancellationToken);
+    }
+
     // 从浏览器会话读取与目标 URI 匹配的 Cookie
     public async Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(
         string browserSessionId,
@@ -139,6 +185,23 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
         catch
         {
             return Array.Empty<BrowserCookie>();
+        }
+    }
+
+    // 解析成功后预取图片到本地缓存（尽力而为）：页面加载成功的图片响应直接落盘，
+    // 下载命中缓存即复制，避免再次访问可能失效的 CDN 链接
+    public async Task PrefetchImagesAsync(
+        IReadOnlyList<Uri> imageUris,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var target = await EnsureSessionAsync(cancellationToken);
+            await MediaPagePrefetcher.PrefetchAsync(target, mediaCache, imageUris, cancellationToken);
+        }
+        catch
+        {
+            // 预取失败不影响主流程
         }
     }
 
