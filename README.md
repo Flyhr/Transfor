@@ -18,8 +18,8 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - 粘贴抖音分享文本/链接，解析单视频与多图作品（保持原始顺序），过滤头像、Logo 与相关推荐
 - 每个媒体按「资产—变体」模型管理，自动选择当前可访问的最高质量直接下载版本；`Balanced` 策略优先至少 720p
 - 支持直接图片/视频 URL（`DirectMediaResolver` 兜底）
-- 抖音边缘会对非浏览器 TLS 客户端拒绝握手：应用检测到该拦截（TLS/DNS/连接重置等）时自动改用隐藏 WebView2 网络栈解析页面并下载媒体，本次会话熔断为浏览器优先；无需用户干预
-- 需要登录或验证码时，通过 WebView2 浏览器窗口由用户自行完成登录（独立用户数据目录，不写入普通 JSON；同一实例登录后自动重新加载页面继续解析）
+- 抖音边缘会对非浏览器 TLS 客户端拒绝握手：应用自动改用真实 Edge 网络栈（独立持久化配置目录 + CDP 控制）解析页面、预览与下载媒体，无需用户干预；首次使用时在专用 Edge 中登录抖音一次
+- 需要登录或验证码时，通过专用 Edge 窗口由用户自行完成登录（独立持久化配置目录，不写入普通 JSON；登录态持续复用，后续解析/下载自动携带）
 - 流式下载（`.part` 临时文件 + 原子落盘）、队列进度、单个/全部取消、失败重试；重名文件自动编号不覆盖
 - 图片预览走与正式下载相同的安全链路；媒体设置可配置默认下载目录、并发数（1–8）、默认全选、下载后打开目录与质量策略
 - 关闭主窗口到托盘时下载继续；真正退出且有任务时会先确认再取消任务
@@ -95,16 +95,17 @@ src/Transfor/
     │   └── WindowsWindowInputService.cs     # 前台窗口恢复 + SendInput 模拟 Ctrl+V
     ├── Native/
     │   └── WindowsNative.cs                 # user32.dll 互操作声明与输入结构
-    └── WebView/                             # WebView2 浏览器会话（独立用户数据目录、UI 线程调度）
-        ├── WebView2EnvironmentProvider.cs   # 独立用户数据目录环境创建
-        ├── WebView2BrowserSessionAccessor.cs# 捕获/下载/取 Cookie 实现（UI 线程经调度器访问）
-        ├── WinFormsUiDispatcher.cs          # BeginInvoke 异步 UI 调度（取消/控件销毁防护）
-        ├── IUiDispatcher.cs                 # UI 调度抽象（测试可注入 Fake）
-        └── DouyinBrowserForm.cs             # 单实例浏览器宿主（隐藏解析与可见登录共用）
+    └── EdgeCdp/                             # 真实 Edge + CDP 浏览器会话（独立持久化配置目录）
+        ├── EdgeExecutableLocator.cs         # 定位 msedge.exe（注册表/常见路径）
+        ├── EdgeProcessManager.cs            # 启动/监控/前台/退出清理专用 Edge 进程
+        ├── CdpConnection.cs                 # 轻量 CDP 连接（WebSocket、命令匹配、事件分发）
+        ├── CdpTargetSession.cs              # 页面 target 会话（导航/求值/Cookie/frame）
+        ├── EdgeCdpResourceDownloader.cs     # 浏览器网络栈流式下载（loadNetworkResource/Fetch 回退）
+        └── EdgeCdpBrowserSessionAccessor.cs # 捕获/下载/取 Cookie 实现（实现 IBrowserSessionAccessor）
 
 tests/
 └── Transfor.Tests/                          # 控制台式测试运行器（无框架依赖，全部离线）
-    ├── Program.cs                           # 351 个断言：转换器/迁移/存储/热键/粘贴/网络/解析/下载/队列/UI
+    ├── Program.cs                           # 400+ 断言：转换器/迁移/存储/热键/粘贴/网络/解析/下载/队列/UI/CDP
     ├── Fixtures/MediaDownload/              # 脱敏的抖音页面与结构化数据样本（不含真实凭据）
     └── Transfor.Tests.csproj                # 引用主项目，目标框架 net10.0-windows
 ```
@@ -113,13 +114,13 @@ tests/
 
 - 文本：`settings.json`、`ui-state.json`、`text-history.json`（首次启动新版时迁移旧 `state.json`，成功后备份为 `state.v1.backup.json`；迁移中断会优先使用仍可读取的旧状态恢复）
 - 媒体：`media-settings.json`（默认下载目录/并发数/质量策略等）、`download-history.json`（批次下载记录）
-- WebView2 浏览器数据（Cookie/权限/缓存）仅存于 `WebView2\Douyin\`，不写入普通 JSON；下载历史不保存临时 CDN URL、Cookie 或授权信息
+- 专用 Edge 浏览器数据（Cookie/权限/缓存/登录态）仅存于 `Edge\Douyin\`，不写入普通 JSON；下载历史不保存临时 CDN URL、Cookie 或授权信息
 
 ## 环境要求
 
 - Windows 10/11
 - .NET 10 SDK
-- 浏览器兜底解析需要 WebView2 Runtime（Windows 10/11 通常自带；缺失时仅影响「浏览器登录」解析，直接下载不受影响）
+- 浏览器兜底解析与下载需要 Microsoft Edge（系统自带；首次使用时启动专用实例，登录抖音一次后持续复用登录态）
 
 ## 构建与运行
 
