@@ -78,6 +78,10 @@ TestBrowserProxy();
 TestDouyinPageParser();
 TestDouyinMediaNormalizer();
 TestDouyinMediaResolver();
+TestDouyinTransportClassifier();
+TestDouyinTransportPreference();
+TestErrorChainFormatter();
+TestWebView2EnvironmentProvider();
 TestUiDispatcher();
 TestMediaSettingsForm();
 TestMediaPreviewService();
@@ -600,6 +604,17 @@ static void TestMediaResolveCoordinator()
     var failed = failure.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/a/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
     AssertEqual(MediaResolveStatus.Failed, failed.Status, "unexpected exception becomes failure");
 
+    // 异常链被保留：TLS 外层错误消息应包含内层 IOException 类型与消息
+    var chainResolver = new ThrowingResolver(new HttpRequestException(
+        HttpRequestError.SecureConnectionError,
+        "The SSL connection could not be established, see inner exception.",
+        new IOException("Received an unexpected EOF or 0 bytes from the transport stream.")));
+    var chainFailure = new MediaResolveCoordinator(new MediaResolverRegistry(new IMediaResolver[] { chainResolver }));
+    var chainResult = chainFailure.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/a/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Failed, chainResult.Status, "ssl exception becomes failure");
+    AssertEqual(true, chainResult.Message?.Contains("IOException") == true, "inner exception type surfaced in message");
+    AssertEqual(true, chainResult.Message?.Contains("Received an unexpected EOF") == true, "inner exception message surfaced");
+
     // 取消仍表现为取消，不转换为 Failed
     var cancellingResolver = new FakeResolver(MediaProviderId.Douyin, resultFactory: (_, token) => throw new OperationCanceledException(token));
     var cancel = new MediaResolveCoordinator(new MediaResolverRegistry(new IMediaResolver[] { cancellingResolver }));
@@ -944,6 +959,41 @@ static void TestMediaDownloadService()
             AssertEqual(false, File.Exists(failTarget), "no file on status failure");
         }
 
+        // TLS 握手被拒：不进入浏览器兜底（未挂接浏览器会话）→ Failed 且保留异常链
+        var tlsFailTarget = Path.Combine(root, "tlsfail.mp4");
+        var tlsFailHandler = new ThrowingHttpHandler(new HttpRequestException(
+            HttpRequestError.SecureConnectionError,
+            "The SSL connection could not be established, see inner exception.",
+            new IOException("Received an unexpected EOF or 0 bytes from the transport stream.")));
+        var tlsFailService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(tlsFailHandler), validator), null);
+        var tlsFailResult = tlsFailService.DownloadAsync(TaskFor(tlsFailTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Failed, tlsFailResult.Status, "tls rejection without browser fails");
+        AssertEqual(true, tlsFailResult.Error?.Contains("IOException") == true, "tls failure keeps inner chain");
+
+        // TLS 握手被拒 + 浏览器会话可用：自动转入浏览器网络栈下载 → 成功
+        var tlsBrowserTarget = Path.Combine(root, "tlsbrowser.mp4");
+        var tlsBrowserHandler = new ThrowingHttpHandler(new HttpRequestException(
+            HttpRequestError.SecureConnectionError,
+            "The SSL connection could not be established, see inner exception.",
+            new IOException("Received an unexpected EOF or 0 bytes from the transport stream.")));
+        var browserDownloadSession = new BrowserDownloadSession();
+        var tlsBrowserService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(tlsBrowserHandler), validator), browserDownloadSession);
+        var tlsBrowserTask = TaskFor(tlsBrowserTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset());
+        var tlsBrowserResult = tlsBrowserService.DownloadAsync(tlsBrowserTask, CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Succeeded, tlsBrowserResult.Status, "tls rejection falls back to browser download");
+        AssertEqual(true, File.Exists(tlsBrowserTarget), "browser fallback file exists");
+        AssertEqual(1, browserDownloadSession.DownloadRequests.Count, "browser download invoked once");
+        AssertEqual(tlsBrowserTask.Id, browserDownloadSession.DownloadRequests[0], "browser download receives task id");
+
+        // HTTP 状态失败（404）不触发浏览器兜底
+        var statusBrowserTarget = Path.Combine(root, "statusbrowser.mp4");
+        var statusBrowserHandler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.NotFound) { Content = new ByteArrayContent(Array.Empty<byte>()) });
+        var statusBrowserSession = new BrowserDownloadSession();
+        var statusBrowserService = new MediaDownloadService(new SafeHttpRequestSender(new HttpClient(statusBrowserHandler), validator), statusBrowserSession);
+        var statusBrowserResult = statusBrowserService.DownloadAsync(TaskFor(statusBrowserTarget, VariantWith(new Uri("https://cdn.example.com/v.mp4"), new MediaRequestContext(null, null)), Mp4Asset()), CancellationToken.None).GetAwaiter().GetResult();
+        AssertEqual(MediaDownloadStatus.Failed, statusBrowserResult.Status, "http status failure does not fall back");
+        AssertEqual(0, statusBrowserSession.DownloadRequests.Count, "browser download not invoked on status failure");
+
         // 错误 Content-Type 失败
         var htmlTarget = Path.Combine(root, "html.mp4");
         var htmlHandler = new StubHttpHandler(_ => { var r = OkResponse(Array.Empty<byte>()); r.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/html"); return r; });
@@ -1189,6 +1239,47 @@ static void TestDirectMediaResolver()
     var htmlResolver = new DirectMediaResolver(new SafeHttpRequestSender(new HttpClient(htmlHandler), validator));
     var htmlResult = htmlResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://cdn.example.com/page"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
     AssertEqual(MediaResolveStatus.Unsupported, htmlResult.Status, "direct html unsupported");
+
+    // TLS 握手被拒（如抖音 CDN 域名）+ 已挂接浏览器：按扩展名乐观返回作品（下载阶段走浏览器栈）
+    var tlsHandler = new ThrowingHttpHandler(new HttpRequestException(
+        HttpRequestError.SecureConnectionError,
+        "The SSL connection could not be established, see inner exception.",
+        new IOException("Received an unexpected EOF or 0 bytes from the transport stream.")));
+    var tlsProxy = new BrowserSessionAccessorProxy();
+    tlsProxy.Attach(new FakeBrowserSession());
+    var tlsResolver = new DirectMediaResolver(new SafeHttpRequestSender(new HttpClient(tlsHandler), validator), tlsProxy);
+    var tlsImageResult = tlsResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://p81-sign.douyinpic.com/x/y~tplv-s:1440:2560:q80.jpeg?lk3s=1"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Succeeded, tlsImageResult.Status, "tls-rejected direct image resolves via extension");
+    AssertEqual(MediaKind.Image, tlsImageResult.Post!.Assets[0].Kind, "tls-rejected image kind from extension");
+    var tlsVideoResult = tlsResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyinvod.com/x/y.mp4?video_id=1"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Succeeded, tlsVideoResult.Status, "tls-rejected direct video resolves via extension");
+    AssertEqual(MediaKind.Video, tlsVideoResult.Post!.Assets[0].Kind, "tls-rejected video kind from extension");
+
+    // TLS 被拒 + 浏览器未挂接：维持原行为（异常交由协调器报告）
+    var tlsNoBrowser = new DirectMediaResolver(new SafeHttpRequestSender(new HttpClient(new ThrowingHttpHandler(tlsHandler.Exception)), validator));
+    var tlsNoBrowserThrown = false;
+    try
+    {
+        tlsNoBrowser.ResolveAsync(new MediaResolveRequest(new Uri("https://p81-sign.douyinpic.com/x/y.jpeg"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    }
+    catch (HttpRequestException)
+    {
+        tlsNoBrowserThrown = true;
+    }
+    AssertEqual(true, tlsNoBrowserThrown, "tls rejection without browser still throws");
+
+    // TLS 被拒 + 无扩展名 URL：保持保守，不猜测
+    var tlsUnknown = new DirectMediaResolver(new SafeHttpRequestSender(new HttpClient(new ThrowingHttpHandler(tlsHandler.Exception)), validator), tlsProxy);
+    var tlsUnknownThrown = false;
+    try
+    {
+        tlsUnknown.ResolveAsync(new MediaResolveRequest(new Uri("https://p81-sign.douyinpic.com/tos-cn-i-0813/abc123"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    }
+    catch (HttpRequestException)
+    {
+        tlsUnknownThrown = true;
+    }
+    AssertEqual(true, tlsUnknownThrown, "tls rejection without recognizable extension throws");
 }
 
 // 场景：媒体下载页面 MVP（STA）
@@ -1413,11 +1504,52 @@ static void TestDouyinMediaResolver()
     AssertEqual(1, captured.Post.Assets.Count, "browser capture asset count");
     AssertEqual("session-1", captured.Post.Assets[0].Variants[0].RequestContext.BrowserSessionId, "session id carried, not cookies");
 
-    // Automatic：空壳/登录 → RequiresUserInteraction
+    // 去死锁回归：IsAvailable=false（首次挂接尚未初始化）时 Capture 仍被调用，
+    // 首次初始化发生在捕获内部，而非在解析器前置拦截
+    var lazyProxy = new BrowserSessionAccessorProxy();
+    lazyProxy.Attach(new LazyBrowserSession(ReadFixture("douyin-structured-data.json")));
+    AssertEqual(false, lazyProxy.IsAvailable, "lazy session not yet ready");
+    var lazyResolver = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(), validator)), lazyProxy);
+    var lazyResult = lazyResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://www.douyin.com/video/1"), MediaResolveMode.BrowserInteractive, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Succeeded, lazyResult.Status, "capture called even when not yet initialized");
+
+    // Automatic：空壳/登录 → 浏览器兜底
+    // 浏览器不可用时：RequiresUserInteraction（提示使用浏览器）
     var shellHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ReadFixture("douyin-empty-shell.html"), System.Text.Encoding.UTF8, "text/html") }; return r; });
+    var shellResolverNoBrowser = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(shellHandler), validator)), new BrowserSessionAccessorProxy());
+    var shellResultNoBrowser = shellResolverNoBrowser.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/abc/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.RequiresUserInteraction, shellResultNoBrowser.Status, "empty shell without browser requires interaction");
+
+    // 浏览器兜底成功时：空壳自动转入隐藏浏览器解析并成功
     var shellResolver = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(shellHandler), validator)), proxy);
     var shellResult = shellResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/abc/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
-    AssertEqual(MediaResolveStatus.RequiresUserInteraction, shellResult.Status, "empty shell requires interaction");
+    AssertEqual(MediaResolveStatus.Succeeded, shellResult.Status, "empty shell falls back to hidden browser");
+    AssertEqual("fixture 浏览器捕获样本", shellResult.Post!.Title, "browser fallback title");
+
+    // Automatic：TLS 握手被拒 → 自动转隐藏浏览器 → 成功并熔断
+    var tlsHandler = new ThrowingHttpHandler(new HttpRequestException(
+        HttpRequestError.SecureConnectionError,
+        "The SSL connection could not be established, see inner exception.",
+        new IOException("Received an unexpected EOF or 0 bytes from the transport stream.")));
+    var tlsPreference = new DouyinTransportPreferenceState();
+    var tlsProxy = new BrowserSessionAccessorProxy();
+    tlsProxy.Attach(new CapturingBrowserSession(ReadFixture("douyin-structured-data.json")));
+    var tlsResolver = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(tlsHandler), validator)), tlsProxy, tlsPreference);
+    var tlsResult = tlsResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/abc/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Succeeded, tlsResult.Status, "tls rejection falls back to browser");
+    AssertEqual(1, tlsResult.Post!.Assets.Count, "tls fallback asset count");
+    AssertEqual(1, tlsHandler.Requests.Count, "http attempted once before fallback");
+    AssertEqual(true, tlsPreference.ShouldUseBrowser, "breaker tripped after tls rejection");
+
+    // 熔断后：不再尝试 HttpClient，直接浏览器解析
+    var breakerResult = tlsResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/abc/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.Succeeded, breakerResult.Status, "breaker resolve succeeds via browser");
+    AssertEqual(1, tlsHandler.Requests.Count, "http not attempted after breaker");
+
+    // Automatic：TLS 被拒但浏览器不可用 → RequiresUserInteraction（不吞错误）
+    var tlsNoBrowser = new DouyinMediaResolver(new DouyinHttpPageResolver(new SafeHttpRequestSender(new HttpClient(new ThrowingHttpHandler(tlsHandler.Exception)), validator)), new BrowserSessionAccessorProxy());
+    var tlsNoBrowserResult = tlsNoBrowser.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/abc/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(MediaResolveStatus.RequiresUserInteraction, tlsNoBrowserResult.Status, "tls fallback without browser requires interaction");
 
     // Automatic：删除作品 → Failed
     var removedHandler = new StubHttpHandler(_ => { var r = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(ReadFixture("douyin-removed-page.html"), System.Text.Encoding.UTF8, "text/html") }; return r; });
@@ -1431,6 +1563,77 @@ static void TestDouyinMediaResolver()
     var pageResult = pageResolver.ResolveAsync(new MediaResolveRequest(new Uri("https://v.douyin.com/abc/"), MediaResolveMode.Automatic, new MediaRequestContext(null, null)), CancellationToken.None).GetAwaiter().GetResult();
     AssertEqual(MediaResolveStatus.Succeeded, pageResult.Status, "static page resolves");
     AssertEqual(1, pageResult.Post!.Assets.Count, "static page single video asset");
+}
+
+// 场景：传输失败分类器（结构化分类，不依赖异常消息字符串）
+static void TestDouyinTransportClassifier()
+{
+    static DouyinTransportFailureKind Classify(Exception ex) => DouyinTransportClassifier.Classify(ex);
+
+    // 安全策略拒绝：不进入浏览器兜底
+    var policy = new UriValidationException(UriValidationKind.BlockedByPolicy, "URI 校验失败：目标地址属于禁止访问的网络范围。");
+    AssertEqual(DouyinTransportFailureKind.SecurityPolicyRejected, Classify(policy), "policy rejection classified");
+    AssertEqual(false, DouyinTransportClassifier.ShouldUseBrowserFallback(DouyinTransportFailureKind.SecurityPolicyRejected), "policy rejection not fallback");
+
+    // 带类别的 DNS 失败：可兜底
+    var dns = new UriValidationException(UriValidationKind.DnsFailed, "URI 校验失败：域名解析失败。");
+    AssertEqual(DouyinTransportFailureKind.DnsFailure, Classify(dns), "typed dns failure classified");
+    AssertEqual(true, DouyinTransportClassifier.ShouldUseBrowserFallback(DouyinTransportFailureKind.DnsFailure), "dns failure fallback");
+
+    // HttpRequestException 按 HttpRequestError 分类
+    static HttpRequestException Hre(HttpRequestError error, string message = "m", Exception? inner = null)
+        => new(error, message, inner);
+
+    AssertEqual(DouyinTransportFailureKind.TlsHandshakeRejected, Classify(Hre(HttpRequestError.SecureConnectionError, "ssl", new IOException("EOF"))), "secure connection classified");
+    AssertEqual(true, DouyinTransportClassifier.ShouldUseBrowserFallback(DouyinTransportFailureKind.TlsHandshakeRejected), "tls rejection fallback");
+    AssertEqual(DouyinTransportFailureKind.DnsFailure, Classify(Hre(HttpRequestError.NameResolutionError)), "name resolution classified");
+    AssertEqual(DouyinTransportFailureKind.ConnectionReset, Classify(Hre(HttpRequestError.ConnectionError)), "connection error classified");
+    AssertEqual(DouyinTransportFailureKind.ResponseEnded, Classify(Hre(HttpRequestError.ResponseEnded)), "response ended classified");
+    AssertEqual(DouyinTransportFailureKind.ConnectionReset, Classify(Hre(HttpRequestError.ProxyTunnelError)), "proxy tunnel classified");
+    AssertEqual(DouyinTransportFailureKind.Unknown, Classify(Hre(HttpRequestError.HttpProtocolError)), "protocol error unknown");
+    AssertEqual(false, DouyinTransportClassifier.ShouldUseBrowserFallback(DouyinTransportFailureKind.Unknown), "unknown not fallback");
+
+    // 超时与流中断：可兜底
+    AssertEqual(DouyinTransportFailureKind.Timeout, Classify(new TaskCanceledException("timeout")), "timeout classified");
+    AssertEqual(true, DouyinTransportClassifier.ShouldUseBrowserFallback(DouyinTransportFailureKind.Timeout), "timeout fallback");
+    AssertEqual(DouyinTransportFailureKind.ResponseEnded, Classify(new IOException("stream ended")), "io exception classified");
+
+    // 其他异常：未知且不兜底
+    AssertEqual(DouyinTransportFailureKind.Unknown, Classify(new InvalidOperationException("other")), "other exception unknown");
+}
+
+// 场景：会话级传输熔断（仅当前进程有效，重启复位）
+static void TestDouyinTransportPreference()
+{
+    var state = new DouyinTransportPreferenceState();
+    AssertEqual(false, state.ShouldUseBrowser, "initially automatic");
+
+    state.RecordFailure(DouyinTransportFailureKind.SecurityPolicyRejected);
+    AssertEqual(false, state.ShouldUseBrowser, "policy rejection does not trip breaker");
+
+    state.RecordFailure(DouyinTransportFailureKind.TlsHandshakeRejected);
+    AssertEqual(true, state.ShouldUseBrowser, "tls rejection trips breaker");
+
+    var fresh = new DouyinTransportPreferenceState();
+    fresh.RecordFailure(DouyinTransportFailureKind.DnsFailure);
+    AssertEqual(true, fresh.ShouldUseBrowser, "dns failure trips breaker");
+
+    var fresh2 = new DouyinTransportPreferenceState();
+    fresh2.RecordFailure(DouyinTransportFailureKind.Unknown);
+    AssertEqual(false, fresh2.ShouldUseBrowser, "unknown does not trip breaker");
+}
+
+// 场景：错误链格式化（保留内层异常，限制长度）
+static void TestErrorChainFormatter()
+{
+    var chain = ErrorChainFormatter.Format(new HttpRequestException("外层消息", new IOException("内层消息")));
+    AssertEqual(true, chain.Contains("外层消息") && chain.Contains("[IOException]") && chain.Contains("内层消息"), "chain includes inner type and message");
+
+    var single = ErrorChainFormatter.Format(new InvalidOperationException("solo"));
+    AssertEqual("solo", single, "single exception message only");
+
+    var longText = ErrorChainFormatter.Format(new InvalidOperationException(new string('x', 1000)));
+    AssertEqual(401, longText.Length, "long chain truncated to limit plus ellipsis");
 }
 
 // 场景：UI 调度器（取消、投递失败均在超时内结束）
@@ -1489,6 +1692,49 @@ static void TestUiDispatcher()
             Thread.Sleep(10);
         }
         return task.GetAwaiter().GetResult();
+    }
+}
+
+// 场景：WebView2 环境参数（代理读取与浏览器参数组装）
+static void TestWebView2EnvironmentProvider()
+{
+    var saved = new Dictionary<string, string?>();
+    foreach (var name in new[] { "HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy" })
+    {
+        saved[name] = Environment.GetEnvironmentVariable(name);
+        Environment.SetEnvironmentVariable(name, null);
+    }
+
+    try
+    {
+        // 未设置代理：仅伪装参数
+        var args = WebView2EnvironmentProvider.BuildBrowserArguments();
+        AssertEqual(true, args.Contains("--disable-blink-features=UserAgentClientHint"), "client hint disable always present");
+        AssertEqual(false, args.Contains("--proxy-server"), "no proxy args when unset");
+        AssertEqual(true, WebView2EnvironmentProvider.ReadProxyServer() is null, "no proxy read when unset");
+
+        // HTTPS_PROXY 优先
+        Environment.SetEnvironmentVariable("HTTPS_PROXY", "http://127.0.0.1:7897");
+        Environment.SetEnvironmentVariable("HTTP_PROXY", "http://127.0.0.1:8080");
+        AssertEqual("http://127.0.0.1:7897", WebView2EnvironmentProvider.ReadProxyServer(), "https proxy preferred");
+        var withProxy = WebView2EnvironmentProvider.BuildBrowserArguments();
+        AssertEqual(true, withProxy.Contains("--proxy-server=http://127.0.0.1:7897"), "proxy in browser args");
+
+        // 无效值忽略
+        Environment.SetEnvironmentVariable("HTTPS_PROXY", null);
+        Environment.SetEnvironmentVariable("HTTP_PROXY", "not-a-uri");
+        AssertEqual(true, WebView2EnvironmentProvider.ReadProxyServer() is null, "invalid proxy ignored");
+
+        // socks 代理支持
+        Environment.SetEnvironmentVariable("ALL_PROXY", "socks5://127.0.0.1:1080");
+        AssertEqual("socks5://127.0.0.1:1080", WebView2EnvironmentProvider.ReadProxyServer(), "socks proxy accepted");
+    }
+    finally
+    {
+        foreach (var pair in saved)
+        {
+            Environment.SetEnvironmentVariable(pair.Key, pair.Value);
+        }
     }
 }
 
@@ -1792,6 +2038,42 @@ file sealed class StubHttpHandler : HttpMessageHandler
     }
 }
 
+// 测试替身：发送时抛固定异常的 HTTP handler（模拟 TLS 握手被拒等传输失败）
+file sealed class ThrowingHttpHandler : HttpMessageHandler
+{
+    public ThrowingHttpHandler(Exception exception)
+    {
+        Exception = exception;
+    }
+
+    public Exception Exception { get; }
+
+    public List<HttpRequestMessage> Requests { get; } = new();
+
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Requests.Add(request);
+        return Task.FromException<HttpResponseMessage>(Exception);
+    }
+}
+
+// 测试替身：始终抛异常的解析器
+file sealed class ThrowingResolver : IMediaResolver
+{
+    private readonly Exception exception;
+
+    public ThrowingResolver(Exception exception)
+    {
+        this.exception = exception;
+    }
+
+    public MediaProviderId Provider => MediaProviderId.Douyin;
+    public bool CanResolve(Uri sourceUri) => true;
+
+    public Task<MediaResolveResult> ResolveAsync(MediaResolveRequest request, CancellationToken cancellationToken)
+        => Task.FromException<MediaResolveResult>(exception);
+}
+
 // 测试替身：可编程的 DNS 解析结果（禁止查询真实 DNS）
 file sealed class FakeDnsResolver : IDnsResolver
 {
@@ -1849,6 +2131,16 @@ file sealed class FakeBrowserSession : IBrowserSessionAccessor
 
     public Task<BrowserCaptureResult> CaptureAsync(Uri pageUri, bool interactive, CancellationToken cancellationToken)
         => throw new NotSupportedException("测试替身不支持捕获。");
+
+    public Task<BrowserDownloadResult> DownloadAsync(
+        Uri mediaUri,
+        Guid taskId,
+        string targetPath,
+        MediaKind kind,
+        CancellationToken cancellationToken,
+        IProgress<MediaDownloadProgress>? progress = null,
+        long? maxBytes = null)
+        => throw new NotSupportedException("测试替身不支持下载。");
 
     public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
     {
@@ -1990,6 +2282,96 @@ file sealed class CapturingBrowserSession : IBrowserSessionAccessor
             Array.Empty<BrowserCapturedCandidate>(),
             BrowserCaptureStatus.Succeeded,
             null));
+
+    public Task<BrowserDownloadResult> DownloadAsync(
+        Uri mediaUri,
+        Guid taskId,
+        string targetPath,
+        MediaKind kind,
+        CancellationToken cancellationToken,
+        IProgress<MediaDownloadProgress>? progress = null,
+        long? maxBytes = null)
+        => throw new NotSupportedException("测试替身不支持下载。");
+
+    public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
+        => Task.FromResult<IReadOnlyList<BrowserCookie>>(Array.Empty<BrowserCookie>());
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
+// 测试替身：尚未初始化（IsAvailable=false）但捕获可用的浏览器会话；
+// 用于回归验证解析器不再用 IsAvailable 前置拦截首次初始化
+file sealed class LazyBrowserSession : IBrowserSessionAccessor
+{
+    private readonly string structuredDataJson;
+
+    public LazyBrowserSession(string structuredDataJson)
+    {
+        this.structuredDataJson = structuredDataJson;
+    }
+
+    public bool IsAvailable => false;
+
+    public Task<BrowserCaptureResult> CaptureAsync(Uri pageUri, bool interactive, CancellationToken cancellationToken)
+        => Task.FromResult(new BrowserCaptureResult(
+            "session-lazy",
+            structuredDataJson,
+            null,
+            Array.Empty<BrowserCapturedCandidate>(),
+            BrowserCaptureStatus.Succeeded,
+            null));
+
+    public Task<BrowserDownloadResult> DownloadAsync(
+        Uri mediaUri,
+        Guid taskId,
+        string targetPath,
+        MediaKind kind,
+        CancellationToken cancellationToken,
+        IProgress<MediaDownloadProgress>? progress = null,
+        long? maxBytes = null)
+        => throw new NotSupportedException("测试替身不支持下载。");
+
+    public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
+        => Task.FromResult<IReadOnlyList<BrowserCookie>>(Array.Empty<BrowserCookie>());
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
+// 测试替身：浏览器下载成功的会话（写入一个合法媒体文件并返回）
+file sealed class BrowserDownloadSession : IBrowserSessionAccessor
+{
+    public bool IsAvailable => true;
+
+    public List<Guid> DownloadRequests { get; } = new();
+
+    public Task<BrowserCaptureResult> CaptureAsync(Uri pageUri, bool interactive, CancellationToken cancellationToken)
+        => Task.FromResult(new BrowserCaptureResult(
+            null, null, null, Array.Empty<BrowserCapturedCandidate>(),
+            BrowserCaptureStatus.Unavailable, "测试替身不支持捕获。"));
+
+    public async Task<BrowserDownloadResult> DownloadAsync(
+        Uri mediaUri,
+        Guid taskId,
+        string targetPath,
+        MediaKind kind,
+        CancellationToken cancellationToken,
+        IProgress<MediaDownloadProgress>? progress = null,
+        long? maxBytes = null)
+    {
+        DownloadRequests.Add(taskId);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return BrowserDownloadResult.CancelledResult();
+        }
+        Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+        var partPath = targetPath + $".part.{taskId:N}";
+        // mp4 魔数开头，保证终化校验通过
+        await File.WriteAllBytesAsync(partPath, new byte[] { 0, 0, 0, 0x18, 0x66, 0x74, 0x79, 0x70 }, cancellationToken);
+        var (savedPath, error) = await MediaFileFinalizer.TryFinalizeAsync(partPath, targetPath, kind, cancellationToken);
+        return savedPath is not null
+            ? BrowserDownloadResult.Succeeded(savedPath)
+            : BrowserDownloadResult.Failed(error ?? "测试下载失败。");
+    }
 
     public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
         => Task.FromResult<IReadOnlyList<BrowserCookie>>(Array.Empty<BrowserCookie>());
