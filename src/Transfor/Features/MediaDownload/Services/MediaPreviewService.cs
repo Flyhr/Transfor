@@ -83,6 +83,28 @@ internal sealed class MediaPreviewService : IDisposable
             TryDelete(partPath);
             throw;
         }
+        catch (Exception ex) when (browserSessions is not null
+                                   && DouyinTransportClassifier.ShouldUseBrowserFallback(DouyinTransportClassifier.Classify(ex)))
+        {
+            // HttpClient 被服务端 TLS 指纹拦截：预览转入浏览器网络栈下载（同样限流）
+            TryDelete(partPath);
+            var browserResult = await browserSessions.DownloadAsync(
+                variant.Uri,
+                Guid.Empty,
+                target,
+                MediaKind.Image,
+                cancellationToken,
+                maxBytes: MaxPreviewBytes);
+            if (browserResult.Success && browserResult.TargetPath is not null)
+            {
+                return browserResult.TargetPath;
+            }
+            if (browserResult.Cancelled)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+            throw new InvalidOperationException(browserResult.Error ?? "浏览器预览下载失败。");
+        }
         catch
         {
             TryDelete(partPath);

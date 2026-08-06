@@ -2,6 +2,8 @@ namespace Transfor;
 
 // 安全流式下载服务：复用 SafeHttpRequestSender 的安全链路（每跳校验/重定向/Referer/Cookie），
 // 流式写入 .part.<TaskId> 临时文件，成功后校验魔数与哈希并原子移动；
+// HttpClient 传输被服务端 TLS 指纹拦截（TLS 握手被拒/DNS 失败/重置/EOF/超时）时，
+// 自动转入浏览器网络栈兜底下载（单 WebView2 串行）；
 // 失败/取消清理临时文件；不把整个文件载入内存
 internal sealed class MediaDownloadService : IMediaDownloadService
 {
@@ -100,7 +102,13 @@ internal sealed class MediaDownloadService : IMediaDownloadService
         catch (Exception ex)
         {
             TryDelete(partPath);
-            return MediaDownloadResult.Failed(task.Id, ex.Message);
+            var kind = DouyinTransportClassifier.Classify(ex);
+            if (browserSessions is not null && DouyinTransportClassifier.ShouldUseBrowserFallback(kind))
+            {
+                // HttpClient 链路被服务端 TLS 指纹等拒绝：转入浏览器网络栈下载
+                return await DownloadViaBrowserAsync(task, progress, cancellationToken);
+            }
+            return MediaDownloadResult.Failed(task.Id, ErrorChainFormatter.Format(ex));
         }
     }
 
@@ -136,76 +144,49 @@ internal sealed class MediaDownloadService : IMediaDownloadService
         return request;
     }
 
+    // 浏览器网络栈兜底下载：复用统一终化流程（魔数/哈希/唯一移动）
+    private async Task<MediaDownloadResult> DownloadViaBrowserAsync(
+        MediaDownloadTask task,
+        IProgress<MediaDownloadProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        var result = await browserSessions!.DownloadAsync(
+            task.SelectedVariant.Uri,
+            task.Id,
+            task.TargetPath,
+            task.Asset.Kind,
+            cancellationToken,
+            progress);
+        if (result.Success && result.TargetPath is not null)
+        {
+            return MediaDownloadResult.Success(task.Id, result.TargetPath);
+        }
+        if (result.Cancelled)
+        {
+            return MediaDownloadResult.Cancelled(task.Id);
+        }
+        return MediaDownloadResult.Failed(task.Id, result.Error ?? "浏览器下载失败。");
+    }
+
     // 重新打开临时文件校验魔数；目标已存在且内容相同则幂等成功；
     // 内容不同或不存在则原子移动（竞态时重新生成唯一路径），绝不静默覆盖
-    private async Task<MediaDownloadResult> FinalizeDownloadAsync(
+    private static async Task<MediaDownloadResult> FinalizeDownloadAsync(
         MediaDownloadTask task,
         string partPath)
     {
-        string partHash;
-        using (var partStream = new FileStream(partPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        var (savedPath, error) = await MediaFileFinalizer.TryFinalizeAsync(
+            partPath, task.TargetPath, task.Asset.Kind, CancellationToken.None);
+        if (savedPath is not null)
         {
-            if (!await MediaContentValidator.HasValidMagicNumberAsync(partStream, task.Asset.Kind, CancellationToken.None))
-            {
-                TryDelete(partPath);
-                return MediaDownloadResult.Failed(task.Id, "下载内容不是有效的媒体文件。");
-            }
-
-            partStream.Position = 0;
-            partHash = await MediaHashService.ComputeSha256Async(partStream, CancellationToken.None);
-
-            if (File.Exists(task.TargetPath))
-            {
-                // 目标存在且哈希相同：删除临时文件，幂等成功
-                using var targetStream = new FileStream(task.TargetPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-                var targetHash = await MediaHashService.ComputeSha256Async(targetStream, CancellationToken.None);
-                if (string.Equals(targetHash, partHash, StringComparison.OrdinalIgnoreCase))
-                {
-                    TryDelete(partPath);
-                    return MediaDownloadResult.Success(task.Id, task.TargetPath);
-                }
-            }
+            return MediaDownloadResult.Success(task.Id, savedPath);
         }
 
-        var savedPath = MoveWithUniqueFallback(task.TargetPath, partPath);
-        return MediaDownloadResult.Success(task.Id, savedPath);
-    }
-
-    // 独占移动：目标被并发任务创建时重新生成 (1)(2) 后缀，不覆盖其他任务文件
-    private static string MoveWithUniqueFallback(string targetPath, string partPath)
-    {
-        var directory = Path.GetDirectoryName(targetPath)!;
-        var fileName = Path.GetFileName(targetPath);
-        var attempt = 0;
-        while (true)
-        {
-            var candidate = attempt == 0
-                ? targetPath
-                : DownloadFileNameBuilder.BuildUniquePath(directory, fileName);
-            try
-            {
-                File.Move(partPath, candidate, overwrite: false);
-                return candidate;
-            }
-            catch (IOException) when (File.Exists(candidate) && attempt < 10)
-            {
-                attempt++;
-            }
-        }
+        TryDelete(partPath);
+        return MediaDownloadResult.Failed(task.Id, error ?? "下载内容无效。");
     }
 
     private static void TryDelete(string path)
     {
-        try
-        {
-            if (File.Exists(path))
-            {
-                File.Delete(path);
-            }
-        }
-        catch
-        {
-            // 清理失败不掩盖原始结果
-        }
+        MediaFileFinalizer.TryDelete(path);
     }
 }
