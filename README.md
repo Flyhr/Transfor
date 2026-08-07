@@ -1,6 +1,6 @@
 # Transfor
 
-Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系统托盘，通过全局快捷键随时呼出历史记录面板；媒体下载支持解析抖音分享链接并下载图片/视频。
+Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系统托盘，通过全局快捷键随时呼出历史记录面板；媒体下载支持解析抖音分享链接并下载图片/视频；内置 WebView2 浏览器（独立 Profile 持久化登录态）。
 
 ## 功能
 
@@ -23,6 +23,14 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - 流式下载（`.part` 临时文件 + 原子落盘）、队列进度、单个/全部取消、失败重试；重名文件自动编号不覆盖
 - 图片预览走与正式下载相同的安全链路；媒体设置可配置默认下载目录、并发数（1–8）、默认全选、下载后打开目录与质量策略
 - 关闭主窗口到托盘时下载继续；真正退出且有任务时会先确认再取消任务
+
+### 内置浏览器（WebView2）
+
+- 主窗口「浏览器」页：地址栏 + 后退/前进/刷新/停止，支持访问任意网站（含 douyin.com 登录）
+- 独立 Profile（`%LOCALAPPDATA%\Transfor\Browser\UserData`）：Cookie、LocalStorage、缓存与登录状态持久化，重启应用后保持登录
+- 设置中可清除浏览器数据：Cookie / 缓存 / 全部浏览器数据（登录态一并重置）
+- 初始化失败（如 WebView2 Runtime 缺失）时页面显示明确提示，不影响应用其他功能
+- 依赖系统 Edge WebView2 Runtime（Windows 11 内置；Windows 10 随 Edge 浏览器更新）
 
 ### 应用更新
 
@@ -78,6 +86,10 @@ src/Transfor/
 │       ├── Models/                          # UpdateStatus / UpdateChannel / UpdatePolicy / UpdateCheckResult
 │       ├── Services/                        # UpdateVersion(SemVer) / VersionComparer / UpdateService / IUpdatePolicySource / HttpUpdatePolicySource / IUpdateInstaller / VelopackUpdateInstaller
 │       └── UI/                              # UpdateNoticeForm（可选/强制更新提示）/ UpdateDownloadForm（下载进度+重启）
+│   └── Browser/                             # 内置浏览器（Phase 3）：WebView2 独立 Profile
+│       ├── Contracts/                       # IBrowserService（环境/Profile 生命周期门面）
+│       ├── Services/                        # BrowserService / BrowserProfileService / BrowserNavigationService(地址规范化) / BrowserCookieService
+│       └── UI/                              # BrowserView（地址栏+导航按钮+WebView2 功能页）
 │   └── MediaDownload/                       # 媒体下载：契约、模型、协调器、服务、解析器与 UI
 │       ├── Contracts/                       # IMediaResolver / IMediaDownloadService / IBrowserSessionAccessor / 浏览器捕获模型
 │       ├── Models/                          # MediaAsset / MediaVariant / ResolvedMediaPost / 下载批次/设置/历史等
@@ -134,6 +146,7 @@ tests/
 - Windows 10/11
 - .NET 10 SDK
 - 浏览器兜底解析与下载需要 Microsoft Edge（系统自带；首次使用时启动专用实例，登录抖音一次后持续复用登录态）
+- 内置浏览器页需要 Microsoft Edge WebView2 Runtime（Windows 11 内置；Windows 10 随 Edge 更新自动安装）
 
 ## 构建与运行
 
@@ -178,6 +191,12 @@ dotnet run --project tests/Transfor.Tests
 7. 「媒体设置」可修改默认下载目录、最大并发（1–8）、默认全选、下载后打开目录与质量策略，设置对下一个新批次生效。
 8. 关闭主窗口到托盘时下载继续；真正退出且有任务时会先确认再取消任务。
 9. 合法使用提示：仅下载你有权访问的公开内容，不绕过登录、验证码或访问控制。
+
+### 内置浏览器
+
+10. 切换到「浏览器」页：输入网址（可省略协议，自动补全 https://）或粘贴完整链接，回车或点击「前往」。
+11. 工具栏支持后退/前进/刷新/停止；浏览器登录状态（如抖音）独立持久化，重启应用后保持。
+12. 「设置 → 浏览器数据」可清除 Cookie、缓存或全部浏览器数据（清除后需重新登录）。
 
 ## Rider 调试提示
 

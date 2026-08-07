@@ -26,7 +26,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
         historyStore = services.State;
         hotKeyManager = services.HotKeys;
         updatesService = services.Updates;
-        // 由页面集合构造主窗口外壳：文本转换 + 媒体下载
+        // 由页面集合构造主窗口外壳：文本转换 + 媒体下载 + 浏览器
         var pages = new IFeaturePage[]
         {
             new TextToolsPage(services.State),
@@ -36,6 +36,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
                 services.Media.State,
                 services.Media.EnsureBrowserInitializedAsync,
                 services.Media.Preview),
+            new BrowserView(services.Browser),
         };
         mainForm = new MainForm(pages);
         historyPanel = new HistoryPanelForm(
@@ -143,7 +144,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
     // 以模态对话框打开设置窗口（主窗口不可见时以无所有者方式弹出）
     private void ShowSettings()
     {
-        using var settings = new SettingsForm(historyStore, hotKeyManager);
+        using var settings = new SettingsForm(historyStore, hotKeyManager, services.Browser);
         settings.ShowDialog(mainForm.Visible ? mainForm : null);
     }
 

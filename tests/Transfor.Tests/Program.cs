@@ -105,6 +105,8 @@ TestUpdateCheckFailed();
 TestUpdateChannelFilter();
 TestUpdateChannelPersistence();
 TestUpdateChannelSettingsValidation();
+TestBrowserAddressNormalization();
+TestBrowserProfile();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -2539,6 +2541,37 @@ static void TestUpdateChannelSettingsValidation()
     var invalid = AppSettings.Default with { UpdateChannel = (UpdateChannel)99 };
     AssertThrows<ArgumentOutOfRangeException>(() => invalid.Validate(), "invalid update channel rejected");
     AssertEqual(UpdateChannel.Stable, AppSettings.Default.UpdateChannel, "default channel is Stable");
+}
+
+// Phase 3：浏览器地址规范化（无协议补 https://，拒绝危险协议）
+static void TestBrowserAddressNormalization()
+{
+    AssertEqual("https://douyin.com/", BrowserNavigationService.NormalizeAddress("douyin.com"), "bare domain gets https scheme");
+    AssertEqual("https://douyin.com/", BrowserNavigationService.NormalizeAddress("  douyin.com  "), "whitespace trimmed");
+    AssertEqual("https://www.bilibili.com/", BrowserNavigationService.NormalizeAddress("https://www.bilibili.com/"), "existing https unchanged");
+    AssertEqual("http://example.com/", BrowserNavigationService.NormalizeAddress("http://example.com"), "existing http preserved");
+    AssertEqual("https://v.douyin.com/abc", BrowserNavigationService.NormalizeAddress("v.douyin.com/abc"), "path preserved");
+    AssertThrows<ArgumentException>(() => BrowserNavigationService.NormalizeAddress(""), "empty address rejected");
+    AssertThrows<ArgumentException>(() => BrowserNavigationService.NormalizeAddress("   "), "whitespace address rejected");
+    AssertThrows<ArgumentException>(() => BrowserNavigationService.NormalizeAddress("file:///C:/x"), "file scheme rejected");
+    AssertThrows<ArgumentException>(() => BrowserNavigationService.NormalizeAddress("javascript:alert(1)"), "javascript scheme rejected");
+    AssertThrows<ArgumentException>(() => BrowserNavigationService.NormalizeAddress("https://"), "hostless address rejected");
+}
+
+// Phase 3：浏览器独立 Profile 目录（Task 3.3：%LOCALAPPDATA%\Transfor\Browser\UserData）
+static void TestBrowserProfile()
+{
+    var directory = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    var paths = new AppPaths(directory);
+    AssertEqual(Path.Combine(directory, "Browser", "UserData"), paths.BrowserProfileDirectory, "profile directory path");
+
+    var profile = new BrowserProfileService(paths.BrowserProfileDirectory);
+    profile.EnsureCreated();
+    AssertEqual(true, Directory.Exists(profile.UserDataFolder), "profile directory created");
+
+    var other = new BrowserProfileService(directory + "\\x");
+    AssertEqual(true, other.UserDataFolder.EndsWith("x"), "profile folder normalized");
+    AssertThrows<ArgumentException>(() => new BrowserProfileService(""), "empty profile path rejected");
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常

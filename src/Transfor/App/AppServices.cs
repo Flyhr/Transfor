@@ -15,16 +15,20 @@ internal sealed class AppServices : IDisposable, IAsyncDisposable
     // 更新安装器工厂：按更新通道创建（设置中切换通道后即时生效）
     public required Func<UpdateChannel, IUpdateInstaller> UpdateInstallerFactory { get; init; }
 
+    // 浏览器服务（Phase 3）：WebView2 独立 Profile 环境 + 导航/Cookie/数据清理
+    public required BrowserService Browser { get; init; }
+
     // 粘贴协调器：把历史结果粘贴回呼出前的窗口
     public required PasteCoordinator PasteCoordinator { get; init; }
 
     // 媒体模块服务组合
     public required MediaServices Media { get; init; }
 
-    // 退出时释放全局热键与媒体服务（下载取消、浏览器会话、HttpClient）
+    // 退出时释放全局热键、浏览器与媒体服务（下载取消、浏览器会话、HttpClient）
     public void Dispose()
     {
         HotKeys.Dispose();
+        Browser.Dispose();
         Media.Dispose();
     }
 
@@ -32,6 +36,7 @@ internal sealed class AppServices : IDisposable, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         HotKeys.Dispose();
+        Browser.Dispose();
         await Media.DisposeAsync();
     }
 }
