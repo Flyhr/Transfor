@@ -54,6 +54,19 @@ internal sealed class TransforApplicationContext : ApplicationContext
             // 浏览器不可用不阻断应用启动；相关功能在解析时给出明确提示
         }
 
+        // 启动预初始化隐藏宿主：统一线程锚点 = 主窗体，在构造器（STA 主线程 = UI 线程）
+        // 同步创建，消灭首次解析的懒初始化竞态与跨线程风险；
+        // 失败不阻断启动（解析/下载时给出明确提示）
+        try
+        {
+            services.Browser.UiAnchor = mainForm;
+            services.Browser.EnsureHostCoreAsync(CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // 浏览器宿主不可用不阻断应用启动；相关功能在解析时给出明确提示
+        }
+
         // 创建系统托盘图标：关闭主窗口后进程驻留托盘
         trayIcon = new NotifyIcon
         {

@@ -108,10 +108,14 @@ internal sealed class DouyinMediaResolver : IMediaResolver
         switch (capture.Status)
         {
             case BrowserCaptureStatus.Unavailable:
+                // 临时诊断：失败路径也记录捕获现场（error 含异常链），便于定位浏览器会话故障
+                CaptureDiagnostics.Write(capture, request.SourceUri);
                 return MediaResolveResult.RequiresUserInteraction(capture.Error ?? "浏览器会话不可用。");
             case BrowserCaptureStatus.RequiresUserInteraction:
+                CaptureDiagnostics.Write(capture, request.SourceUri);
                 return MediaResolveResult.RequiresUserInteraction(capture.Error ?? "请在浏览器中完成登录或验证后重试。");
             case BrowserCaptureStatus.Failed:
+                CaptureDiagnostics.Write(capture, request.SourceUri);
                 return MediaResolveResult.Failure(capture.Error ?? "浏览器捕获失败。");
         }
 

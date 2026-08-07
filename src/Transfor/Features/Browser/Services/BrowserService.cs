@@ -43,6 +43,11 @@ internal sealed class BrowserService : IBrowserService, IDisposable
     // 隐藏宿主（Phase 4A）：媒体解析/下载的执行载体；未初始化时调用会抛出
     public BrowserHostForm Host => host ?? throw new InvalidOperationException("浏览器宿主尚未初始化。");
 
+    // 统一 UI 线程锚点：所有浏览器操作一律以主窗体句柄判断/调度，
+    // 消除「InvokeRequired 在句柄未创建时误判为 false → 后台线程执行 WebView2 创建」的跨线程根因；
+    // 由 TransforApplicationContext 在主窗体创建后赋值
+    public Control? UiAnchor { get; set; }
+
     // 在 UI 线程调用：创建独立 Profile 的 WebView2 环境并初始化控件（浏览器页）；
     // 失败时记录原因并抛出，由页面降级显示提示（不崩溃）
     public async Task InitializeAsync(WebView2 webView2)
@@ -69,11 +74,19 @@ internal sealed class BrowserService : IBrowserService, IDisposable
         }
     }
 
-    // 惰性初始化隐藏宿主（首次解析/下载时触发）：窗体与控件必须在 UI 线程创建；
+    // 惰性初始化隐藏宿主（首次解析/下载时触发）：线程调度统一走 UiAnchor（主窗体）；
     // 幂等：重复调用直接返回
-    public async Task EnsureHostAsync(Control uiOwner, CancellationToken cancellationToken)
+    public async Task EnsureHostAsync(CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(uiOwner);
+        var anchor = UiAnchor ?? throw new InvalidOperationException("浏览器 UI 锚点未设置。");
+        await RunOnUiAsync(anchor, () => EnsureHostCoreAsync(cancellationToken), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    // 隐藏宿主核心创建：必须在 UI 线程调用（启动预初始化在构造器直接同步调用；
+    // 其余路径经 EnsureHostAsync 的 RunOnUiAsync 调度）；幂等
+    internal async Task EnsureHostCoreAsync(CancellationToken cancellationToken)
+    {
         lock (sync)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
@@ -83,25 +96,16 @@ internal sealed class BrowserService : IBrowserService, IDisposable
             }
         }
 
-        await RunOnUiAsync(uiOwner, async () =>
+        var env = await GetEnvironmentAsync().ConfigureAwait(true);
+        var newHost = new BrowserHostForm(env);
+        newHost.CreateControl();
+        // 显示化（Opacity=0 不可见）：保证窗口句柄与消息循环稳定，
+        // 避免隐藏窗体边界情况下 InvokeRequired/BeginInvoke 行为异常
+        newHost.Show();
+        lock (sync)
         {
-            lock (sync)
-            {
-                ObjectDisposedException.ThrowIf(disposed, this);
-                if (host is not null)
-                {
-                    return;
-                }
-            }
-
-            var env = await GetEnvironmentAsync().ConfigureAwait(true);
-            var newHost = new BrowserHostForm(env);
-            newHost.CreateControl();
-            lock (sync)
-            {
-                host = newHost;
-            }
-        }, cancellationToken).ConfigureAwait(false);
+            host = newHost;
+        }
     }
 
     // 在 uiOwner 的 UI 线程上执行 action（无返回值版）；已在 UI 线程则直接执行；
@@ -117,6 +121,8 @@ internal sealed class BrowserService : IBrowserService, IDisposable
         {
             throw new InvalidOperationException("主窗口已关闭，无法执行浏览器操作。");
         }
+
+        EnsureUiAnchorReady(uiOwner);
 
         if (uiOwner.InvokeRequired)
         {
@@ -154,6 +160,8 @@ internal sealed class BrowserService : IBrowserService, IDisposable
             throw new InvalidOperationException("主窗口已关闭，无法执行浏览器操作。");
         }
 
+        EnsureUiAnchorReady(uiOwner);
+
         if (uiOwner.InvokeRequired)
         {
             var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -172,6 +180,24 @@ internal sealed class BrowserService : IBrowserService, IDisposable
         }
 
         return await action().ConfigureAwait(false);
+    }
+
+    // 线程调度前保证锚点句柄存在：句柄未创建时 InvokeRequired 恒为 false，
+    // 后台线程会被误判为「已在 UI 线程」直接执行 WebView2 创建 → COM 跨线程崩溃；
+    // 只有当前线程已进入消息循环（确为 UI 线程）才允许就地创建句柄，否则明确报错
+    private static void EnsureUiAnchorReady(Control uiOwner)
+    {
+        if (uiOwner.IsHandleCreated)
+        {
+            return;
+        }
+
+        if (!Application.MessageLoop)
+        {
+            throw new InvalidOperationException("浏览器 UI 锚点尚未就绪（主窗口句柄未创建）。");
+        }
+
+        _ = uiOwner.Handle;
     }
 
     // 共享环境（浏览器页与隐藏宿主共用同一 Profile）；首次创建后缓存

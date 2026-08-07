@@ -31,6 +31,17 @@ internal sealed class BrowserHostForm : Form
         CancellationToken cancellationToken,
         TimeSpan? timeout = null)
     {
+        // 句柄未创建时 InvokeRequired 恒为 false：后台线程会被误判直接执行 → COM 跨线程崩溃；
+        // 宿主已显示化（Show）句柄必然存在，此处仅作最后防线
+        if (!IsHandleCreated)
+        {
+            if (!Application.MessageLoop)
+            {
+                throw new InvalidOperationException("浏览器宿主尚未就绪（句柄未创建）。");
+            }
+            _ = Handle;
+        }
+
         if (InvokeRequired)
         {
             var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);

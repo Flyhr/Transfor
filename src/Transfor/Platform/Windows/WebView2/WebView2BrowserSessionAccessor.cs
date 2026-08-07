@@ -47,7 +47,7 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
     {
         try
         {
-            await browserService.EnsureHostAsync(uiOwner, cancellationToken).ConfigureAwait(false);
+            await browserService.EnsureHostAsync(cancellationToken).ConfigureAwait(false);
             var (structuredJson, domCandidates, networkRecords) = await browserService.Host
                 .CapturePageAsync(pageUri, cancellationToken).ConfigureAwait(false);
 
@@ -109,7 +109,7 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
         await downloadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await browserService.EnsureHostAsync(uiOwner, cancellationToken).ConfigureAwait(false);
+            await browserService.EnsureHostAsync(cancellationToken).ConfigureAwait(false);
             var partPath = $"{targetPath}.part.{taskId:N}";
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
             if (File.Exists(partPath))
@@ -179,7 +179,7 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
 
         try
         {
-            await browserService.EnsureHostAsync(uiOwner, cancellationToken).ConfigureAwait(false);
+            await browserService.EnsureHostAsync(cancellationToken).ConfigureAwait(false);
             return await browserService.Host.GetCookiesAsync(requestUri, cancellationToken).ConfigureAwait(false);
         }
         catch
