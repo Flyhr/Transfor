@@ -1,21 +1,20 @@
 namespace Transfor;
 
 // 更新服务：读取远程策略 → 版本判断 → 返回检查结果；
-// 任何失败都返回 CheckFailed（网络错误绝不升级为 RequiredUpdate，保证应用可运行）
+// 任何失败都返回 CheckFailed（网络错误绝不升级为 RequiredUpdate，保证应用可运行）；
+// 通道随调用传入（设置中可切换，无需重启生效）
 internal sealed class UpdateService : IUpdateService
 {
     private readonly IUpdatePolicySource source;
-    private readonly UpdateChannel channel;
     private readonly string currentVersion;
 
-    public UpdateService(IUpdatePolicySource source, UpdateChannel channel, string currentVersion)
+    public UpdateService(IUpdatePolicySource source, string currentVersion)
     {
         this.source = source ?? throw new ArgumentNullException(nameof(source));
-        this.channel = channel;
         this.currentVersion = currentVersion;
     }
 
-    public async Task<UpdateCheckResult> CheckForUpdatesAsync(CancellationToken cancellationToken)
+    public async Task<UpdateCheckResult> CheckForUpdatesAsync(UpdateChannel channel, CancellationToken cancellationToken)
     {
         if (!UpdateVersion.TryParse(currentVersion, out var current))
         {

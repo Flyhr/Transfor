@@ -11,6 +11,7 @@ internal sealed class SettingsForm : Form
     private readonly ComboBox keyBox;
     private readonly NumericUpDown quoteLimitBox;
     private readonly NumericUpDown spaceLimitBox;
+    private readonly RadioButton betaRadio;
     private readonly Label errorLabel;
     private readonly TextToolId quoteTool = TextToolId.QuoteConversion;
     private readonly TextToolId spaceTool = TextToolId.SpaceRemoval;
@@ -27,7 +28,7 @@ internal sealed class SettingsForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(520, 390);
+        ClientSize = new Size(520, 432);
         Font = new Font("Microsoft YaHei UI", 10F);
 
         var root = new TableLayoutPanel
@@ -35,7 +36,7 @@ internal sealed class SettingsForm : Form
             Dock = DockStyle.Fill,
             Padding = new Padding(16),
             ColumnCount = 2,
-            RowCount = 7,
+            RowCount = 8,
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -43,6 +44,7 @@ internal sealed class SettingsForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 86));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
@@ -75,6 +77,15 @@ internal sealed class SettingsForm : Form
         spaceLimitBox = CreateLimitBox(historyStore.Settings.SpaceHistoryLimit);
         root.Controls.Add(spaceLimitBox, 1, 3);
 
+        // 更新通道：Stable 稳定版（默认）/ Beta 测试版（额外接收预发布）
+        root.Controls.Add(new Label { Text = "更新通道", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 4);
+        var channelPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        var stableRadio = new RadioButton { Text = "Stable 稳定版", AutoSize = true, Checked = historyStore.Settings.UpdateChannel != UpdateChannel.Beta };
+        betaRadio = new RadioButton { Text = "Beta 测试版", AutoSize = true, Checked = historyStore.Settings.UpdateChannel == UpdateChannel.Beta };
+        channelPanel.Controls.Add(stableRadio);
+        channelPanel.Controls.Add(betaRadio);
+        root.Controls.Add(channelPanel, 1, 4);
+
         // 清空历史按钮（各自独立，带确认提示）
         var clearPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
         var clearQuoteButton = new Button { AutoSize = true, Text = "清空引号转换历史" };
@@ -83,7 +94,7 @@ internal sealed class SettingsForm : Form
         clearSpaceButton.Click += (_, _) => ClearHistory(spaceTool, "去除空格");
         clearPanel.Controls.Add(clearQuoteButton);
         clearPanel.Controls.Add(clearSpaceButton);
-        root.Controls.Add(clearPanel, 1, 4);
+        root.Controls.Add(clearPanel, 1, 5);
 
         // 校验/保存错误提示
         errorLabel = new Label
@@ -93,7 +104,7 @@ internal sealed class SettingsForm : Form
             ForeColor = Color.Firebrick,
             TextAlign = ContentAlignment.TopLeft,
         };
-        root.Controls.Add(errorLabel, 0, 5);
+        root.Controls.Add(errorLabel, 0, 6);
         root.SetColumnSpan(errorLabel, 2);
 
         // 底部按钮：取消 / 保存
@@ -103,7 +114,7 @@ internal sealed class SettingsForm : Form
         saveButton.Click += SaveButton_Click;
         buttons.Controls.Add(cancelButton);
         buttons.Controls.Add(saveButton);
-        root.Controls.Add(buttons, 0, 6);
+        root.Controls.Add(buttons, 0, 7);
         root.SetColumnSpan(buttons, 2);
 
         Controls.Add(root);
@@ -177,11 +188,13 @@ internal sealed class SettingsForm : Form
 
             // 组装并校验新设置
             var hotKey = HotKeyBinding.Create(modifiers, key);
+            var updateChannel = betaRadio.Checked ? UpdateChannel.Beta : UpdateChannel.Stable;
             var nextSettings = historyStore.Settings with
             {
                 HistoryHotKey = hotKey,
                 QuoteHistoryLimit = (int)quoteLimitBox.Value,
                 SpaceHistoryLimit = (int)spaceLimitBox.Value,
+                UpdateChannel = updateChannel,
             };
             nextSettings.Validate();
             var oldSettings = historyStore.Settings;

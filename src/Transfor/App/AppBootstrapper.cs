@@ -27,10 +27,9 @@ internal static class AppBootstrapper
         var mediaCache = new MediaCache(paths.MediaCacheDirectory);
         // 下载服务：流式 + 安全链路；Cookie 源经代理（未启用浏览器时为空）
         var downloadService = new MediaDownloadService(requestSender, browserSessions, mediaCache: mediaCache);
-        // 更新服务（Phase 1：仅检查版本，不下载不安装）；通道默认 Stable（设置入口 Phase 2 增加）
+        // 更新服务（Phase 1 检查 + Phase 2 安装）：决策走 update-policy.json，下载安装走 Velopack
         var updateService = new UpdateService(
             new HttpUpdatePolicySource(httpClient, validator),
-            UpdateChannel.Stable,
             AppVersion.Current);
         // 解析器注册：专用解析器（抖音）优先，Direct 最后兜底
         // 抖音传输偏好为会话级熔断状态（进程内共享，重启复位）
@@ -59,6 +58,8 @@ internal static class AppBootstrapper
         {
             State = textState,
             Updates = updateService,
+            // 更新安装器工厂：按当前通道创建（Velopack GitHub 源，Beta 读取预发布）
+            UpdateInstallerFactory = channel => new VelopackUpdateInstaller(channel),
             // 全局快捷键管理器：负责系统级热键的注册/替换/释放
             HotKeys = new GlobalHotKeyManager(),
             // 粘贴协调器：写剪贴板 → 恢复目标窗口 → 模拟 Ctrl+V

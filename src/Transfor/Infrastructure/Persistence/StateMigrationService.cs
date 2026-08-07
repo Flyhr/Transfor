@@ -52,7 +52,7 @@ internal static class StateMigrationService
             var persisted = root.GetProperty("Settings");
             var hotKey = HotKeyBinding.Create((Keys)persisted.GetProperty("HotKeyModifiers").GetInt32(), (Keys)persisted.GetProperty("HotKeyKey").GetInt32());
             var tool = Enum.Parse<TextToolId>(persisted.GetProperty("LastViewedTool").GetString()!, true);
-            var settings = new AppSettings(hotKey, persisted.GetProperty("QuoteHistoryLimit").GetInt32(), persisted.GetProperty("SpaceHistoryLimit").GetInt32()); settings.Validate();
+            var settings = new AppSettings(hotKey, persisted.GetProperty("QuoteHistoryLimit").GetInt32(), persisted.GetProperty("SpaceHistoryLimit").GetInt32(), UpdateChannel.Stable); settings.Validate();
             var history = JsonSerializer.Deserialize<List<HistoryEntry>>(root.GetProperty("History").GetRawText(), Options) ?? [];
             // 校验历史条目：工具枚举合法、输入输出非空
             if (history.Any(entry => !Enum.IsDefined(entry.Tool) || entry.OriginalInput is null || entry.ConvertedOutput is null)) return false;
