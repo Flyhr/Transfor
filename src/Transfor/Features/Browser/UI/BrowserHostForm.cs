@@ -51,8 +51,8 @@ internal sealed class BrowserHostForm : Form
         return await action().ConfigureAwait(false);
     }
 
-    // 捕获页面数据：导航 → 等待加载 → 轮询提取结构化数据与 DOM 候选；
-    // 导航全程记录真实网络请求（供嗅探兜底与真实接口 URL 识别）；
+    // 捕获页面数据：导航 → 等待加载 → 读取 CDP 详情接口响应体（登录态最可靠）→
+    // 轮询提取结构化数据与 DOM 候选；导航全程记录真实网络请求；
     // 可跨线程调用（内部调度 UI 线程）
     public async Task<(string? StructuredJson, IReadOnlyList<BrowserCapturedCandidate> Candidates, IReadOnlyList<NetworkResourceRecord> NetworkRecords)> CapturePageAsync(
         Uri pageUri,
@@ -63,6 +63,8 @@ internal sealed class BrowserHostForm : Form
             var core = await GetCaptureControlAsync().ConfigureAwait(true);
             using var networkCapture = new NetworkCaptureService(core);
             networkCapture.Enable();
+            using var cdpCapture = new CdpNetworkCaptureService(core);
+            await cdpCapture.EnableAsync().ConfigureAwait(true);
 
             var navigationTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e) => navigationTcs.TrySetResult();
@@ -77,8 +79,16 @@ internal sealed class BrowserHostForm : Form
                 core.NavigationCompleted -= OnNavigationCompleted;
             }
 
+            // CDP：登录态详情接口响应体（完整作品数据，优先于页面脚本）
+            string? structuredJson = await cdpCapture
+                .WaitForDetailResponseAsync(TimeSpan.FromSeconds(8), cancellationToken)
+                .ConfigureAwait(true);
+            if (structuredJson is not null && !BrowserCaptureSession.HasWorkData(structuredJson))
+            {
+                structuredJson = null;
+            }
+
             // 轮询提取结构化数据与 DOM 候选（SPA 渲染/懒加载窗口）
-            string? structuredJson = null;
             IReadOnlyList<BrowserCapturedCandidate> candidates = Array.Empty<BrowserCapturedCandidate>();
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
             while (DateTime.UtcNow < deadline)

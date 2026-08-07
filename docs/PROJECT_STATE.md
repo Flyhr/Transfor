@@ -4,9 +4,9 @@
 
 ## 〇、当前版本与路线
 
-- **应用版本**：`0.12.0`（唯一来源：`src/Transfor/Transfor.csproj` 的 `<Version>`，SemVer）
+- **应用版本**：`0.13.0`（唯一来源：`src/Transfor/Transfor.csproj` 的 `<Version>`，SemVer）
 - **浏览器技术路线**：WebView2 已落地（浏览器页 + 隐藏宿主）；媒体解析/下载兜底为 WebView2（`WebView2BrowserSessionAccessor`，与浏览器页共享 Profile 登录态）；旧 Edge CDP 实现保留未删除、不再被实例化
-- **Phase 进度**：Phase 0（架构整理）✅ 标签 `architecture-baseline`；Phase 1（版本检查）✅；Phase 2（Velopack 自动更新）✅；Phase 3（WebView2 浏览器模块）✅；Phase 4A（浏览器兜底切 WebView2）✅；Phase 4B（Network Capture + MediaSniffer）✅ 完成于 dev；Phase 4C（CDP 读响应体）/ 4D（实况专项）未开始
+- **Phase 进度**：Phase 0（架构整理）✅ 标签 `architecture-baseline`；Phase 1（版本检查）✅；Phase 2（Velopack 自动更新）✅；Phase 3（WebView2 浏览器模块）✅；Phase 4A（浏览器兜底切 WebView2）✅；Phase 4B（Network Capture + MediaSniffer）✅；Phase 4C（CDP 响应体捕获）✅ 完成于 dev；Phase 4D（实况专项）未开始
 
 ## 一、项目概述
 
@@ -38,7 +38,7 @@ src/Transfor/
 │  └─ Persistence/  # TextStateStore / MediaStateStore / JsonFileStore / StateMigrationService
 └─ Platform/Windows/
    ├─ Clipboard|HotKeys|Input|Native/
-   ├─ WebView2/    # Phase 4A/4B 当前生效：WebView2BrowserSessionAccessor(IBrowserSessionAccessor) / BrowserCaptureSession(JS 提取) / BrowserDownloadController(fetch 分块下载) / NetworkCaptureService(网络记录)
+   ├─ WebView2/    # Phase 4A/4B/4C 当前生效：WebView2BrowserSessionAccessor(IBrowserSessionAccessor) / BrowserCaptureSession(JS 提取) / BrowserDownloadController(fetch 分块下载) / NetworkCaptureService(网络记录) / CdpNetworkCaptureService(CDP 详情接口响应体)
    └─ EdgeCdp/     # 旧实现：已由 WebView2 替代，保留未删除（EdgeProcessManager / CdpConnection / EdgeCdpResourceDownloader 等）
 tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全量断言，Fixtures/MediaDownload 脱敏样本）
 ```
@@ -71,13 +71,13 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 
 ## 五、当前状态
 
-- **最新提交**：Phase 4B Network Capture + MediaSniffer（dev 分支，未推送）
-- **测试**：670 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
-- **版本**：0.12.0（csproj `<Version>`，唯一来源）
+- **最新提交**：Phase 4C CDP 响应体捕获（dev 分支，未推送）
+- **测试**：676 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
+- **版本**：0.13.0（csproj `<Version>`，唯一来源）
 - **更新体系**：检查走 update-policy.json（GitHub raw `Release` 分支）；下载/安装/重启走 Velopack（GithubSource，Beta 通道读预发布）；`vpk pack -c stable|beta` 已实测通过
-- **浏览器（Phase 3/4A/4B）**：WebView2 1.0.4129.50，独立 Profile `Browser\UserData`；浏览器页 + 隐藏宿主共用登录态；解析/下载兜底 WebView2BrowserSessionAccessor；**4B：导航全程网络捕获（NetworkCaptureService），结构化数据缺失时 MediaSniffer 白名单嗅探兜底 + 真实详情接口 URL 优先 fetch**
+- **浏览器（Phase 3/4A/4B/4C）**：WebView2 1.0.4129.50，独立 Profile `Browser\UserData`；浏览器页 + 隐藏宿主共用登录态；解析/下载兜底 WebView2BrowserSessionAccessor；4B 网络捕获 + MediaSniffer 白名单嗅探；**4C：CDP Network 域读取详情接口响应体（登录态最可靠数据源，优先于页面脚本提取）**
 - **诊断目录**：`%TEMP%\Transfor\diagnostics\`（解析完成 capture-*.json + 下载失败 failed-media-*；临时诊断代码在 CaptureDiagnostics / MediaFileFinalizer.SaveFailureSample，定位后移除）
-- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新包未做代码签名；WebView2 媒体预取未实现（4A 范围外）；响应体读取未实现（4C 的 CDP 能力）；Edge CDP 保留未删除
+- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新包未做代码签名；WebView2 媒体预取未实现；Edge CDP 保留未删除
 
 ## 六、开发注意事项（坑）
 
@@ -86,7 +86,7 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 - WinForms 控件必须在 STA 线程创建（测试用 RunSta）
 - **WebView2**：`Microsoft.Web.WebView2` 汇总包无条件附带 WPF 程序集 → MSB3277 WindowsBase 冲突（良性，已用 `MSBuildWarningsAsMessages` 降级）；`CoreWebView2BrowsingDataKinds` 成员名是 `AllDomStorage`；控件必须 UI 线程 + `EnsureCoreWebView2Async` 异步初始化；**ExecuteScriptAsync 结果按 JSON 编码**（字符串带引号需反序列化，null 为 "null"）
 - **隐藏宿主（Phase 4A/4B）**：解析/下载必须经 `BrowserService.RunOnUiAsync` 或 `BrowserHostForm.RunOnUiAsync` 调度到 UI 线程（带超时防死锁）；与浏览器页共享同一 `CoreWebView2Environment`（同 Profile 多控件官方支持）；下载走页面 fetch + 2MB 分块 base64 传回 C# 写 `.part`，总大小先入内存（大文件超 200MB 有内存压力，后续可改流式）
-- **网络捕获（Phase 4B）**：`WebResourceResponseReceived` 拿不到 ResourceType 与响应体（读 body 是 4C CDP 能力），接口识别走 `DouyinDetailEndpointMatcher`（容忍 null 类型）；嗅探严格模式——结构化 JSON 提取作品媒体 URL 白名单（MediaUrlExtractor），未命中白名单的网络请求一律丢弃，广告/头像/预加载不误抓；噪音关键词与 DouyinMediaNormalizer 保持一致
+- **网络捕获（Phase 4B/4C）**：`WebResourceResponseReceived` 拿不到 ResourceType 与响应体；响应体经 CDP 补齐——`core.GetDevToolsProtocolEventReceiver("Network.responseReceived"/"Network.loadingFinished")` 订阅 + `Network.getResponseBody`（注意：`CoreWebView2` 无 `DevToolsProtocolEventReceived` 事件，必须用 receiver）；嗅探严格模式——结构化 JSON 提取作品媒体 URL 白名单（MediaUrlExtractor），未命中白名单的网络请求一律丢弃；噪音关键词与 DouyinMediaNormalizer 保持一致
 - 媒体解析链：`WebView2BrowserSessionAccessor` 实现 `IBrowserSessionAccessor`，解析/下载/预览调用点零改动；Edge CDP 保留未实例化
 - 更新流程：检查在 Task.Run 后台执行，提示/下载/重启编排经 `InvokeUiAsync` 回 UI 线程；`VelopackApp.Build().Run()` 必须在 Program.Main 最先调用（try/catch 包裹，失败不阻断启动）
 - Velopack：`DownloadUpdatesAsync` 进度为 `Action<int>` 百分比；`Size` 非空 long；`ApplyUpdatesAndRestart(toApply: null, restartArgs: null)`；`vpk pack -c` 默认通道是 win，必须显式传 stable/beta

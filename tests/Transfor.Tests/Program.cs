@@ -111,6 +111,7 @@ TestBrowserCaptureSessionHelpers();
 TestNetworkResourceParsing();
 TestMediaUrlExtractor();
 TestMediaSniffer();
+TestCdpResponseBodyParsing();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -2705,6 +2706,22 @@ static void TestMediaSniffer()
     AssertEqual(true, MediaSniffer.TryClassify("video/mp4", out var k2) && k2 == MediaKind.Video, "mp4 type");
     AssertEqual(false, MediaSniffer.TryClassify("application/json", out _), "json not media type");
     AssertEqual(false, MediaSniffer.TryClassify(null, out _), "null type not media");
+}
+
+// Phase 4C：CDP 响应体解析（Network.getResponseBody 结果 → 文本）
+static void TestCdpResponseBodyParsing()
+{
+    var plain = CdpNetworkCaptureService.ParseResponseBody("{\"body\":\"{\\\"aweme_detail\\\":{}}\",\"base64Encoded\":false}");
+    AssertEqual("{\"aweme_detail\":{}}", plain, "plain body parsed");
+
+    var base64Body = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("{\"aweme_id\":\"123\"}"));
+    var decoded = CdpNetworkCaptureService.ParseResponseBody($"{{\"body\":\"{base64Body}\",\"base64Encoded\":true}}");
+    AssertEqual("{\"aweme_id\":\"123\"}", decoded, "base64 body decoded");
+
+    AssertEqual(null, CdpNetworkCaptureService.ParseResponseBody("not json"), "corrupt result yields null");
+    AssertEqual(null, CdpNetworkCaptureService.ParseResponseBody("{\"error\":{\"message\":\"No resource with given identifier\"}}"), "error result yields null");
+    AssertEqual(null, CdpNetworkCaptureService.ParseResponseBody("{\"base64Encoded\":false}"), "missing body yields null");
+    AssertEqual(null, CdpNetworkCaptureService.ParseResponseBody("{\"body\":\"!!!not-base64!!!\",\"base64Encoded\":true}"), "invalid base64 yields null");
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常

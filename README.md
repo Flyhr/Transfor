@@ -19,7 +19,7 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - 每个媒体按「资产—变体」模型管理，自动选择当前可访问的最高质量直接下载版本；`Balanced` 策略优先至少 720p
 - 支持直接图片/视频 URL（`DirectMediaResolver` 兜底）
 - 抖音边缘会对非浏览器 TLS 客户端拒绝握手：应用自动改用真实浏览器网络栈（WebView2 隐藏宿主，页面 fetch 携带浏览器 Cookie/指纹）解析页面、预览与下载媒体，无需用户干预
-- 解析过程捕获页面真实网络请求（Network Capture）：结构化数据缺失时，命中「作品媒体白名单」的网络请求兜底产出媒体候选（严格模式，广告/头像/预加载绝不误抓）；并按真实详情接口 URL 直取作品数据
+- 解析过程捕获页面真实网络请求（Network Capture）：结构化数据缺失时，命中「作品媒体白名单」的网络请求兜底产出媒体候选（严格模式，广告/头像/预加载绝不误抓）；CDP 读取登录态详情接口响应体作为最可靠的作品数据源，并按真实接口 URL 直取兜底
 - 需要登录或验证码时，在「浏览器」页完成抖音登录（与解析/下载共享同一 Profile 登录态；登录一次持续复用，后续解析/下载自动携带）
 - 流式下载（`.part` 临时文件 + 原子落盘）、队列进度、单个/全部取消、失败重试；重名文件自动编号不覆盖
 - 图片预览走与正式下载相同的安全链路；媒体设置可配置默认下载目录、并发数（1–8）、默认全选、下载后打开目录与质量策略
@@ -122,11 +122,12 @@ src/Transfor/
     │   └── WindowsWindowInputService.cs     # 前台窗口恢复 + SendInput 模拟 Ctrl+V
     ├── Native/
     │   └── WindowsNative.cs                 # user32.dll 互操作声明与输入结构
-    ├── WebView2/                            # WebView2 媒体解析兜底（Phase 4A/4B，当前生效）
+    ├── WebView2/                            # WebView2 媒体解析兜底（Phase 4A/4B/4C，当前生效）
     │   ├── WebView2BrowserSessionAccessor.cs # IBrowserSessionAccessor 实现（捕获/下载/取 Cookie）
     │   ├── BrowserCaptureSession.cs         # 页面数据提取（RENDER_DATA/NEXT_DATA/DOM/详情接口直取）
     │   ├── BrowserDownloadController.cs     # 浏览器网络栈下载（页面 fetch + 分块流式写入 .part）
-    │   └── NetworkCaptureService.cs         # 网络捕获（Phase 4B：URL/Method/Content-Type/Status 记录）
+    │   ├── NetworkCaptureService.cs         # 网络捕获（Phase 4B：URL/Method/Content-Type/Status 记录）
+    │   └── CdpNetworkCaptureService.cs      # CDP 捕获（Phase 4C：详情接口响应体读取）
     └── EdgeCdp/                             # 旧 Edge CDP 实现（已由 WebView2 替代，保留未删除）
 
 tests/
