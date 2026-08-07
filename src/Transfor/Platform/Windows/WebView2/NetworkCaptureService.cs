@@ -55,18 +55,28 @@ internal sealed class NetworkCaptureService : IDisposable
             return;
         }
 
-        var record = Parse(e.Request.Uri, e.Request.Method, e.Response.Headers.GetHeader("Content-Type"), (int)e.Response.StatusCode);
-        if (!seenUrls.Add(record.Uri.ToString()))
+        // WebView2 约束：Response 对象仅在事件回调期间有效——部分请求
+        // （重定向/流响应/导航交替）在回调中已失效，GetHeader 会抛 COMException
+        // 0x80070585（无效索引）。单条记录失败忽略，绝不中断事件链与页面处理
+        try
         {
-            return;
-        }
+            var record = Parse(e.Request.Uri, e.Request.Method, e.Response.Headers.GetHeader("Content-Type"), (int)e.Response.StatusCode);
+            if (!seenUrls.Add(record.Uri.ToString()))
+            {
+                return;
+            }
 
-        if (records.Count >= MaxRecords)
+            if (records.Count >= MaxRecords)
+            {
+                return;
+            }
+
+            records.Add(record);
+        }
+        catch
         {
-            return;
+            // 单条响应记录失败忽略（Response 已失效等），不影响其他请求与后续事件
         }
-
-        records.Add(record);
     }
 
     // 事件原始值 → 记录（纯函数，便于离线测试）；Content-Type 去掉参数部分
