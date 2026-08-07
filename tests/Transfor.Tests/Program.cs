@@ -1388,11 +1388,11 @@ static void TestMediaDownloadPage()
             AssertEqual(true, page.BrowserButtonEnabled, "browser enabled initially");
             AssertEqual(false, page.DownloadButtonEnabled, "download disabled initially");
 
-            // WaitingForUser：浏览器按钮启用，普通解析与下载禁用
+            // WaitingForUser：浏览器按钮启用；普通解析按钮保持可用（用户诉求：不灰）
             page.ResolveInputAsync("https://v.douyin.com/a/").GetAwaiter().GetResult();
             AssertEqual(MediaPageState.WaitingForUser, page.CurrentState, "interaction state");
             AssertEqual(true, page.BrowserButtonEnabled, "browser enabled in waiting state");
-            AssertEqual(false, page.ParseButtonEnabled, "parse disabled in waiting state");
+            AssertEqual(true, page.ParseButtonEnabled, "parse stays enabled in waiting state");
             AssertEqual(false, page.DownloadButtonEnabled, "download disabled in waiting state");
 
             download.Dispose();

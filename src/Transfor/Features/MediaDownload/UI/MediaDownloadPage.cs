@@ -176,6 +176,11 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
 
     private async Task ParseCoreAsync()
     {
+        if (IsBusy)
+        {
+            return;
+        }
+
         try
         {
             var text = inputBox.Text;
@@ -183,7 +188,9 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
             if (uri is null)
             {
                 SetState(MediaPageState.Failed);
-                errorLabel.Text = parseError ?? "未在文本中找到链接。";
+                errorLabel.Text = string.IsNullOrWhiteSpace(text)
+                    ? "请先输入或粘贴抖音分享链接。"
+                    : parseError ?? "未在文本中找到有效链接。";
                 return;
             }
 
@@ -202,13 +209,20 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
 
     private async Task ParseWithBrowserAsync()
     {
+        if (IsBusy)
+        {
+            return;
+        }
+
         try
         {
             var uri = ShareLinkParser.TryExtractFirstLink(inputBox.Text, out var parseError);
             if (uri is null)
             {
                 SetState(MediaPageState.Failed);
-                errorLabel.Text = parseError ?? "未在文本中找到链接。";
+                errorLabel.Text = string.IsNullOrWhiteSpace(inputBox.Text)
+                    ? "请先输入或粘贴抖音分享链接。"
+                    : parseError ?? "未在文本中找到有效链接。";
                 return;
             }
 
@@ -478,11 +492,13 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     private void SetState(MediaPageState state)
     {
         currentState = state;
-        var basicEnabled = state is MediaPageState.Idle or MediaPageState.Resolved or MediaPageState.Completed or MediaPageState.Failed;
-        parseButton.Enabled = basicEnabled;
-        pasteButton.Enabled = basicEnabled;
-        clearButton.Enabled = basicEnabled;
-        browseButton.Enabled = basicEnabled;
+        // 解析/等待交互/失败/成功状态下操作按钮全部可用（避免状态卡死时按钮变灰）；
+        // 仅下载进行中禁用，防止下载期间改动输入与参数
+        var interactive = state is not MediaPageState.Downloading;
+        parseButton.Enabled = interactive;
+        pasteButton.Enabled = interactive;
+        clearButton.Enabled = interactive;
+        browseButton.Enabled = interactive;
         // 浏览器登录在空闲/失败/待交互等状态下始终可用（用户可在任意时刻强制走浏览器解析），
         // 仅解析与下载进行中禁用避免并发操作
         browserButton.Enabled = state is not (MediaPageState.Resolving or MediaPageState.Downloading);
@@ -490,6 +506,9 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         unselectAllButton.Enabled = state == MediaPageState.Resolved;
         downloadButton.Enabled = state == MediaPageState.Resolved;
     }
+
+    // 解析进行中或下载进行中：忽略重复的解析请求（按钮不再禁用，靠状态标志防并发）
+    private bool IsBusy => currentState is MediaPageState.Resolving or MediaPageState.Downloading;
 
     // 进度事件可能在后台线程触发：经 BeginInvoke 切回 UI 线程更新控件
     private void DownloadCoordinator_TaskProgressChanged(object? sender, MediaDownloadProgress e)
