@@ -24,6 +24,12 @@ internal sealed class BrowserCookieService
             return Array.Empty<BrowserCookie>();
         }
 
+        return await ReadCookiesAsync(core, uri).ConfigureAwait(false);
+    }
+
+    // 从任意 CoreWebView2 的 Cookie 管理器读取指定 URI 域下的 Cookie（隐藏宿主复用）
+    internal static async Task<IReadOnlyList<BrowserCookie>> ReadCookiesAsync(CoreWebView2 core, Uri uri)
+    {
         var cookies = await core.CookieManager.GetCookiesAsync(uri.ToString()).ConfigureAwait(false);
         var result = new List<BrowserCookie>(cookies.Count);
         foreach (var cookie in cookies)

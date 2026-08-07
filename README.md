@@ -18,8 +18,8 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - 粘贴抖音分享文本/链接，解析单视频与多图作品（保持原始顺序），过滤头像、Logo 与相关推荐
 - 每个媒体按「资产—变体」模型管理，自动选择当前可访问的最高质量直接下载版本；`Balanced` 策略优先至少 720p
 - 支持直接图片/视频 URL（`DirectMediaResolver` 兜底）
-- 抖音边缘会对非浏览器 TLS 客户端拒绝握手：应用自动改用真实 Edge 网络栈（独立持久化配置目录 + CDP 控制）解析页面、预览与下载媒体，无需用户干预；首次使用时在专用 Edge 中登录抖音一次
-- 需要登录或验证码时，通过专用 Edge 窗口由用户自行完成登录（独立持久化配置目录，不写入普通 JSON；登录态持续复用，后续解析/下载自动携带）
+- 抖音边缘会对非浏览器 TLS 客户端拒绝握手：应用自动改用真实浏览器网络栈（WebView2 隐藏宿主，页面 fetch 携带浏览器 Cookie/指纹）解析页面、预览与下载媒体，无需用户干预
+- 需要登录或验证码时，在「浏览器」页完成抖音登录（与解析/下载共享同一 Profile 登录态；登录一次持续复用，后续解析/下载自动携带）
 - 流式下载（`.part` 临时文件 + 原子落盘）、队列进度、单个/全部取消、失败重试；重名文件自动编号不覆盖
 - 图片预览走与正式下载相同的安全链路；媒体设置可配置默认下载目录、并发数（1–8）、默认全选、下载后打开目录与质量策略
 - 关闭主窗口到托盘时下载继续；真正退出且有任务时会先确认再取消任务
@@ -28,6 +28,7 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 
 - 主窗口「浏览器」页：地址栏 + 后退/前进/刷新/停止，支持访问任意网站（含 douyin.com 登录）
 - 独立 Profile（`%LOCALAPPDATA%\Transfor\Browser\UserData`）：Cookie、LocalStorage、缓存与登录状态持久化，重启应用后保持登录
+- 媒体解析/下载的浏览器兜底（隐藏宿主）与「浏览器」页**共享同一 Profile**：在浏览器页登录抖音一次，解析与下载自动携带登录态
 - 设置中可清除浏览器数据：Cookie / 缓存 / 全部浏览器数据（登录态一并重置）
 - 初始化失败（如 WebView2 Runtime 缺失）时页面显示明确提示，不影响应用其他功能
 - 依赖系统 Edge WebView2 Runtime（Windows 11 内置；Windows 10 随 Edge 浏览器更新）
@@ -86,10 +87,10 @@ src/Transfor/
 │       ├── Models/                          # UpdateStatus / UpdateChannel / UpdatePolicy / UpdateCheckResult
 │       ├── Services/                        # UpdateVersion(SemVer) / VersionComparer / UpdateService / IUpdatePolicySource / HttpUpdatePolicySource / IUpdateInstaller / VelopackUpdateInstaller
 │       └── UI/                              # UpdateNoticeForm（可选/强制更新提示）/ UpdateDownloadForm（下载进度+重启）
-│   └── Browser/                             # 内置浏览器（Phase 3）：WebView2 独立 Profile
+│   └── Browser/                             # 内置浏览器（Phase 3/4A）：WebView2 独立 Profile
 │       ├── Contracts/                       # IBrowserService（环境/Profile 生命周期门面）
-│       ├── Services/                        # BrowserService / BrowserProfileService / BrowserNavigationService(地址规范化) / BrowserCookieService
-│       └── UI/                              # BrowserView（地址栏+导航按钮+WebView2 功能页）
+│       ├── Services/                        # BrowserService（共享环境 + UI 线程调度）/ BrowserProfileService / BrowserNavigationService / BrowserCookieService
+│       └── UI/                              # BrowserView（浏览器功能页）/ BrowserHostForm（解析+下载隐藏宿主）
 │   └── MediaDownload/                       # 媒体下载：契约、模型、协调器、服务、解析器与 UI
 │       ├── Contracts/                       # IMediaResolver / IMediaDownloadService / IBrowserSessionAccessor / 浏览器捕获模型
 │       ├── Models/                          # MediaAsset / MediaVariant / ResolvedMediaPost / 下载批次/设置/历史等
@@ -120,13 +121,11 @@ src/Transfor/
     │   └── WindowsWindowInputService.cs     # 前台窗口恢复 + SendInput 模拟 Ctrl+V
     ├── Native/
     │   └── WindowsNative.cs                 # user32.dll 互操作声明与输入结构
-    └── EdgeCdp/                             # 真实 Edge + CDP 浏览器会话（独立持久化配置目录）
-        ├── EdgeExecutableLocator.cs         # 定位 msedge.exe（注册表/常见路径）
-        ├── EdgeProcessManager.cs            # 启动/监控/前台/退出清理专用 Edge 进程
-        ├── CdpConnection.cs                 # 轻量 CDP 连接（WebSocket、命令匹配、事件分发）
-        ├── CdpTargetSession.cs              # 页面 target 会话（导航/求值/Cookie/frame）
-        ├── EdgeCdpResourceDownloader.cs     # 浏览器网络栈流式下载（loadNetworkResource/Fetch 回退）
-        └── EdgeCdpBrowserSessionAccessor.cs # 捕获/下载/取 Cookie 实现（实现 IBrowserSessionAccessor）
+    ├── WebView2/                            # WebView2 媒体解析兜底（Phase 4A，当前生效）
+    │   ├── WebView2BrowserSessionAccessor.cs # IBrowserSessionAccessor 实现（捕获/下载/取 Cookie）
+    │   ├── BrowserCaptureSession.cs         # 页面数据提取（RENDER_DATA/NEXT_DATA/DOM/详情接口直取）
+    │   └── BrowserDownloadController.cs     # 浏览器网络栈下载（页面 fetch + 分块流式写入 .part）
+    └── EdgeCdp/                             # 旧 Edge CDP 实现（已由 WebView2 替代，保留未删除）
 
 tests/
 └── Transfor.Tests/                          # 控制台式测试运行器（无框架依赖，全部离线）
@@ -139,14 +138,13 @@ tests/
 
 - 文本：`settings.json`、`ui-state.json`、`text-history.json`（首次启动新版时迁移旧 `state.json`，成功后备份为 `state.v1.backup.json`；迁移中断会优先使用仍可读取的旧状态恢复）
 - 媒体：`media-settings.json`（默认下载目录/并发数/质量策略等）、`download-history.json`（批次下载记录）
-- 专用 Edge 浏览器数据（Cookie/权限/缓存/登录态）仅存于 `Edge\Douyin\`，不写入普通 JSON；下载历史不保存临时 CDN URL、Cookie 或授权信息
+- 浏览器数据（Cookie/权限/缓存/登录态）仅存于 `Browser\UserData\`（WebView2 Profile），不写入普通 JSON；下载历史不保存临时 CDN URL、Cookie 或授权信息
 
 ## 环境要求
 
 - Windows 10/11
 - .NET 10 SDK
-- 浏览器兜底解析与下载需要 Microsoft Edge（系统自带；首次使用时启动专用实例，登录抖音一次后持续复用登录态）
-- 内置浏览器页需要 Microsoft Edge WebView2 Runtime（Windows 11 内置；Windows 10 随 Edge 更新自动安装）
+- 浏览器兜底解析与下载需要 Microsoft Edge WebView2 Runtime（Windows 11 内置；Windows 10 随 Edge 更新自动安装）；登录抖音一次后持续复用登录态（在「浏览器」页完成）
 
 ## 构建与运行
 
@@ -186,7 +184,7 @@ dotnet run --project tests/Transfor.Tests
 
 ### 媒体下载
 
-5. 切换到「媒体下载」页：粘贴抖音分享文本或直接图片/视频链接 → 「解析」；页面需要登录或验证码时点击「浏览器登录」在浏览器窗口中完成操作。
+5. 切换到「媒体下载」页：粘贴抖音分享文本或直接图片/视频链接 → 「解析」；页面需要登录或验证码时切换到「浏览器」页完成抖音登录，再返回重试。
 6. 解析后勾选要下载的媒体（可全选），选择保存目录并点击「下载所选」；队列中可取消单个任务，失败行可重试；图片行可点击「预览」。
 7. 「媒体设置」可修改默认下载目录、最大并发（1–8）、默认全选、下载后打开目录与质量策略，设置对下一个新批次生效。
 8. 关闭主窗口到托盘时下载继续；真正退出且有任务时会先确认再取消任务。

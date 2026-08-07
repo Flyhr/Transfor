@@ -141,8 +141,8 @@ internal sealed class DouyinMediaResolver : IMediaResolver
         {
             return MediaResolveResult.RequiresUserInteraction(
                 capture.StructuredDataJson is null
-                    ? "页面未提供可直接解析的数据，请确认已登录后重试。"
-                    : "浏览器页面中未找到可下载的媒体。");
+                    ? "页面未提供可直接解析的数据。请先在「浏览器」页完成抖音登录后重试。"
+                    : "浏览器页面中未找到可下载的媒体。请先在「浏览器」页完成抖音登录后重试。");
         }
 
         // 归一化后所有变体携带会话 ID（用于下载时取 Cookie），但不携带 Cookie 本身

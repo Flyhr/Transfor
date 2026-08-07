@@ -1,0 +1,205 @@
+using System.Text.Json;
+using Microsoft.Web.WebView2.Core;
+
+namespace Transfor;
+
+// 浏览器页面捕获会话（Phase 4A）：在 CoreWebView2 上执行有限 JS，
+// 提取抖音页面结构化数据（RENDER_DATA/__NEXT_DATA__/__INITIAL_STATE__/_SSR_DATA/JSON script）
+// 与 DOM 媒体候选（滚动触发懒加载 + data-src 回退），并在页面数据缺失时经页面 fetch 直取详情接口；
+// 所有方法必须在 UI 线程调用（由隐藏宿主调度）
+internal static class BrowserCaptureSession
+{
+    // 结构化数据提取：优先 RENDER_DATA，其次 __NEXT_DATA__/__INITIAL_STATE__/_SSR_DATA，
+    // 最后首个非 ld+json 的 JSON script（与 Edge CDP 实现同款脚本）
+    private const string StructuredDataScript = @"(() => {
+        const node = document.getElementById('RENDER_DATA');
+        if (node && node.textContent) return node.textContent;
+        try {
+            if (window.__NEXT_DATA__ && typeof window.__NEXT_DATA__ === 'object') return JSON.stringify(window.__NEXT_DATA__);
+            if (window.__INITIAL_STATE__ && typeof window.__INITIAL_STATE__ === 'object') return JSON.stringify(window.__INITIAL_STATE__);
+            if (window._SSR_DATA && typeof window._SSR_DATA === 'object') return JSON.stringify(window._SSR_DATA);
+        } catch (e) { /* 序列化失败忽略 */ }
+        for (const s of document.querySelectorAll('script')) {
+            const t = (s.textContent || '').trim();
+            if (!t.startsWith('{')) continue;
+            const type = (s.type || '').toLowerCase();
+            if (type === 'application/ld+json') continue;
+            return t;
+        }
+        return null;
+    })()";
+
+    // DOM 媒体候选提取：滚动触发懒加载（图文/实况轮播图进入视口才加载），
+    // src 缺失回退 data-src/data-raw-src/data-original；携带 naturalWidth/Height 供过滤
+    private const string DomCandidatesScript = @"(async () => {
+        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+        const body = document.body || document.documentElement;
+        const height = body.scrollHeight;
+        for (let y = 0; y < height; y += 600) {
+            window.scrollTo(0, y);
+            await sleep(80);
+        }
+        window.scrollTo(0, 0);
+        await sleep(400);
+
+        const pick = (el) => {
+            const src = el.currentSrc || el.src
+                || (el.dataset && (el.dataset.src || el.dataset.rawSrc))
+                || el.getAttribute('data-raw-src')
+                || el.getAttribute('data-original')
+                || '';
+            if (!src || !src.startsWith('http')) return null;
+            return { src, w: el.naturalWidth || el.width || 0, h: el.naturalHeight || el.height || 0 };
+        };
+        const imgs = [...document.querySelectorAll('img')]
+            .map(pick).filter(Boolean);
+        const videos = [...document.querySelectorAll('video')]
+            .map(pick).filter(Boolean);
+        const sources = [...document.querySelectorAll('video source')]
+            .map(s => s.src).filter(u => u && u.startsWith('http'))
+            .map(u => ({ src: u, w: 0, h: 0 }));
+        return JSON.stringify({ images: imgs, videos: [...videos, ...sources] });
+    })()";
+
+    // 经页面 fetch 直取详情接口（credentials: include 携带浏览器 Cookie 与指纹）
+    private const string FetchDetailScript = @"(async () => {
+        try {
+            const r = await fetch(URL, { credentials: 'include' });
+            if (!r.ok) return null;
+            return await r.text();
+        } catch (e) { return null; }
+    })()";
+
+    // 提取结构化数据（页面字符串）；ExecuteScriptAsync 结果按 JSON 编码反序列化
+    public static async Task<string?> ExtractStructuredDataAsync(CoreWebView2 core, CancellationToken cancellationToken)
+    {
+        var raw = await core.ExecuteScriptAsync(StructuredDataScript).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(raw) || raw == "null")
+        {
+            return null;
+        }
+
+        try
+        {
+            var value = JsonSerializer.Deserialize<string>(raw);
+            if (value is null)
+            {
+                return null;
+            }
+
+            // RENDER_DATA 可能是 URL 编码的 JSON，解码后交给解析器
+            return value.StartsWith('{') ? value : Uri.UnescapeDataString(value);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // 提取 DOM 媒体候选（DOM 顺序即作品顺序）
+    public static async Task<IReadOnlyList<BrowserCapturedCandidate>> ExtractDomCandidatesAsync(
+        CoreWebView2 core,
+        CancellationToken cancellationToken)
+    {
+        var raw = await core.ExecuteScriptAsync(DomCandidatesScript).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(raw) || raw == "null")
+        {
+            return Array.Empty<BrowserCapturedCandidate>();
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(raw);
+            var root = document.RootElement;
+            var results = new List<BrowserCapturedCandidate>();
+            CollectFromArray(root, "images", MediaKind.Image, results);
+            CollectFromArray(root, "videos", MediaKind.Video, results);
+            return results;
+        }
+        catch
+        {
+            return Array.Empty<BrowserCapturedCandidate>();
+        }
+    }
+
+    // 经页面 fetch 直取详情接口响应文本（登录态最可靠的数据来源）
+    public static async Task<string?> FetchDetailAsync(CoreWebView2 core, Uri detailUri, CancellationToken cancellationToken)
+    {
+        var script = FetchDetailScript.Replace("URL", JsonSerializer.Serialize(detailUri.ToString()), StringComparison.Ordinal);
+        var raw = await core.ExecuteScriptAsync(script).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(raw) || raw == "null")
+        {
+            return null;
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<string>(raw);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // 结构化 JSON 是否含作品数据特征
+    internal static bool HasWorkData(string? json)
+    {
+        if (string.IsNullOrEmpty(json))
+        {
+            return false;
+        }
+
+        return json.Contains("aweme_detail", StringComparison.Ordinal)
+            || json.Contains("\"aweme_id\"", StringComparison.Ordinal);
+    }
+
+    // 从页面配置 JSON 提取作品 ID：优先 pathname（/video/123 或 /note/123），再找 aweme_id 字段
+    internal static string? ExtractWorkId(string? json)
+    {
+        if (string.IsNullOrEmpty(json))
+        {
+            return null;
+        }
+
+        var pathname = System.Text.RegularExpressions.Regex.Match(json, "\"pathname\"\\s*:\\s*\"/[^/\"]+/(\\d+)\"");
+        if (pathname.Success)
+        {
+            return pathname.Groups[1].Value;
+        }
+
+        var awemeId = System.Text.RegularExpressions.Regex.Match(json, "\"aweme_id\"\\s*:\\s*\"(\\d+)\"");
+        return awemeId.Success ? awemeId.Groups[1].Value : null;
+    }
+
+    // 作品详情接口 URL（桌面 web 端参数形态，fetch 时携带会话 Cookie）
+    internal static Uri BuildDetailApiUri(string workId)
+        => new($"https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id={workId}&pc_client_type=1&version_code=190400&version_name=19.4.0&cookie_enabled=true&platform=PC&priority_region=CN&browser_language=zh-CN&browser_platform=Win32&browser_name=Edge&browser_version=151.0.0.0&os=windows");
+
+    // 解析 {src,w,h} 候选数组为 BrowserCapturedCandidate（带 DOM 顺序）
+    private static void CollectFromArray(
+        JsonElement root,
+        string propertyName,
+        MediaKind kind,
+        List<BrowserCapturedCandidate> results)
+    {
+        if (!root.TryGetProperty(propertyName, out var array) || array.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var index = 0;
+        foreach (var item in array.EnumerateArray())
+        {
+            var url = item.TryGetProperty("src", out var src) ? src.GetString() : null;
+            if (string.IsNullOrEmpty(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            {
+                continue;
+            }
+
+            int? width = item.TryGetProperty("w", out var w) && w.ValueKind == JsonValueKind.Number && w.GetInt32() > 0 ? w.GetInt32() : null;
+            int? height = item.TryGetProperty("h", out var h) && h.ValueKind == JsonValueKind.Number && h.GetInt32() > 0 ? h.GetInt32() : null;
+            results.Add(new BrowserCapturedCandidate(uri, kind, index++, width, height, null, null, BrowserCandidateSource.Dom));
+        }
+    }
+}

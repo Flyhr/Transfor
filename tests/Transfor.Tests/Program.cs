@@ -107,6 +107,7 @@ TestUpdateChannelPersistence();
 TestUpdateChannelSettingsValidation();
 TestBrowserAddressNormalization();
 TestBrowserProfile();
+TestBrowserCaptureSessionHelpers();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -2572,6 +2573,27 @@ static void TestBrowserProfile()
     var other = new BrowserProfileService(directory + "\\x");
     AssertEqual(true, other.UserDataFolder.EndsWith("x"), "profile folder normalized");
     AssertThrows<ArgumentException>(() => new BrowserProfileService(""), "empty profile path rejected");
+}
+
+// Phase 4A：WebView2 捕获会话助手（作品 ID 提取/作品数据特征/详情接口 URL，与 Edge CDP 行为对齐）
+static void TestBrowserCaptureSessionHelpers()
+{
+    var configJson = "{\"app\":{\"pathname\":\"/video/7670791950899991451\",\"aweme_id\":\"7670791950899991451\"}}";
+    AssertEqual("7670791950899991451", BrowserCaptureSession.ExtractWorkId(configJson), "work id from pathname");
+    AssertEqual("7670791950899991452", BrowserCaptureSession.ExtractWorkId("{\"pathname\":\"/note/7670791950899991452\"}"), "work id from note pathname");
+    AssertEqual("123456789", BrowserCaptureSession.ExtractWorkId("{\"aweme_id\":\"123456789\"}"), "work id from aweme_id field");
+    AssertEqual(null, BrowserCaptureSession.ExtractWorkId("{\"config\":{\"env\":\"prod\"}}"), "no id returns null");
+    AssertEqual(null, BrowserCaptureSession.ExtractWorkId(null), "null json returns null");
+
+    AssertEqual(true, BrowserCaptureSession.HasWorkData("{\"aweme_detail\":{}}"), "has work data via aweme_detail");
+    AssertEqual(true, BrowserCaptureSession.HasWorkData("{\"data\":{\"aweme_id\":\"1\"}}"), "has work data via aweme_id");
+    AssertEqual(false, BrowserCaptureSession.HasWorkData("{\"app\":{\"pathname\":\"/video/1\"}}"), "config without work data");
+    AssertEqual(false, BrowserCaptureSession.HasWorkData(null), "null has no work data");
+
+    var detailUri = BrowserCaptureSession.BuildDetailApiUri("7670791950899991451");
+    AssertEqual("https", detailUri.Scheme, "detail api https");
+    AssertEqual("www.douyin.com", detailUri.Host, "detail api host");
+    AssertEqual(true, detailUri.Query.Contains("aweme_id=7670791950899991451"), "detail api carries work id");
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常

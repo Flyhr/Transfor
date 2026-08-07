@@ -4,9 +4,9 @@
 
 ## 〇、当前版本与路线
 
-- **应用版本**：`0.10.0`（唯一来源：`src/Transfor/Transfor.csproj` 的 `<Version>`，SemVer）
-- **浏览器技术路线**：Phase 3 起使用 **Microsoft Edge WebView2**（已落地为独立浏览器模块）；媒体解析链仍走 Edge CDP（`Platform/Windows/EdgeCdp`），**Phase 4A 再接入 WebView2 兜底，旧实现保留到新实现成熟**
-- **Phase 进度**：Phase 0（架构整理）✅ 标签 `architecture-baseline`；Phase 1（版本检查）✅；Phase 2（Velopack 自动更新）✅；Phase 3（WebView2 浏览器模块）✅ 完成于分支 `feature/webview2-browser`；Phase 4（浏览器辅助媒体解析）未开始
+- **应用版本**：`0.11.0`（唯一来源：`src/Transfor/Transfor.csproj` 的 `<Version>`，SemVer）
+- **浏览器技术路线**：WebView2 已落地（浏览器页 + 隐藏宿主）；**Phase 4A 起媒体解析/下载兜底切换为 WebView2**（`WebView2BrowserSessionAccessor`，与浏览器页共享 Profile 登录态）；旧 Edge CDP 实现保留未删除、不再被实例化
+- **Phase 进度**：Phase 0（架构整理）✅ 标签 `architecture-baseline`；Phase 1（版本检查）✅；Phase 2（Velopack 自动更新）✅；Phase 3（WebView2 浏览器模块）✅；Phase 4A（浏览器兜底切 WebView2）✅ 完成于 dev；Phase 4B（Network Capture）/ 4C（CDP）/ 4D（实况专项）未开始
 
 ## 一、项目概述
 
@@ -25,7 +25,7 @@ src/Transfor/
 │  ├─ History/     # HistoryEntry / PasteCoordinator / HistoryPanelForm
 │  ├─ Settings/    # AppSettings / HotKeyBinding / SettingsForm
 │  ├─ Updates/     # 版本检查 + Velopack 安装：UpdateService / VersionComparer(UpdateVersion) / IUpdatePolicySource / IUpdateInstaller(VelopackUpdateInstaller, GithubSource) / UpdateNoticeForm + UpdateDownloadForm（进度/取消/重启）
-│  ├─ Browser/     # Phase 3 WebView2：IBrowserService / BrowserService(环境+惰性初始化) / BrowserProfileService(%LOCALAPPDATA%\Transfor\Browser\UserData) / BrowserNavigationService(地址规范化) / BrowserCookieService(GetCookies/ClearCookies/ClearCache/ClearAll) / BrowserView(功能页)
+│  ├─ Browser/     # Phase 3/4A WebView2：IBrowserService / BrowserService(共享环境+UI 线程调度) / BrowserProfileService(%LOCALAPPDATA%\Transfor\Browser\UserData) / BrowserNavigationService(地址规范化) / BrowserCookieService / BrowserView(功能页) / BrowserHostForm(解析+下载隐藏宿主)
 │  └─ MediaDownload/
 │     ├─ Contracts/   # IMediaResolver / IMediaDownloadService / IBrowserSessionAccessor / 浏览器捕获模型
 │     ├─ Models/      # MediaAsset / MediaVariant / ResolvedMediaPost / MediaDownloadBatch/Task/Result/Settings/HistoryEntry / MediaAssetRole
@@ -38,7 +38,8 @@ src/Transfor/
 │  └─ Persistence/  # TextStateStore / MediaStateStore / JsonFileStore / StateMigrationService
 └─ Platform/Windows/
    ├─ Clipboard|HotKeys|Input|Native/
-   └─ EdgeCdp/      # 浏览器兜底：EdgeProcessManager / EdgeCdpBrowserSessionAccessor / CdpConnection / CdpTargetSession / EdgeCdpResourceDownloader / MediaPagePrefetcher / EdgeExecutableLocator / MediaCache
+   ├─ WebView2/    # Phase 4A 当前生效：WebView2BrowserSessionAccessor(IBrowserSessionAccessor) / BrowserCaptureSession(JS 提取) / BrowserDownloadController(fetch 分块下载)
+   └─ EdgeCdp/     # 旧实现：已由 WebView2 替代，保留未删除（EdgeProcessManager / CdpConnection / EdgeCdpResourceDownloader 等）
 tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全量断言，Fixtures/MediaDownload 脱敏样本）
 ```
 
@@ -70,21 +71,22 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 
 ## 五、当前状态
 
-- **最新提交**：Phase 3 WebView2 浏览器模块（分支 `feature/webview2-browser`，未推送）
-- **测试**：627 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
-- **版本**：0.10.0（csproj `<Version>`，唯一来源）
+- **最新提交**：Phase 4A 浏览器兜底切换 WebView2（dev 分支，未推送）
+- **测试**：639 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
+- **版本**：0.11.0（csproj `<Version>`，唯一来源）
 - **更新体系**：检查走 update-policy.json（GitHub raw `Release` 分支）；下载/安装/重启走 Velopack（GithubSource，Beta 通道读预发布）；`vpk pack -c stable|beta` 已实测通过
-- **浏览器（Phase 3）**：WebView2 1.0.4129.50，独立 Profile `Browser\UserData`；「浏览器」功能页 + 设置中清除 Cookie/缓存/全部数据；初始化失败降级提示（Runtime 缺失不崩溃）
+- **浏览器（Phase 3/4A）**：WebView2 1.0.4129.50，独立 Profile `Browser\UserData`；浏览器页 + 隐藏宿主（解析/下载共用同一 Profile 登录态）；媒体解析/下载兜底已切换 WebView2BrowserSessionAccessor（页面 fetch 分块下载，替代 Edge CDP）
 - **诊断目录**：`%TEMP%\Transfor\diagnostics\`（解析完成 capture-*.json + 下载失败 failed-media-*；临时诊断代码在 CaptureDiagnostics / MediaFileFinalizer.SaveFailureSample，定位后移除）
-- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新包未做代码签名；WebView2 与媒体解析链（Edge CDP）尚未对接（Phase 4A）；发布依赖系统 Evergreen WebView2 Runtime
+- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新包未做代码签名；WebView2 媒体预取未实现（4A 范围外，下载不受影响）；Edge CDP 保留未删除
 
 ## 六、开发注意事项（坑）
 
 - 测试运行器 Program.cs：**file 类必须放文件末尾**（顶层语句之后）；测试计数用静态 TestCounter.Passed
 - 勿用 PowerShell `-replace` 处理含 `\r\n` 字面量的文件（会误伤 C# 转义序列）——用 Edit 工具
 - WinForms 控件必须在 STA 线程创建（测试用 RunSta）
-- **WebView2（Phase 3 之后）**：`Microsoft.Web.WebView2` 汇总包无条件附带 WPF 程序集 → MSB3277 WindowsBase 冲突（良性，已用 `MSBuildWarningsAsMessages` 降级）；`CoreWebView2BrowsingDataKinds` 成员名是 `AllDomStorage`（非 AllDomesticStorage）；控件必须 UI 线程 + `EnsureCoreWebView2Async` 异步初始化，失败捕获降级；WebView2 进程随控件 Dispose（主窗口关闭）自动回收
-- 媒体解析链仍为 Edge CDP（Platform/Windows/EdgeCdp），**Phase 4A 起经 IBrowserSessionAccessor 切换 WebView2，旧实现保留**
+- **WebView2**：`Microsoft.Web.WebView2` 汇总包无条件附带 WPF 程序集 → MSB3277 WindowsBase 冲突（良性，已用 `MSBuildWarningsAsMessages` 降级）；`CoreWebView2BrowsingDataKinds` 成员名是 `AllDomStorage`；控件必须 UI 线程 + `EnsureCoreWebView2Async` 异步初始化；**ExecuteScriptAsync 结果按 JSON 编码**（字符串带引号需反序列化，null 为 "null"）
+- **隐藏宿主（Phase 4A）**：解析/下载必须经 `BrowserService.RunOnUiAsync` 或 `BrowserHostForm.RunOnUiAsync` 调度到 UI 线程（带超时防死锁）；与浏览器页共享同一 `CoreWebView2Environment`（同 Profile 多控件官方支持）；下载走页面 fetch + 2MB 分块 base64 传回 C# 写 `.part`，总大小先入内存（大文件超 200MB 有内存压力，后续可改流式）
+- 媒体解析链：`WebView2BrowserSessionAccessor` 实现 `IBrowserSessionAccessor`，解析/下载/预览调用点零改动；Edge CDP 保留未实例化
 - 更新流程：检查在 Task.Run 后台执行，提示/下载/重启编排经 `InvokeUiAsync` 回 UI 线程；`VelopackApp.Build().Run()` 必须在 Program.Main 最先调用（try/catch 包裹，失败不阻断启动）
 - Velopack：`DownloadUpdatesAsync` 进度为 `Action<int>` 百分比；`Size` 非空 long；`ApplyUpdatesAndRestart(toApply: null, restartArgs: null)`；`vpk pack -c` 默认通道是 win，必须显式传 stable/beta
 - 所有网络操作带 CancellationToken；禁止 .Result/.Wait()（生产代码）
