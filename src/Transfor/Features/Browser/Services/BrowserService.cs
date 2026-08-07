@@ -11,6 +11,8 @@ internal sealed class BrowserService : IBrowserService, IDisposable
 {
     private readonly object sync = new();
     private readonly BrowserProfileService profile;
+    private readonly MediaNetworkMode networkMode;
+    private readonly string? proxyAddress;
     private BrowserNavigationService? navigation;
     private BrowserCookieService? cookies;
     private CoreWebView2Environment? environment;
@@ -19,9 +21,12 @@ internal sealed class BrowserService : IBrowserService, IDisposable
     private WebView2? control;
     private bool disposed;
 
-    public BrowserService(BrowserProfileService profile)
+    public BrowserService(BrowserProfileService profile, MediaNetworkMode networkMode = MediaNetworkMode.Direct, string? proxyAddress = null)
     {
         this.profile = profile ?? throw new ArgumentNullException(nameof(profile));
+        // 浏览器（WebView2）与媒体下载共用同一网络设置（Phase 3 浏览器页 / 隐藏宿主）
+        this.networkMode = networkMode;
+        this.proxyAddress = proxyAddress;
     }
 
     public BrowserProfileService Profile => profile;
@@ -181,13 +186,50 @@ internal sealed class BrowserService : IBrowserService, IDisposable
         }
 
         profile.EnsureCreated();
+        // 浏览器网络与媒体一致：Direct 强制直连、System 跟随系统代理、
+        // CustomProxy 走指定地址（无效地址降级为系统代理，不阻断浏览器初始化）
+        var proxyArgument = BuildProxyArgument(networkMode, proxyAddress);
+        var options = new CoreWebView2EnvironmentOptions
+        {
+            AdditionalBrowserArguments = proxyArgument is null ? string.Empty : proxyArgument,
+        };
         var env = await CoreWebView2Environment.CreateAsync(
             browserExecutableFolder: null,
-            userDataFolder: profile.UserDataFolder).ConfigureAwait(true);
+            userDataFolder: profile.UserDataFolder,
+            options: options).ConfigureAwait(true);
         lock (sync)
         {
             environment ??= env;
             return environment;
+        }
+    }
+
+    // 浏览器代理启动参数（纯函数，可离线测试）：
+    // Direct → --no-proxy-server（强制直连）；System → null（跟随系统代理）；
+    // CustomProxy → --proxy-server=<scheme://host:port>（无效地址降级为 null）
+    internal static string? BuildProxyArgument(MediaNetworkMode networkMode, string? proxyAddress)
+    {
+        switch (networkMode)
+        {
+            case MediaNetworkMode.Direct:
+                return "--no-proxy-server";
+
+            case MediaNetworkMode.System:
+                return null;
+
+            case MediaNetworkMode.CustomProxy:
+                if (string.IsNullOrWhiteSpace(proxyAddress)
+                    || !Uri.TryCreate(proxyAddress.Trim(), UriKind.Absolute, out var proxyUri)
+                    || proxyUri.Scheme is not ("http" or "https" or "socks4" or "socks5")
+                    || string.IsNullOrEmpty(proxyUri.Host))
+                {
+                    return null;
+                }
+                // 只取 scheme://host:port（Uri.ToString 会带尾斜杠，Chromium 不认）
+                return $"--proxy-server={proxyUri.GetLeftPart(UriPartial.Authority)}";
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(networkMode));
         }
     }
 

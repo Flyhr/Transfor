@@ -1477,6 +1477,13 @@ static void TestBrowserProxy()
     var proxy = new BrowserSessionAccessorProxy();
     AssertEqual(false, proxy.IsAvailable, "proxy unavailable initially");
 
+    // WebView2 启动参数随媒体网络模式：Direct 直连 / System 系统代理 / CustomProxy 指定地址
+    AssertEqual("--no-proxy-server", BrowserService.BuildProxyArgument(MediaNetworkMode.Direct, null), "direct forces no proxy");
+    AssertEqual(null, BrowserService.BuildProxyArgument(MediaNetworkMode.System, null), "system follows default proxy");
+    AssertEqual("--proxy-server=http://127.0.0.1:7890", BrowserService.BuildProxyArgument(MediaNetworkMode.CustomProxy, "http://127.0.0.1:7890"), "custom proxy address");
+    AssertEqual(null, BrowserService.BuildProxyArgument(MediaNetworkMode.CustomProxy, "not-a-proxy"), "invalid proxy degrades to system");
+    AssertEqual(null, BrowserService.BuildProxyArgument(MediaNetworkMode.CustomProxy, null), "missing proxy address degrades to system");
+
     var inner = new FakeBrowserSession();
     proxy.Attach(inner);
     AssertEqual(true, proxy.IsAvailable, "proxy available after attach");
@@ -2533,17 +2540,24 @@ static void TestUpdateCheckFailed()
     AssertEqual(UpdateStatus.CheckFailed, corruptMinimum.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "corrupt minimum version → CheckFailed");
 }
 
-// Phase 1：更新通道过滤与远程禁用
+// Phase 1：更新通道（通道决定策略文件，由策略源按通道请求）
 static void TestUpdateChannelFilter()
 {
     var disabled = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", enabled: false))), "1.4.0");
     AssertEqual(UpdateStatus.Disabled, disabled.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "disabled policy → Disabled");
 
-    var stableRejectsBeta = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.6.0", channel: "beta"))), "1.4.0");
-    AssertEqual(UpdateStatus.UpToDate, stableRejectsBeta.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "stable client ignores beta policy");
-
-    var betaAcceptsStable = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0"))), "1.4.0");
-    AssertEqual(UpdateStatus.OptionalUpdate, betaAcceptsStable.CheckForUpdatesAsync(UpdateChannel.Beta, CancellationToken.None).GetAwaiter().GetResult().Status, "beta client accepts stable policy");
+    // 通道透传：UpdateService 按请求通道向策略源取文件（stable/beta 独立策略文件）
+    var requestedChannels = new List<UpdateChannel>();
+    var channelProbe = new UpdateService(new FakeUpdatePolicySource(channel =>
+    {
+        requestedChannels.Add(channel);
+        return Task.FromResult<UpdatePolicy?>(Policy("1.5.0"));
+    }), "1.4.0");
+    _ = channelProbe.CheckForUpdatesAsync(UpdateChannel.Beta, CancellationToken.None).GetAwaiter().GetResult();
+    _ = channelProbe.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(2, requestedChannels.Count, "policy source queried per channel");
+    AssertEqual(UpdateChannel.Beta, requestedChannels[0], "beta channel forwarded");
+    AssertEqual(UpdateChannel.Stable, requestedChannels[1], "stable channel forwarded");
 
     var betaAcceptsBeta = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.6.0-beta.1", channel: "beta"))), "1.4.0");
     AssertEqual(UpdateStatus.OptionalUpdate, betaAcceptsBeta.CheckForUpdatesAsync(UpdateChannel.Beta, CancellationToken.None).GetAwaiter().GetResult().Status, "beta client accepts beta policy");
@@ -3396,12 +3410,18 @@ file sealed class FakeCdpServer : IDisposable
     }
 }
 
-// 测试辅助：可控返回的更新策略源（file 类必须位于文件末尾）
+// 测试辅助：可控返回的更新策略源（file 类必须位于文件末尾）；记录请求的通道供断言
 file sealed class FakeUpdatePolicySource : IUpdatePolicySource
 {
-    private readonly Func<Task<UpdatePolicy?>> fetcher;
+    private readonly Func<UpdateChannel, Task<UpdatePolicy?>> fetcher;
 
-    public FakeUpdatePolicySource(Func<Task<UpdatePolicy?>> fetcher) => this.fetcher = fetcher;
+    public FakeUpdatePolicySource(Func<Task<UpdatePolicy?>> fetcher)
+        : this(_ => fetcher())
+    {
+    }
 
-    public Task<UpdatePolicy?> FetchAsync(CancellationToken cancellationToken) => fetcher();
+    public FakeUpdatePolicySource(Func<UpdateChannel, Task<UpdatePolicy?>> fetcher) => this.fetcher = fetcher;
+
+    public Task<UpdatePolicy?> FetchAsync(UpdateChannel channel, CancellationToken cancellationToken)
+        => fetcher(channel);
 }

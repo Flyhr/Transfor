@@ -6,7 +6,8 @@ namespace Transfor;
 
 // 浏览器网络栈下载（Phase 4A）：在隐藏宿主的下载控件内以页面 fetch
 // （credentials: include，自动携带浏览器 Cookie/Referer）拉取媒体，
-// 分块经 ExecuteScriptAsync 传回 C# 流式写入 .part；
+// 经 response.body 流式逐块读取（每块转 base64 经 ExecuteScriptAsync 传回 C# 写盘）；
+// 不整体加载进浏览器内存（大视频文件内存可控）；
 // 真实浏览器网络栈规避抖音对非浏览器 TLS 客户端的指纹拦截；
 // 必须在 UI 线程调用（由隐藏宿主调度）
 internal static class BrowserDownloadController
@@ -14,33 +15,48 @@ internal static class BrowserDownloadController
     // 单次分块字节数（base64 传输开销约 1.33x，2MB 块可控）
     private const int ChunkBytes = 2 * 1024 * 1024;
 
-    private const string FetchMediaScript = @"(async () => {
+    // 第一步：fetch 建立流式响应，reader 暂存于 window（跨脚本调用保持）；
+    // 返回 { error } 或 { total }（content-length 可能缺失 → null）
+    private const string PrepareScriptTemplate = @"(async () => {
         try {
             const response = await fetch(URL, { credentials: 'include' });
             if (!response.ok) return JSON.stringify({ error: 'HTTP ' + response.status });
-            const bytes = new Uint8Array(await response.arrayBuffer());
-            window.__mediaDownload = bytes;
-            window.__mediaDownloadPos = 0;
-            return JSON.stringify({ total: bytes.length });
+            const total = Number(response.headers.get('content-length')) || null;
+            const reader = response.body.getReader();
+            window.__mediaReader = reader;
+            return JSON.stringify({ total });
         } catch (e) {
             return JSON.stringify({ error: String(e) });
         }
     })()";
 
-    private const string ChunkScriptTemplate = @"(() => {
-        const bytes = window.__mediaDownload;
-        if (!bytes) return 'null';
-        const start = window.__mediaDownloadPos;
-        const end = Math.min(start + CHUNK, bytes.length);
-        if (start >= end) return '';
-        const slice = bytes.subarray(start, end);
-        let binary = '';
-        const step = 0x8000;
-        for (let i = 0; i < slice.length; i += step) {
-            binary += String.fromCharCode.apply(null, slice.subarray(i, i + step));
+    // 第二步：从 reader 读取至多 CHUNK 字节（read() 可能返回小块，循环凑满）；
+    // 返回 { error } / { done: true }（流结束）/ { chunk: base64 }（流式分块）
+    private const string ChunkScriptTemplate = @"(async () => {
+        try {
+            const reader = window.__mediaReader;
+            if (!reader) return JSON.stringify({ error: 'reader missing' });
+            const CHUNK = CHUNK;
+            const parts = [];
+            let total = 0;
+            while (total < CHUNK) {
+                const { done, value } = await reader.read();
+                if (done) { window.__mediaReader = null; break; }
+                if (value.length > 0) { parts.push(value); total += value.length; }
+            }
+            if (parts.length === 0) return JSON.stringify({ done: true });
+            const merged = new Uint8Array(total);
+            let offset = 0;
+            for (const part of parts) { merged.set(part, offset); offset += part.length; }
+            let binary = '';
+            const step = 0x8000;
+            for (let i = 0; i < total; i += step) {
+                binary += String.fromCharCode.apply(null, merged.subarray(i, i + step));
+            }
+            return JSON.stringify({ done: false, chunk: btoa(binary) });
+        } catch (e) {
+            return JSON.stringify({ error: String(e) });
         }
-        window.__mediaDownloadPos = end;
-        return btoa(binary);
     })()";
 
     // 下载媒体到 partPath；返回 null 表示成功，否则错误信息；必须在 UI 线程调用
@@ -52,10 +68,10 @@ internal static class BrowserDownloadController
         Action<long, long?>? progress,
         long? maxBytes)
     {
-        // 第一步：页面 fetch 拉取媒体到浏览器内存
-        var fetchScript = FetchMediaScript.Replace("URL", JsonSerializer.Serialize(mediaUri.ToString()), StringComparison.Ordinal);
-        var startRaw = await core.ExecuteScriptAsync(fetchScript).ConfigureAwait(false);
-        long total;
+        // 第一步：页面 fetch 建立流式响应（不加载进内存）
+        var prepareScript = PrepareScriptTemplate.Replace("URL", JsonSerializer.Serialize(mediaUri.ToString()), StringComparison.Ordinal);
+        var startRaw = await core.ExecuteScriptAsync(prepareScript).ConfigureAwait(false);
+        long? total;
         try
         {
             using var startDoc = JsonDocument.Parse(startRaw);
@@ -64,47 +80,67 @@ internal static class BrowserDownloadController
                 return $"浏览器下载失败：{errorElement.GetString()}";
             }
 
-            if (!startDoc.RootElement.TryGetProperty("total", out var totalElement))
+            if (startDoc.RootElement.TryGetProperty("total", out var totalElement) && totalElement.ValueKind == JsonValueKind.Number)
             {
-                return "浏览器下载失败：无法读取媒体大小。";
+                total = totalElement.GetInt64();
             }
-
-            total = totalElement.GetInt64();
+            else
+            {
+                total = null;
+            }
         }
         catch
         {
             return "浏览器下载失败：响应无法解析。";
         }
 
-        if (total <= 0)
+        if (total is not null && total <= 0)
         {
             return "浏览器下载失败：媒体内容为空。";
         }
 
-        if (maxBytes is not null && total > maxBytes)
+        if (total is not null && maxBytes is not null && total > maxBytes)
         {
             return "媒体内容超过大小限制。";
         }
 
-        // 第二步：分块取回 base64 并流式写入 .part
+        // 第二步：流式逐块读取 base64 并写入 .part
         var chunkScript = ChunkScriptTemplate.Replace("CHUNK", ChunkBytes.ToString(), StringComparison.Ordinal);
         await using (var stream = new FileStream(
             partPath, FileMode.Create, FileAccess.Write, FileShare.None, 128 * 1024, useAsync: true))
         {
             var position = 0L;
-            while (position < total)
+            while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var raw = await core.ExecuteScriptAsync(chunkScript).ConfigureAwait(false);
                 string? chunk;
+                var done = false;
                 try
                 {
-                    // ExecuteScriptAsync 结果按 JSON 编码：字符串带引号，null 为 "null"
-                    chunk = raw == "null" ? null : JsonSerializer.Deserialize<string>(raw);
+                    using var doc = JsonDocument.Parse(raw);
+                    if (doc.RootElement.TryGetProperty("error", out var errorElement))
+                    {
+                        return $"浏览器下载失败：{errorElement.GetString()}";
+                    }
+
+                    if (doc.RootElement.TryGetProperty("done", out var doneElement) && doneElement.GetBoolean())
+                    {
+                        done = true;
+                    }
+
+                    chunk = doc.RootElement.TryGetProperty("chunk", out var chunkElement)
+                        ? chunkElement.GetString()
+                        : null;
                 }
                 catch (JsonException)
                 {
                     return "浏览器下载中断：分块数据损坏。";
+                }
+
+                if (done)
+                {
+                    break;
                 }
 
                 if (string.IsNullOrEmpty(chunk))
@@ -127,8 +163,13 @@ internal static class BrowserDownloadController
                     return "浏览器下载中断：无分块数据。";
                 }
 
-                await stream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
                 position += data.Length;
+                if (maxBytes is not null && position > maxBytes)
+                {
+                    return "媒体内容超过大小限制。";
+                }
+
+                await stream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
                 progress?.Invoke(position, total);
             }
 

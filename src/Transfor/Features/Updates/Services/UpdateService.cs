@@ -24,7 +24,8 @@ internal sealed class UpdateService : IUpdateService
         UpdatePolicy policy;
         try
         {
-            policy = await source.FetchAsync(cancellationToken).ConfigureAwait(false)
+            // 通道由策略源决定文件（stable/beta 各自独立策略），策略内的 channel 字段仅作说明
+            policy = await source.FetchAsync(channel, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("未获取到更新策略。");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -36,12 +37,6 @@ internal sealed class UpdateService : IUpdateService
         if (!policy.Enabled)
         {
             return new UpdateCheckResult(UpdateStatus.Disabled, current, null, null, policy);
-        }
-
-        // 通道过滤：Beta 用户接收 Stable + Beta 策略；Stable 用户只接收 Stable 策略
-        if (policy.ChannelKind > channel)
-        {
-            return new UpdateCheckResult(UpdateStatus.UpToDate, current, null, null, policy);
         }
 
         if (!UpdateVersion.TryParse(policy.LatestVersion, out var latest))

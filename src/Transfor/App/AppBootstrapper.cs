@@ -32,8 +32,12 @@ internal static class AppBootstrapper
         var updateService = new UpdateService(
             new HttpUpdatePolicySource(HttpClientProvider.CreateForUpdates(), validator),
             AppVersion.Current);
-        // 浏览器服务（Phase 3）：WebView2 独立 Profile（Cookie/登录态持久化于 Browser\UserData）
-        var browserService = new BrowserService(new BrowserProfileService(paths.BrowserProfileDirectory));
+        // 浏览器服务（Phase 3）：WebView2 独立 Profile（Cookie/登录态持久化于 Browser\UserData）；
+        // 浏览器网络与媒体下载一致（Direct/System/CustomProxy 随媒体设置）
+        var browserService = new BrowserService(
+            new BrowserProfileService(paths.BrowserProfileDirectory),
+            networkMode,
+            proxyAddress);
         // 解析器注册：专用解析器（抖音）优先，Direct 最后兜底
         // 抖音传输偏好为会话级熔断状态（进程内共享，重启复位）
         var douyinPreference = new DouyinTransportPreferenceState();
