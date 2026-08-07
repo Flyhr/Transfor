@@ -2179,12 +2179,46 @@ static void TestDouyinCandidateFallback()
         new(new Uri("https://media.example/live-preview.mp4"), MediaKind.Video, 0, null, null, null, null, BrowserCandidateSource.Dom),
     };
     var noteData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(noteCandidates, videoPreferred: false);
-    AssertEqual(2, noteData.Assets.Count, "note page: images only");
-    AssertEqual(true, noteData.Assets.All(a => a.Kind == MediaKind.Image), "note page: preview video excluded");
+    AssertEqual(3, noteData.Assets.Count, "note page: 2 images + 1 motion preserved");
+    AssertEqual(MediaAssetRole.LivePhotoStill, noteData.Assets[0].Role, "note page: first image paired as still");
+    AssertEqual(MediaAssetRole.LivePhotoMotion, noteData.Assets[1].Role, "note page: video kept as motion");
+    AssertEqual(MediaAssetRole.Normal, noteData.Assets[2].Role, "note page: second image unpaired (no motion)");
+    AssertEqual("live-000", noteData.Assets[0].PairId, "note page: still pair id");
+    AssertEqual(noteData.Assets[0].PairId, noteData.Assets[1].PairId, "note page: still and motion share pair id");
 
     // 无偏好启发式：多张有效图 + 视频候选 → 图片优先（实况/图文形态）
     var heuristicImageData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(noteCandidates);
-    AssertEqual(2, heuristicImageData.Assets.Count, "heuristic: multi-image + video prefers images");
+    AssertEqual(3, heuristicImageData.Assets.Count, "heuristic: multi-image + video prefers images");
+
+    // 实况配对：多图多视频按 DOM 顺序配对（第 i 个视频 ↔ 第 i 张图）
+    var liveCandidates = new BrowserCapturedCandidate[]
+    {
+        new(new Uri("https://media.example/img/1.webp"), MediaKind.Image, 0, 1080, 1440, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/img/2.webp"), MediaKind.Image, 2, 1080, 1440, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/live/1.mp4"), MediaKind.Video, 1, null, null, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/live/2.mp4"), MediaKind.Video, 3, null, null, null, null, BrowserCandidateSource.Dom),
+    };
+    var liveData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(liveCandidates, videoPreferred: false);
+    AssertEqual(4, liveData.Assets.Count, "live page: 2 stills + 2 motions");
+    AssertEqual(MediaAssetRole.LivePhotoStill, liveData.Assets[0].Role, "live: still 0");
+    AssertEqual(MediaAssetRole.LivePhotoMotion, liveData.Assets[1].Role, "live: motion 0");
+    AssertEqual(MediaAssetRole.LivePhotoStill, liveData.Assets[2].Role, "live: still 1");
+    AssertEqual(MediaAssetRole.LivePhotoMotion, liveData.Assets[3].Role, "live: motion 1");
+    AssertEqual("live-000", liveData.Assets[0].PairId, "live: still 0 pair");
+    AssertEqual("live-000", liveData.Assets[1].PairId, "live: motion 0 shares pair");
+    AssertEqual("live-001", liveData.Assets[2].PairId, "live: still 1 pair");
+    AssertEqual("live-001", liveData.Assets[3].PairId, "live: motion 1 shares pair");
+
+    // 实况配对：视频多于图片时，多余视频仍保留（不丢动态）
+    var excessMotionCandidates = new BrowserCapturedCandidate[]
+    {
+        new(new Uri("https://media.example/img/1.webp"), MediaKind.Image, 0, 1080, 1440, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/live/1.mp4"), MediaKind.Video, 1, null, null, null, null, BrowserCandidateSource.Dom),
+        new(new Uri("https://media.example/live/2.mp4"), MediaKind.Video, 2, null, null, null, null, BrowserCandidateSource.Dom),
+    };
+    var excessData = DouyinMediaNormalizer.NormalizeCandidatesToPageData(excessMotionCandidates, videoPreferred: false);
+    AssertEqual(3, excessData.Assets.Count, "excess motion: still + 2 motions kept");
+    AssertEqual(MediaAssetRole.LivePhotoMotion, excessData.Assets[2].Role, "excess motion: unpaired motion kept");
 
     // 无偏好启发式：单张有效图 + 视频候选 → 视频优先（视频页封面形态）
     var heuristicVideoCandidates = new BrowserCapturedCandidate[]

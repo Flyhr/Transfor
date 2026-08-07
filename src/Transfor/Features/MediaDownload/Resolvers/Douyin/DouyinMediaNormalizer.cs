@@ -136,11 +136,45 @@ internal static class DouyinMediaNormalizer
         }
         else
         {
-            // 图片/实况作品：全部图片按 DOM 顺序，忽略封面/预览视频
+            // 图片/实况作品：图片按 DOM 顺序；视频候选保留为实况动态——
+            // 实况页 DOM 中每张图后紧跟其动态视频，第 i 个视频与第 i 张图配对
+            // （数量不匹配时仅配对前 min 个，多余视频也保留，避免实况丢动态）
             var imageIndex = 0;
+            var motionIndex = 0;
             foreach (var image in imageCandidates.OrderBy(item => item.Order))
             {
-                assets.Add(new DouyinAssetCandidate(imageIndex++, MediaKind.Image, new[] { image.Variant }));
+                var hasMotion = motionIndex < videoVariants.Count;
+                var pairId = hasMotion ? $"live-{imageIndex:D3}" : null;
+                assets.Add(new DouyinAssetCandidate(
+                    assets.Count,
+                    MediaKind.Image,
+                    new[] { image.Variant },
+                    imageIndex,
+                    hasMotion ? MediaAssetRole.LivePhotoStill : MediaAssetRole.Normal,
+                    pairId));
+                if (hasMotion)
+                {
+                    assets.Add(new DouyinAssetCandidate(
+                        assets.Count,
+                        MediaKind.Video,
+                        new[] { videoVariants[motionIndex++] },
+                        imageIndex,
+                        MediaAssetRole.LivePhotoMotion,
+                        pairId));
+                }
+                imageIndex++;
+            }
+
+            while (motionIndex < videoVariants.Count)
+            {
+                assets.Add(new DouyinAssetCandidate(
+                    assets.Count,
+                    MediaKind.Video,
+                    new[] { videoVariants[motionIndex] },
+                    motionIndex,
+                    MediaAssetRole.LivePhotoMotion,
+                    $"live-{motionIndex:D3}"));
+                motionIndex++;
             }
         }
 
