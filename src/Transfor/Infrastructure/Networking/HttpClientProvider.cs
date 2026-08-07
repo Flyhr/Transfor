@@ -54,4 +54,24 @@ internal static class HttpClientProvider
             Timeout = TimeSpan.FromSeconds(100),
         };
     }
+
+    // 更新网络专用 client：与媒体网络（Douyin/CDN 三态）彻底分离。
+    // 更新访问 GitHub（raw 策略 + Velopack 下载），走系统默认代理即可，
+    // 不应受媒体「强制直连」设置影响（否则用户为抖音直连后更新无法联网）。
+    public static HttpClient CreateForUpdates()
+    {
+        return new HttpClient(new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            UseCookies = false,
+            // UseProxy 默认 true：跟随系统代理设置
+            AutomaticDecompression =
+                DecompressionMethods.GZip |
+                DecompressionMethods.Deflate |
+                DecompressionMethods.Brotli,
+        })
+        {
+            Timeout = TimeSpan.FromSeconds(100),
+        };
+    }
 }

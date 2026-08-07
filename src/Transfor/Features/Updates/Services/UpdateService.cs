@@ -29,7 +29,8 @@ internal sealed class UpdateService : IUpdateService
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return new UpdateCheckResult(UpdateStatus.CheckFailed, current, null, null, null, ex.Message);
+            // 保留完整异常链（HttpRequestException → IOException → SocketException），便于诊断
+            return new UpdateCheckResult(UpdateStatus.CheckFailed, current, null, null, null, ErrorChainFormatter.Format(ex));
         }
 
         if (!policy.Enabled)

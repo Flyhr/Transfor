@@ -27,9 +27,10 @@ internal static class AppBootstrapper
         var mediaCache = new MediaCache(paths.MediaCacheDirectory);
         // 下载服务：流式 + 安全链路；Cookie 源经代理（未启用浏览器时为空）
         var downloadService = new MediaDownloadService(requestSender, browserSessions, mediaCache: mediaCache);
-        // 更新服务（Phase 1 检查 + Phase 2 安装）：决策走 update-policy.json，下载安装走 Velopack
+        // 更新服务（Phase 1 检查 + Phase 2 安装）：决策走 update-policy.json，下载安装走 Velopack；
+        // 更新网络与媒体网络分离（更新访问 GitHub 走系统代理，不受媒体 Direct/代理设置影响）
         var updateService = new UpdateService(
-            new HttpUpdatePolicySource(httpClient, validator),
+            new HttpUpdatePolicySource(HttpClientProvider.CreateForUpdates(), validator),
             AppVersion.Current);
         // 浏览器服务（Phase 3）：WebView2 独立 Profile（Cookie/登录态持久化于 Browser\UserData）
         var browserService = new BrowserService(new BrowserProfileService(paths.BrowserProfileDirectory));
