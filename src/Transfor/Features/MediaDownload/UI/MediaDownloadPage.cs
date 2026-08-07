@@ -157,6 +157,7 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     internal bool DownloadButtonEnabled => downloadButton.Enabled;
     internal bool PasteButtonEnabled => pasteButton.Enabled;
     internal bool BrowseButtonEnabled => browseButton.Enabled;
+    internal bool ClearButtonEnabled => clearButton.Enabled;
     internal bool SelectAllButtonEnabled => selectAllButton.Enabled;
     internal bool UnselectAllButtonEnabled => unselectAllButton.Enabled;
     internal string ErrorText => errorLabel.Text;
@@ -492,19 +493,18 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     private void SetState(MediaPageState state)
     {
         currentState = state;
-        // 解析/等待交互/失败/成功状态下操作按钮全部可用（避免状态卡死时按钮变灰）；
-        // 仅下载进行中禁用，防止下载期间改动输入与参数
-        var interactive = state is not MediaPageState.Downloading;
-        parseButton.Enabled = interactive;
-        pasteButton.Enabled = interactive;
-        clearButton.Enabled = interactive;
-        browseButton.Enabled = interactive;
-        // 浏览器登录在空闲/失败/待交互等状态下始终可用（用户可在任意时刻强制走浏览器解析），
-        // 仅解析与下载进行中禁用避免并发操作
-        browserButton.Enabled = state is not (MediaPageState.Resolving or MediaPageState.Downloading);
+        // 解析/下载进行中：仅解析与下载按钮禁用（防止重复解析、下载中改选资产），
+        // 粘贴/清空/浏览保持可用；其余状态（含下载完成）全部恢复可用
+        var busy = state is MediaPageState.Resolving or MediaPageState.Downloading;
+        parseButton.Enabled = !busy;
+        pasteButton.Enabled = true;
+        clearButton.Enabled = true;
+        browseButton.Enabled = true;
+        browserButton.Enabled = !busy;
         selectAllButton.Enabled = state == MediaPageState.Resolved;
         unselectAllButton.Enabled = state == MediaPageState.Resolved;
-        downloadButton.Enabled = state == MediaPageState.Resolved;
+        // 下载按钮：解析完成后可选；下载完成（Completed）后恢复可用（资产仍可重新下载）
+        downloadButton.Enabled = state is MediaPageState.Resolved or MediaPageState.Completed;
     }
 
     // 解析进行中或下载进行中：忽略重复的解析请求（按钮不再禁用，靠状态标志防并发）

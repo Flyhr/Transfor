@@ -1395,6 +1395,29 @@ static void TestMediaDownloadPage()
             AssertEqual(true, page.ParseButtonEnabled, "parse stays enabled in waiting state");
             AssertEqual(false, page.DownloadButtonEnabled, "download disabled in waiting state");
 
+            // 解析进行中：解析与下载禁用，粘贴/清空/浏览保持可用
+            var pendingTcs = new TaskCompletionSource<MediaResolveResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var pendingResolver = new FakeResolver(MediaProviderId.Douyin, asyncResultFactory: (_, _) => pendingTcs.Task);
+            var pendingResolve = new MediaResolveCoordinator(new MediaResolverRegistry(new IMediaResolver[] { pendingResolver }));
+            using var pendingPage = new MediaDownloadPage(pendingResolve, download, state, _ => ValueTask.CompletedTask, preview);
+            var pendingTask = pendingPage.ResolveInputAsync("https://v.douyin.com/b/");
+            AssertEqual(MediaPageState.Resolving, pendingPage.CurrentState, "resolving state");
+            AssertEqual(false, pendingPage.ParseButtonEnabled, "parse disabled while resolving");
+            AssertEqual(false, pendingPage.DownloadButtonEnabled, "download disabled while resolving");
+            AssertEqual(true, pendingPage.PasteButtonEnabled, "paste enabled while resolving");
+            AssertEqual(true, pendingPage.ClearButtonEnabled, "clear enabled while resolving");
+            AssertEqual(true, pendingPage.BrowseButtonEnabled, "browse enabled while resolving");
+            pendingTcs.SetResult(MediaResolveResult.RequiresUserInteraction("需要浏览器"));
+            // UI 线程上同步等待会死锁（continuation 需要消息泵）：用 DoEvents 泵消息直至完成
+            while (!pendingTask.IsCompleted)
+            {
+                Application.DoEvents();
+                Thread.Sleep(10);
+            }
+            pendingTask.GetAwaiter().GetResult();
+            AssertEqual(MediaPageState.WaitingForUser, pendingPage.CurrentState, "resolving settles to waiting");
+            AssertEqual(true, pendingPage.ParseButtonEnabled, "parse restored after resolving");
+
             download.Dispose();
         }
         finally
@@ -2920,12 +2943,14 @@ file sealed class FakeResolver : IMediaResolver
 {
     private readonly Func<Uri, bool>? canResolve;
     private readonly Func<MediaResolveRequest, CancellationToken, MediaResolveResult>? resultFactory;
+    private readonly Func<MediaResolveRequest, CancellationToken, Task<MediaResolveResult>>? asyncResultFactory;
 
-    public FakeResolver(MediaProviderId provider, Func<Uri, bool>? canResolve = null, Func<MediaResolveRequest, CancellationToken, MediaResolveResult>? resultFactory = null)
+    public FakeResolver(MediaProviderId provider, Func<Uri, bool>? canResolve = null, Func<MediaResolveRequest, CancellationToken, MediaResolveResult>? resultFactory = null, Func<MediaResolveRequest, CancellationToken, Task<MediaResolveResult>>? asyncResultFactory = null)
     {
         Provider = provider;
         this.canResolve = canResolve;
         this.resultFactory = resultFactory;
+        this.asyncResultFactory = asyncResultFactory;
     }
 
     public MediaProviderId Provider { get; }
@@ -2933,6 +2958,11 @@ file sealed class FakeResolver : IMediaResolver
 
     public Task<MediaResolveResult> ResolveAsync(MediaResolveRequest request, CancellationToken cancellationToken)
     {
+        if (asyncResultFactory is not null)
+        {
+            return asyncResultFactory(request, cancellationToken);
+        }
+
         if (resultFactory is not null)
         {
             return Task.FromResult(resultFactory(request, cancellationToken));
