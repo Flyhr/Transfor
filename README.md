@@ -24,6 +24,12 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - 图片预览走与正式下载相同的安全链路；媒体设置可配置默认下载目录、并发数（1–8）、默认全选、下载后打开目录与质量策略
 - 关闭主窗口到托盘时下载继续；真正退出且有任务时会先确认再取消任务
 
+### 应用更新
+
+- 版本号统一来源于项目配置（SemVer，当前 `0.8.0` 开发版），启动后与托盘菜单均可检查更新
+- 远程 `update-policy.json` 策略：可选更新（稍后/立即）与强制更新（重新检查/立即/退出，不允许跳过）；Stable 通道已预留 Beta 扩展
+- 网络错误、JSON 损坏等一律视为检查失败并静默放行，绝不阻断应用使用；「立即更新」当前打开下载地址，自动下载安装（Velopack）为后续阶段
+
 > 「最高质量」指当前公开页面或当前浏览器会话可访问的、可直接下载的媒体版本；不承诺作者原始文件、无水印或可访问私密/删除/付费作品。第一版不支持 DASH/HLS 分段流合并，发现分段媒体时会明确提示。
 
 ## 项目结构
@@ -33,10 +39,11 @@ src/Transfor/
 ├── App/                                     # 入口、组合根、应用生命周期与路径
 │   ├── Program.cs                           # 入口：初始化 WinForms 并启动消息循环
 │   ├── AppBootstrapper.cs                   # 组合根：组装文本与媒体服务依赖图
-│   ├── AppServices.cs                       # 应用服务容器（文本 + 媒体），随应用释放
+│   ├── AppServices.cs                       # 应用服务容器（文本 + 媒体 + 更新），随应用释放
 │   ├── MediaServices.cs                     # 媒体服务组合：协调器/浏览器代理/预览/HttpClient
 │   ├── AppPaths.cs                          # 状态文件路径集合（%LOCALAPPDATA%\Transfor）
-│   └── TransforApplicationContext.cs        # 应用上下文：主窗口/历史面板/托盘/热键/退出流程
+│   ├── AppVersion.cs                        # 当前版本（读取 csproj <Version>）
+│   └── TransforApplicationContext.cs        # 应用上下文：主窗口/历史面板/托盘/热键/更新检查/退出流程
 ├── Shell/                                   # 主窗口外壳与页面接口
 │   ├── IFeaturePage.cs                      # 功能页契约（Id、名称、视图、激活回调）
 │   └── MainForm.cs                          # 主窗口：由页面集合动态生成导航，关闭时隐藏到托盘
@@ -65,6 +72,10 @@ src/Transfor/
 │   │   │   └── TextUiState.cs               # 界面状态（最近查看的工具）
 │   │   └── UI/
 │   │       └── SettingsForm.cs              # 设置窗口（热键、上限、清空历史）
+│   └── Updates/                             # 应用更新：版本检查（Phase 1，仅检查不安装）
+│       ├── Models/                          # UpdateStatus / UpdateChannel / UpdatePolicy / UpdateCheckResult
+│       ├── Services/                        # UpdateVersion(SemVer) / VersionComparer / UpdateService / IUpdatePolicySource / HttpUpdatePolicySource
+│       └── UI/                              # UpdateNoticeForm（可选更新/强制更新提示）
 │   └── MediaDownload/                       # 媒体下载：契约、模型、协调器、服务、解析器与 UI
 │       ├── Contracts/                       # IMediaResolver / IMediaDownloadService / IBrowserSessionAccessor / 浏览器捕获模型
 │       ├── Models/                          # MediaAsset / MediaVariant / ResolvedMediaPost / 下载批次/设置/历史等

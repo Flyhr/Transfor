@@ -2,6 +2,12 @@
 
 > 用途：供 AI 与开发者快速恢复项目记忆。更新日期：2026-08-07。
 
+## 〇、当前版本与路线
+
+- **应用版本**：`0.8.0`（唯一来源：`src/Transfor/Transfor.csproj` 的 `<Version>`，SemVer）
+- **浏览器技术路线（2026-08-07 决策）**：后续 Phase 3 起用 **Microsoft Edge WebView2** 替换现有 Edge CDP 方案；旧实现保留到新实现成熟后再移除（不允许提前删除现有实现）
+- **Phase 进度**：Phase 0（架构整理）✅ 已打标签 `architecture-baseline`；Phase 1（版本检查）✅ 完成于分支 `feature/update-foundation`；Phase 2（Velopack 自动更新）未开始
+
 ## 一、项目概述
 
 Windows 桌面工具（.NET 10 + WinForms，单项目 `Transfor.slnx`），两大功能：
@@ -18,6 +24,7 @@ src/Transfor/
 │  ├─ TextTools/   # QuoteConverter / SpaceRemover / TextToolsPage
 │  ├─ History/     # HistoryEntry / PasteCoordinator / HistoryPanelForm
 │  ├─ Settings/    # AppSettings / HotKeyBinding / SettingsForm
+│  ├─ Updates/     # Phase 1 版本检查：UpdateService / VersionComparer(UpdateVersion) / IUpdatePolicySource(Http 策略源) / UpdateNoticeForm（可选+强制提示）
 │  └─ MediaDownload/
 │     ├─ Contracts/   # IMediaResolver / IMediaDownloadService / IBrowserSessionAccessor / 浏览器捕获模型
 │     ├─ Models/      # MediaAsset / MediaVariant / ResolvedMediaPost / MediaDownloadBatch/Task/Result/Settings/HistoryEntry / MediaAssetRole
@@ -35,7 +42,6 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 ```
 
 ## 三、媒体下载核心流程与设计决策
-
 - **作品类型判断**：结构化数据存在 `images`（图文/实况）→ 图片；仅 `video` → 视频；**顶层 video 仅在无 images 时解析**（图集预览视频不产出）
 - **实况图配对**：逐个解析 `images[i].url_list`（静态）+ `images[i].video`（play_addr_h264→play_addr→play_addr_265→download_addr + bit_rate[]）；`Role=LivePhotoStill/Motion`、`SourceIndex`、`PairId` 配对；**isLivePhoto 以存在可播放视频地址为最终依据**（live_photo_type/clip_type 仅辅助）
 - **文件名配对**：`标题_01_still.jpg` + `标题_01_motion.mp4`（BuildFileName 按 Role）
@@ -63,17 +69,19 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 
 ## 五、当前状态
 
-- **最新提交**：`32433b9 修复：实况图按 images[i].video 逐个解析并配对输出静态照片与动态视频`
-- **测试**：574 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
+- **最新提交**：Phase 1 版本检查（分支 `feature/update-foundation`，未推送）
+- **测试**：608 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
+- **版本**：0.8.0（csproj `<Version>`，唯一来源）
 - **诊断目录**：`%TEMP%\Transfor\diagnostics\`（解析完成 capture-*.json + 下载失败 failed-media-*；临时诊断代码在 CaptureDiagnostics / MediaFileFinalizer.SaveFailureSample，定位后移除）
-- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持
+- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新仅检查版本（Phase 1），自动下载安装（Velopack）为 Phase 2
 
 ## 六、开发注意事项（坑）
 
 - 测试运行器 Program.cs：**file 类必须放文件末尾**（顶层语句之后）；测试计数用静态 TestCounter.Passed
 - 勿用 PowerShell `-replace` 处理含 `\r\n` 字面量的文件（会误伤 C# 转义序列）——用 Edit 工具
 - WinForms 控件必须在 STA 线程创建（测试用 RunSta）
-- WebView2 已废弃，当前浏览器方案为 Edge CDP（Platform/Windows/EdgeCdp）
+- 当前浏览器方案为 Edge CDP（Platform/Windows/EdgeCdp）；**后续 Phase 3 起迁移 WebView2，旧实现保留到新实现成熟**
+- 更新检查流程在 TransforApplicationContext：后台 Task.Run + InvokeAsync 回主线程；网络失败静默（手动检查才提示）
 - 所有网络操作带 CancellationToken；禁止 .Result/.Wait()（生产代码）
 - 修改状态存储方法内部已持久化，UI 不重复调 Save()
 - 提交信息用中文，不推送
