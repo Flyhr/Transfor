@@ -26,7 +26,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
         historyStore = services.State;
         hotKeyManager = services.HotKeys;
         updatesService = services.Updates;
-        // 由页面集合构造主窗口外壳：文本转换 + 媒体下载
+        // 由页面集合构造主窗口外壳：文本转换 + 媒体下载 + 浏览器
         var pages = new IFeaturePage[]
         {
             new TextToolsPage(services.State),
@@ -36,6 +36,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
                 services.Media.State,
                 services.Media.EnsureBrowserInitializedAsync,
                 services.Media.Preview),
+            new BrowserView(services.Browser),
         };
         mainForm = new MainForm(pages);
         historyPanel = new HistoryPanelForm(
@@ -143,7 +144,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
     // 以模态对话框打开设置窗口（主窗口不可见时以无所有者方式弹出）
     private void ShowSettings()
     {
-        using var settings = new SettingsForm(historyStore, hotKeyManager);
+        using var settings = new SettingsForm(historyStore, hotKeyManager, services.Browser);
         settings.ShowDialog(mainForm.Visible ? mainForm : null);
     }
 
@@ -155,8 +156,8 @@ internal sealed class TransforApplicationContext : ApplicationContext
     }
 
     // 退出应用：有活动任务时先确认，再取消任务并等待落定；
-    // 主窗体仍存活时释放服务（含关闭专用 Edge 进程），
-    // 最后关闭窗口与托盘；释放异常转换为可见错误，不遗留半退出状态
+    // 主窗体仍存活时释放服务，最后关闭窗口与托盘；
+    // 释放异常转换为可见错误，不遗留半退出状态
     private async void ExitApplication()
     {
         if (exiting)
@@ -165,21 +166,24 @@ internal sealed class TransforApplicationContext : ApplicationContext
         }
 
         exiting = true;
-        try
-        {
-            if (services.Media.DownloadCoordinator.HasActiveTasks)
-            {
-                var confirm = MessageBox.Show(mainForm, "仍有下载任务进行中，确定要退出并取消任务吗？", "退出确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-                if (confirm != DialogResult.Yes)
-                {
-                    exiting = false;
-                    return;
-                }
 
-                await services.Media.DownloadCoordinator.CancelAllAsync();
+        // 退出确认放在 try/finally 之前：用户选择「否」直接返回，
+        // 不进入释放与 ExitThread 序列（避免 finally 无条件退出）
+        if (services.Media.DownloadCoordinator.HasActiveTasks)
+        {
+            var confirm = MessageBox.Show(mainForm, "仍有下载任务进行中，确定要退出并取消任务吗？", "退出确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            if (confirm != DialogResult.Yes)
+            {
+                exiting = false;
+                return;
             }
 
-            // 主窗体仍存活：释放服务并关闭专用 Edge 进程
+            await services.Media.DownloadCoordinator.CancelAllAsync();
+        }
+
+        try
+        {
+            // 主窗体仍存活：释放服务并关闭浏览器
             await services.DisposeAsync();
             historyPanel.CloseForExit();
             mainForm.CloseForExit();
@@ -304,8 +308,25 @@ internal sealed class TransforApplicationContext : ApplicationContext
                     return;
 
                 case UpdateNoticeForm.UserAction.UpdateNow:
-                    await RunDownloadFlowAsync(result, required: true);
-                    return;
+                    // 强制更新状态机：Restarting 结束；取消/失败都不允许跳过——
+                    // 取消重新显示强制更新框；失败提示后回到强制框（重试或退出）
+                    var flow = await RunDownloadFlowAsync(result, required: true);
+                    switch (flow)
+                    {
+                        case UpdateDownloadForm.Result.RestartNow:
+                            return;
+
+                        case UpdateDownloadForm.Result.Failed:
+                            ShowNotice("更新下载失败，请重试或选择退出后手动更新。", MessageBoxIcon.Error);
+                            continue;
+
+                        case UpdateDownloadForm.Result.Cancelled:
+                            ShowNotice("更新下载已取消，必须更新后才能继续使用。", MessageBoxIcon.Warning);
+                            continue;
+
+                        default:
+                            return;
+                    }
 
                 case UpdateNoticeForm.UserAction.Recheck:
                     var rechecked = await Task.Run(() => updatesService.CheckForUpdatesAsync(CurrentUpdateChannel, CancellationToken.None))
@@ -326,8 +347,9 @@ internal sealed class TransforApplicationContext : ApplicationContext
     }
 
     // 下载流程：进度窗体 → 下载 → 重启提示；强制更新下载完成直接重启；
-    // 「稍后重启」的更新已暂存，下次启动时由 Velopack 自动应用
-    private async Task RunDownloadFlowAsync(UpdateCheckResult result, bool required)
+    // 「稍后重启」的更新已暂存，下次启动时由 Velopack 自动应用；
+    // 返回结果供强制更新循环决策（取消/失败不得跳过强制更新）
+    private async Task<UpdateDownloadForm.Result> RunDownloadFlowAsync(UpdateCheckResult result, bool required)
     {
         var installer = services.UpdateInstallerFactory(CurrentUpdateChannel);
         try
@@ -344,13 +366,22 @@ internal sealed class TransforApplicationContext : ApplicationContext
                     break;
 
                 case UpdateDownloadForm.Result.Cancelled:
-                    ShowNotice("更新下载已取消。", MessageBoxIcon.Information);
+                    if (!required)
+                    {
+                        ShowNotice("更新下载已取消。", MessageBoxIcon.Information);
+                    }
+                    break;
+
+                case UpdateDownloadForm.Result.Failed:
                     break;
             }
+
+            return action;
         }
         catch (Exception ex)
         {
             ShowNotice($"更新失败：{ex.Message}", MessageBoxIcon.Error);
+            return UpdateDownloadForm.Result.Failed;
         }
         finally
         {

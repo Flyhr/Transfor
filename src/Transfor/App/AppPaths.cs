@@ -35,6 +35,9 @@ internal sealed class AppPaths
     // 专用 Edge 持久化配置目录（登录态/Cookie/缓存只存于此，不写入普通 JSON）
     public string EdgeProfileDirectory => Path.Combine(ApplicationDirectory, "Edge", "Douyin");
 
+    // WebView2 浏览器独立 Profile 目录（Cookie/LocalStorage/缓存/登录状态持久化，Task 3.3）
+    public string BrowserProfileDirectory => Path.Combine(ApplicationDirectory, "Browser", "UserData");
+
     // 媒体本地缓存目录（解析阶段预取的图片响应，按 URL 哈希命名）
     public string MediaCacheDirectory => Path.Combine(ApplicationDirectory, "MediaCache");
 

@@ -3,8 +3,9 @@ using System.Globalization;
 
 namespace Transfor;
 
-// 语义化版本（SemVer 子集）：MAJOR.MINOR.PATCH 与可选预发布标签（-beta.1 / -rc.1）；
-// 兼容程序集版本号 4 段（第 4 段忽略）；预发布排序遵循 SemVer 2.0
+// 语义化版本（SemVer 子集）：严格 MAJOR.MINOR.PATCH 三段与可选预发布标签（-beta.1 / -rc.1）；
+// 不允许 2 段（"0.9"）或 4 段（程序集号）——策略与标签必须符合 SemVer，避免歧义；
+// 预发布排序遵循 SemVer 2.0
 internal sealed record UpdateVersion(int Major, int Minor, int Patch, IReadOnlyList<string>? Prerelease)
 {
     public static bool TryParse(string? text, [NotNullWhen(true)] out UpdateVersion? version)
@@ -28,7 +29,7 @@ internal sealed record UpdateVersion(int Major, int Minor, int Patch, IReadOnlyL
         var prereleaseText = dash >= 0 ? value[(dash + 1)..] : null;
 
         var parts = core.Split('.');
-        if (parts.Length is < 2 or > 4)
+        if (parts.Length != 3)
         {
             return false;
         }
@@ -36,8 +37,7 @@ internal sealed record UpdateVersion(int Major, int Minor, int Patch, IReadOnlyL
         var numbers = new int[3];
         for (var i = 0; i < 3; i++)
         {
-            var part = i < parts.Length ? parts[i] : "0";
-            if (!int.TryParse(part, NumberStyles.None, CultureInfo.InvariantCulture, out var n))
+            if (!int.TryParse(parts[i], NumberStyles.None, CultureInfo.InvariantCulture, out var n))
             {
                 return false;
             }

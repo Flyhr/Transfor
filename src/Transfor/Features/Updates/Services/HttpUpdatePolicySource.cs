@@ -2,12 +2,14 @@ using System.Text.Json;
 
 namespace Transfor;
 
-// HTTP 策略源：从 GitHub raw 静态 update-policy.json 获取远程策略；
-// 任何网络错误 / 非成功状态 / JSON 损坏都抛异常（→ CheckFailed），不产出策略
+// HTTP 策略源：按通道从 GitHub raw 静态 update-policy.json / update-policy.beta.json
+// 获取远程策略；任何网络错误 / 非成功状态 / JSON 损坏都抛异常（→ CheckFailed），不产出策略
 internal sealed class HttpUpdatePolicySource : IUpdatePolicySource
 {
-    // 发布走 Release 分支：update-policy.json 与版本发布同分支维护
+    // 发布走 Release 分支：两个策略文件与版本发布同分支维护；
+    // Stable 通道读 update-policy.json；Beta 通道读 update-policy.beta.json（双通道策略拆分）
     public const string DefaultPolicyUrl = "https://raw.githubusercontent.com/Flyhr/Transfor/Release/update-policy.json";
+    public const string DefaultBetaPolicyUrl = "https://raw.githubusercontent.com/Flyhr/Transfor/Release/update-policy.beta.json";
 
     private static readonly JsonSerializerOptions Options = new()
     {
@@ -17,17 +19,21 @@ internal sealed class HttpUpdatePolicySource : IUpdatePolicySource
     private readonly HttpClient client;
     private readonly SafeUriValidator validator;
     private readonly string policyUrl;
+    private readonly string betaPolicyUrl;
 
-    public HttpUpdatePolicySource(HttpClient client, SafeUriValidator validator, string? policyUrl = null)
+    public HttpUpdatePolicySource(HttpClient client, SafeUriValidator validator, string? policyUrl = null, string? betaPolicyUrl = null)
     {
         this.client = client ?? throw new ArgumentNullException(nameof(client));
         this.validator = validator ?? throw new ArgumentNullException(nameof(validator));
         this.policyUrl = policyUrl ?? DefaultPolicyUrl;
+        this.betaPolicyUrl = betaPolicyUrl ?? DefaultBetaPolicyUrl;
     }
 
-    public async Task<UpdatePolicy?> FetchAsync(CancellationToken cancellationToken)
+    public async Task<UpdatePolicy?> FetchAsync(UpdateChannel channel, CancellationToken cancellationToken)
     {
-        var uri = new Uri(policyUrl);
+        // 通道决定策略文件：Beta 读独立策略文件（可含更高版本号/预发布）
+        var url = channel == UpdateChannel.Beta ? betaPolicyUrl : policyUrl;
+        var uri = new Uri(url);
         var validation = await validator.ValidateAsync(uri, cancellationToken).ConfigureAwait(false);
         if (!validation.IsAllowed)
         {

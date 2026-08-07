@@ -26,8 +26,13 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: 还原与测试
-        run: dotnet test Transfor.slnx -c Release
+      - name: 构建
+        run: dotnet build Transfor.slnx -c Release --no-restore
+
+      # 测试项目是无框架控制台运行器：dotnet test 不会执行任何断言，
+      # 必须用 dotnet run 运行 Program.cs 才能真正跑回归测试
+      - name: 运行回归测试
+        run: dotnet run --project tests/Transfor.Tests -c Release
 
       - name: 安装 Velopack CLI
         run: dotnet tool install --global vpk

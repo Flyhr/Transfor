@@ -27,10 +27,17 @@ internal static class AppBootstrapper
         var mediaCache = new MediaCache(paths.MediaCacheDirectory);
         // 下载服务：流式 + 安全链路；Cookie 源经代理（未启用浏览器时为空）
         var downloadService = new MediaDownloadService(requestSender, browserSessions, mediaCache: mediaCache);
-        // 更新服务（Phase 1 检查 + Phase 2 安装）：决策走 update-policy.json，下载安装走 Velopack
+        // 更新服务（Phase 1 检查 + Phase 2 安装）：决策走 update-policy.json，下载安装走 Velopack；
+        // 更新网络与媒体网络分离（更新访问 GitHub 走系统代理，不受媒体 Direct/代理设置影响）
         var updateService = new UpdateService(
-            new HttpUpdatePolicySource(httpClient, validator),
+            new HttpUpdatePolicySource(HttpClientProvider.CreateForUpdates(), validator),
             AppVersion.Current);
+        // 浏览器服务（Phase 3）：WebView2 独立 Profile（Cookie/登录态持久化于 Browser\UserData）；
+        // 浏览器网络与媒体下载一致（Direct/System/CustomProxy 随媒体设置）
+        var browserService = new BrowserService(
+            new BrowserProfileService(paths.BrowserProfileDirectory),
+            networkMode,
+            proxyAddress);
         // 解析器注册：专用解析器（抖音）优先，Direct 最后兜底
         // 抖音传输偏好为会话级熔断状态（进程内共享，重启复位）
         var douyinPreference = new DouyinTransportPreferenceState();
@@ -58,6 +65,7 @@ internal static class AppBootstrapper
         {
             State = textState,
             Updates = updateService,
+            Browser = browserService,
             // 更新安装器工厂：按当前通道创建（Velopack GitHub 源，Beta 读取预发布）
             UpdateInstallerFactory = channel => new VelopackUpdateInstaller(channel),
             // 全局快捷键管理器：负责系统级热键的注册/替换/释放
@@ -72,9 +80,9 @@ internal static class AppBootstrapper
                 BrowserSessions = browserSessions,
                 HttpClient = httpClient,
                 Preview = new MediaPreviewService(requestSender, browserSessions, mediaCache),
-                // 浏览器会话工厂：真实 Edge + CDP（独立持久化配置目录），首次使用时惰性启动；
-                // 网络模式随设置（启动时读取，修改后重启生效）
-                BrowserSessionFactory = owner => new EdgeCdpBrowserSessionAccessor(owner, paths, networkMode, proxyAddress),
+                // 浏览器会话工厂：WebView2 隐藏宿主（Phase 4A，替代 Edge CDP）；
+                // 与「浏览器」页共享 Profile（登录一次互通），首次解析/下载时惰性初始化
+                BrowserSessionFactory = owner => new WebView2BrowserSessionAccessor(owner, browserService, paths),
             },
         };
     }
