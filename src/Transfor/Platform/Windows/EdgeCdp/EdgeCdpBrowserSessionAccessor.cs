@@ -329,16 +329,16 @@ internal sealed class EdgeCdpBrowserSessionAccessor : IBrowserSessionAccessor
         }
     }
 
-    // 解析成功后预取图片到本地缓存（尽力而为）：页面加载成功的图片响应直接落盘，
+    // 解析成功后预取媒体到本地缓存（尽力而为）：页面加载成功的图片/视频响应直接落盘，
     // 下载命中缓存即复制，避免再次访问可能失效的 CDN 链接
-    public async Task PrefetchImagesAsync(
-        IReadOnlyList<Uri> imageUris,
+    public async Task PrefetchMediaAsync(
+        IReadOnlyList<(Uri Uri, MediaKind Kind)> items,
         CancellationToken cancellationToken)
     {
         try
         {
             var target = await EnsureSessionAsync(cancellationToken);
-            await MediaPagePrefetcher.PrefetchAsync(target, mediaCache, imageUris, cancellationToken);
+            await MediaPagePrefetcher.PrefetchAsync(target, mediaCache, items, cancellationToken);
         }
         catch
         {

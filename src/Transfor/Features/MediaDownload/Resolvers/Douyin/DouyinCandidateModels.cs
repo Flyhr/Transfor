@@ -16,7 +16,10 @@ internal sealed record DouyinVariantCandidate(
 internal sealed record DouyinAssetCandidate(
     int OrderIndex,
     MediaKind Kind,
-    IReadOnlyList<DouyinVariantCandidate> Variants);
+    IReadOnlyList<DouyinVariantCandidate> Variants,
+    int SourceIndex = 0,
+    MediaAssetRole Role = MediaAssetRole.Normal,
+    string? PairId = null);
 
 internal sealed record DouyinPageData(
     string? PostId,

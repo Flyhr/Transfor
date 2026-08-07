@@ -2,8 +2,8 @@ using System.Text.Json.Nodes;
 
 namespace Transfor;
 
-// 页面媒体预取器：在页面上下文注入真实 <img> 元素（请求形态与页面自身加载一致，
-// Sec-Fetch-Dest: image），监听 Network 事件，在 loadingFinished 后通过
+// 页面媒体预取器：在页面上下文注入真实 <img>/<video> 元素（请求形态与页面自身加载一致，
+// Sec-Fetch-Dest: image/media），监听 Network 事件，在 loadingFinished 后通过
 // Network.getResponseBody 取得响应体写入本地缓存；
 // 尽力而为：任何失败都不影响主流程
 internal static class MediaPagePrefetcher
@@ -13,18 +13,21 @@ internal static class MediaPagePrefetcher
     public static async Task PrefetchAsync(
         CdpTargetSession session,
         MediaCache cache,
-        IReadOnlyList<Uri> imageUris,
+        IReadOnlyList<(Uri Uri, MediaKind Kind)> items,
         CancellationToken cancellationToken)
     {
-        if (imageUris.Count == 0)
+        if (items.Count == 0)
         {
             return;
         }
 
-        // 去重并限制数量（防止页面包含大量图片时预取过久）
-        var uris = imageUris.Distinct().Take(20).ToList();
-        var pending = uris.ToDictionary(
-            uri => uri.ToString(),
+        // 去重并限制数量（防止页面包含大量媒体时预取过久）
+        var mediaItems = items
+            .DistinctBy(item => item.Uri)
+            .Take(20)
+            .ToList();
+        var pending = mediaItems.ToDictionary(
+            item => item.Uri.ToString(),
             _ => new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously));
 
         void OnEvent(string method, JsonNode? parameters, string? eventSessionId)
@@ -33,13 +36,10 @@ internal static class MediaPagePrefetcher
             {
                 return;
             }
-            if (parameters?["type"]?.GetValue<string>() != "Image")
-            {
-                return;
-            }
 
-            var url = parameters["response"]?["url"]?.GetValue<string>();
-            var requestId = parameters["requestId"]?.GetValue<string>();
+            // 图片响应 type=Image；视频响应可能为 Media 或 Other，按 URL 匹配即可
+            var url = parameters?["response"]?["url"]?.GetValue<string>();
+            var requestId = parameters?["requestId"]?.GetValue<string>();
             if (url is not null && requestId is not null && pending.TryGetValue(url, out var tcs))
             {
                 tcs.TrySetResult(requestId);
@@ -49,17 +49,20 @@ internal static class MediaPagePrefetcher
         session.EventReceived += OnEvent;
         try
         {
-            // 注入真实图片元素（隐藏于视口外）
-            foreach (var uri in uris)
+            // 注入真实媒体元素（隐藏于视口外）：图片 <img>，视频 <video preload=auto>
+            foreach (var item in mediaItems)
             {
+                var expression = item.Kind == MediaKind.Video
+                    ? BuildVideoElementScript(item.Uri)
+                    : BuildImgElementScript(item.Uri);
                 _ = session.CommandAsync("Runtime.evaluate", new
                 {
-                    expression = BuildImgElementScript(uri),
+                    expression,
                     returnByValue = false,
                 }, cancellationToken);
             }
 
-            // 等待每个图片响应到达并缓存
+            // 等待每个媒体响应到达并缓存
             foreach (var (url, tcs) in pending)
             {
                 string? requestId;

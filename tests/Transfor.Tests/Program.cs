@@ -96,6 +96,8 @@ TestDouyinCandidateFallback();
 TestMagicExtensionDetection();
 TestBatchCompletedEvent();
 TestWorkIdExtraction();
+TestLivePhotoFileNaming();
+TestMusicUrlFiltering();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -2073,13 +2075,21 @@ static void TestDouyinStructuredDataFallbacks()
     AssertEqual(3, apiData.Assets.Count, "detail api image count");
     AssertEqual("fixture 详情接口图文", apiData.Title, "detail api title");
 
-    // 实况作品：images + video 共存 → 同时产出全部帧图与动态视频
+    // 实况作品：每张 images[i] 的静态图 + 自身动态视频配对（N 张实况 → N 静态 + N 动态）
     var liveData = DouyinPageParser.ParseStructuredData(ReadFixture("douyin-live-photo.json"));
-    AssertEqual(4, liveData.Assets.Count, "live photo: three images + one dynamic video");
-    AssertEqual(3, liveData.Assets.Count(a => a.Kind == MediaKind.Image), "live photo: three image assets");
-    AssertEqual(1, liveData.Assets.Count(a => a.Kind == MediaKind.Video), "live photo: one dynamic video asset");
-    AssertEqual(true, liveData.Assets.Where(a => a.Kind == MediaKind.Image).All(a => a.Variants.All(v => v.Url.Contains("live-"))), "live photo: frames are live images");
-    AssertEqual(true, liveData.Assets.Where(a => a.Kind == MediaKind.Video).All(a => a.Variants.All(v => v.Url.Contains("live-preview"))), "live photo: dynamic video present");
+    AssertEqual(6, liveData.Assets.Count, "live photo: three stills + three motions");
+    AssertEqual(3, liveData.Assets.Count(a => a.Role == MediaAssetRole.LivePhotoStill), "live photo: three still assets");
+    AssertEqual(3, liveData.Assets.Count(a => a.Role == MediaAssetRole.LivePhotoMotion), "live photo: three motion assets");
+    for (var i = 0; i < 3; i++)
+    {
+        var pair = liveData.Assets.Where(a => a.SourceIndex == i).ToArray();
+        AssertEqual(2, pair.Length, $"live photo pair {i} has still + motion");
+        AssertEqual(1, pair.Select(a => a.PairId).Distinct().Count(), $"live photo pair {i} shares pair id");
+        AssertEqual(true, pair.Any(a => a.Role == MediaAssetRole.LivePhotoStill && a.Kind == MediaKind.Image), $"live photo pair {i} still is image");
+        AssertEqual(true, pair.Any(a => a.Role == MediaAssetRole.LivePhotoMotion && a.Kind == MediaKind.Video), $"live photo pair {i} motion is video");
+        AssertEqual(true, pair.Any(a => a.Variants.Any(v => v.Url.Contains($"live-{i + 1}.jpg"))), $"live photo pair {i} still url");
+        AssertEqual(true, pair.Any(a => a.Variants.Any(v => v.Url.Contains($"live-{i + 1}.mp4"))), $"live photo pair {i} motion url");
+    }
 
     // URL 编码的 JSON：解码后解析
     var encoded = Uri.EscapeDataString(ReadFixture("douyin-detail-api.json"));
@@ -2362,6 +2372,38 @@ static void TestWorkIdExtraction()
     AssertEqual(true, DouyinDetailEndpointMatcher.IsDetailEndpoint("https://www.douyin.com/aweme/v1/web/aweme/iteminfo/?item_ids=7670791950899991451", "XHR"), "iteminfo api matched");
 }
 
+// 场景：实况图配对文件名（_still / _motion）
+static void TestLivePhotoFileNaming()
+{
+    var context = new MediaRequestContext(null, null);
+    var post = new ResolvedMediaPost(MediaProviderId.Douyin, new Uri("https://v.douyin.com/a/"), "1", "什么都交给时间嘛", "a", Array.Empty<MediaAsset>());
+
+    var still = new MediaAsset(0, MediaKind.Image, new[] { new MediaVariant(new Uri("https://x/1.jpg"), 100, 100, null, null, null, "image/jpeg", null, MediaVariantSource.StructuredData, context) }, 0, MediaAssetRole.LivePhotoStill, "live-000");
+    var motion = new MediaAsset(1, MediaKind.Video, new[] { new MediaVariant(new Uri("https://x/1.mp4"), 100, 100, null, null, null, "video/mp4", null, MediaVariantSource.StructuredData, context) }, 0, MediaAssetRole.LivePhotoMotion, "live-000");
+    var still2 = new MediaAsset(2, MediaKind.Image, new[] { new MediaVariant(new Uri("https://x/2.jpg"), 100, 100, null, null, null, "image/jpeg", null, MediaVariantSource.StructuredData, context) }, 1, MediaAssetRole.LivePhotoStill, "live-001");
+    var motion2 = new MediaAsset(3, MediaKind.Video, new[] { new MediaVariant(new Uri("https://x/2.mp4"), 100, 100, null, null, null, "video/mp4", null, MediaVariantSource.StructuredData, context) }, 1, MediaAssetRole.LivePhotoMotion, "live-001");
+
+    AssertEqual("什么都交给时间嘛_01_still.jpg", MediaDownloadPage.BuildFileName(post, still, still.Variants[0]), "still file name paired");
+    AssertEqual("什么都交给时间嘛_01_motion.mp4", MediaDownloadPage.BuildFileName(post, motion, motion.Variants[0]), "motion file name paired");
+    AssertEqual("什么都交给时间嘛_02_still.jpg", MediaDownloadPage.BuildFileName(post, still2, still2.Variants[0]), "second still file name");
+    AssertEqual("什么都交给时间嘛_02_motion.mp4", MediaDownloadPage.BuildFileName(post, motion2, motion2.Variants[0]), "second motion file name");
+
+    // 普通视频作品：无配对后缀
+    var normalVideo = new MediaAsset(0, MediaKind.Video, new[] { new MediaVariant(new Uri("https://x/v.mp4"), 100, 100, null, null, null, "video/mp4", null, MediaVariantSource.StructuredData, context) });
+    AssertEqual("什么都交给时间嘛.mp4", MediaDownloadPage.BuildFileName(post, normalVideo, normalVideo.Variants[0]), "normal video name unchanged");
+}
+
+// 场景：音乐链接不产出动态视频资产
+static void TestMusicUrlFiltering()
+{
+    // 实况图 video 指向音乐 MP3 → 不应产出 motion 资产（isLivePhoto 以可播放视频为准）
+    var json = "{\"aweme_detail\":{\"aweme_id\":\"1\",\"desc\":\"t\",\"author\":{\"nickname\":\"a\"},\"images\":[{\"url_list\":[\"https://media.example/live-1.jpg\"],\"clip_type\":5,\"live_photo_type\":1,\"video\":{\"play_addr_h264\":{\"url_list\":[\"https://sf6-cdn-tos.douyinstatic.com/obj/ies-music/7620894014291725092.mp3\"]}}}]}}";
+    var data = DouyinPageParser.ParseStructuredData(json);
+    AssertEqual(1, data.Assets.Count, "music-only live photo: no motion asset");
+    AssertEqual(MediaAssetRole.Normal, data.Assets[0].Role, "music-only: still falls back to normal role");
+    AssertEqual(MediaKind.Image, data.Assets[0].Kind, "music-only: still kind");
+}
+
 // 通用断言：相等则通过，否则抛出带用例名的异常
 static void AssertEqual<T>(T expected, T actual, string name)
 {
@@ -2615,7 +2657,7 @@ file sealed class FakeBrowserSession : IBrowserSessionAccessor
         CookieRequests.Add((browserSessionId, requestUri));
         return Task.FromResult(cookies);
     }
-    public Task PrefetchImagesAsync(IReadOnlyList<Uri> imageUris, CancellationToken cancellationToken)
+    public Task PrefetchMediaAsync(IReadOnlyList<(Uri Uri, MediaKind Kind)> items, CancellationToken cancellationToken)
         => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -2769,7 +2811,7 @@ file sealed class CapturingBrowserSession : IBrowserSessionAccessor
 
     public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
         => Task.FromResult<IReadOnlyList<BrowserCookie>>(Array.Empty<BrowserCookie>());
-    public Task PrefetchImagesAsync(IReadOnlyList<Uri> imageUris, CancellationToken cancellationToken)
+    public Task PrefetchMediaAsync(IReadOnlyList<(Uri Uri, MediaKind Kind)> items, CancellationToken cancellationToken)
         => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -2811,7 +2853,7 @@ file sealed class LazyBrowserSession : IBrowserSessionAccessor
 
     public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
         => Task.FromResult<IReadOnlyList<BrowserCookie>>(Array.Empty<BrowserCookie>());
-    public Task PrefetchImagesAsync(IReadOnlyList<Uri> imageUris, CancellationToken cancellationToken)
+    public Task PrefetchMediaAsync(IReadOnlyList<(Uri Uri, MediaKind Kind)> items, CancellationToken cancellationToken)
         => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
@@ -2857,7 +2899,7 @@ file sealed class BrowserDownloadSession : IBrowserSessionAccessor
 
     public Task<IReadOnlyList<BrowserCookie>> GetCookiesAsync(string browserSessionId, Uri requestUri, CancellationToken cancellationToken)
         => Task.FromResult<IReadOnlyList<BrowserCookie>>(Array.Empty<BrowserCookie>());
-    public Task PrefetchImagesAsync(IReadOnlyList<Uri> imageUris, CancellationToken cancellationToken)
+    public Task PrefetchMediaAsync(IReadOnlyList<(Uri Uri, MediaKind Kind)> items, CancellationToken cancellationToken)
         => Task.CompletedTask;
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;

@@ -164,9 +164,9 @@ internal sealed class DouyinMediaResolver : IMediaResolver
                 .ToArray(),
         };
 
-        // 后台预取图片到本地缓存（尽力而为，不阻塞解析返回）：
-        // 页面加载成功的图片响应直接落盘，下载时命中即复制
-        TryPrefetchImages(post);
+        // 后台预取媒体到本地缓存（尽力而为，不阻塞解析返回）：
+        // 静态照片与实况动态视频都预取，页面加载成功的响应直接落盘，下载时命中即复制
+        TryPrefetchLivePhotoMedia(post);
 
         return MediaResolveResult.Success(post);
     }
@@ -189,21 +189,29 @@ internal sealed class DouyinMediaResolver : IMediaResolver
         return null;
     }
 
-    // 预取图片媒体到本地缓存；失败不影响解析结果
-    private void TryPrefetchImages(ResolvedMediaPost post)
+    // 预取静态照片与实况动态视频到本地缓存；失败不影响解析结果
+    private void TryPrefetchLivePhotoMedia(ResolvedMediaPost post)
     {
         try
         {
-            var imageUris = post.Assets
-                .Where(asset => asset.Kind == MediaKind.Image)
+            // 静态照片注入 <img>，动态视频注入 <video>；仅预取配对实况媒体
+            var stillItems = post.Assets
+                .Where(asset => asset.Role == MediaAssetRole.LivePhotoStill)
                 .Select(asset => asset.Variants.FirstOrDefault(variant => !variant.IsSegmented)?.Uri)
                 .Where(uri => uri is not null)
                 .Cast<Uri>()
-                .Distinct()
-                .ToList();
-            if (imageUris.Count > 0)
+                .Select(uri => (Uri: uri, Kind: MediaKind.Image));
+            var motionItems = post.Assets
+                .Where(asset => asset.Role == MediaAssetRole.LivePhotoMotion)
+                .Select(asset => asset.Variants.FirstOrDefault(variant => !variant.IsSegmented)?.Uri)
+                .Where(uri => uri is not null)
+                .Cast<Uri>()
+                .Select(uri => (Uri: uri, Kind: MediaKind.Video));
+            var items = stillItems.Concat(motionItems).DistinctBy(item => item.Uri).ToList();
+
+            if (items.Count > 0)
             {
-                _ = browserSessions.PrefetchImagesAsync(imageUris, CancellationToken.None);
+                _ = browserSessions.PrefetchMediaAsync(items, CancellationToken.None);
             }
         }
         catch

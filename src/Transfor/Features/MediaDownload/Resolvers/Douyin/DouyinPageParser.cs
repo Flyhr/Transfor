@@ -172,8 +172,8 @@ internal static class DouyinPageParser
     // 从作品 JSON 中提取数据；识别 aweme_detail / aweme 结构；
     // 真实抖音 RENDER_DATA 为嵌套结构（如 {"app":{"aweme":{"detail":{"aweme_detail":{...}}}}}），
     // 因此 aweme_detail 做递归查找（该键语义特定，不会误匹配推荐流），aweme 仅根级匹配；
-    // 作品类型互斥：存在 images（图文/实况）时只产出图片资产，忽略封面/预览视频；
-    // 仅有 video 时才是视频作品，只产出视频资产
+    // 实况图逐个解析 images[i]：静态图（url_list）+ 该图自身 video（play_addr_h264 等）配对；
+    // 顶层 video 仅在无 images 时作为普通视频作品解析（图集预览视频不产出）
     private static bool TryParseWork(JsonElement root, out DouyinPageData data)
     {
         data = default!;
@@ -194,73 +194,11 @@ internal static class DouyinPageParser
 
         if (hasImages)
         {
-            // 图片/实况作品：按数组顺序为资产，url_list 为变体
-            var index = 0;
-            foreach (var image in images.EnumerateArray())
-            {
-                var variants = new List<DouyinVariantCandidate>();
-                var width = GetInt(image, "width");
-                var height = GetInt(image, "height");
-                if (image.TryGetProperty("url_list", out var urls) && urls.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var url in urls.EnumerateArray())
-                    {
-                        if (url.GetString() is { Length: > 0 } text)
-                        {
-                            variants.Add(new DouyinVariantCandidate(text, "image", width, height, null, null, null, null, MediaVariantSource.StructuredData));
-                        }
-                    }
-                }
-
-                if (variants.Count > 0)
-                {
-                    assets.Add(new DouyinAssetCandidate(index++, MediaKind.Image, variants));
-                }
-            }
+            ParseImageItems(images, assets);
         }
-
-        if (hasVideo)
+        else if (hasVideo)
         {
-            // 视频/实况动态视频：play_addr / bit_rate（各清晰度档）/ download_addr 为可下载变体；
-            // 实况作品（images + video 共存）同时产出全部帧图与动态视频；
-            // cover 是封面图（JPEG），不得作为视频变体参与下载
-            var variants = new List<DouyinVariantCandidate>();
-            var width = GetInt(video, "width") ?? GetNestedInt(video, "play_addr", "width");
-            var height = GetInt(video, "height") ?? GetNestedInt(video, "play_addr", "height");
-            var fps = GetNestedInt(video, "play_addr", "fps");
-
-            if (video.TryGetProperty("play_addr", out var playAddr))
-            {
-                CollectUrlList(playAddr, "url_list", "video/mp4", width, height, fps, MediaVariantSource.StructuredData, variants);
-            }
-
-            // 高清档位：bit_rate 数组每项含 play_addr（带该档分辨率/码率）
-            if (video.TryGetProperty("bit_rate", out var bitRates) && bitRates.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var bitRate in bitRates.EnumerateArray())
-                {
-                    var bitrateValue = GetInt(bitRate, "bit_rate");
-                    if (bitRate.TryGetProperty("play_addr", out var bitRatePlayAddr))
-                    {
-                        var bitRateWidth = GetInt(bitRate, "width") ?? GetNestedInt(bitRate, "play_addr", "width");
-                        var bitRateHeight = GetInt(bitRate, "height") ?? GetNestedInt(bitRate, "play_addr", "height");
-                        CollectUrlList(
-                            bitRatePlayAddr, "url_list", "video/mp4",
-                            bitRateWidth, bitRateHeight, fps, MediaVariantSource.StructuredData, variants,
-                            bitrateValue);
-                    }
-                }
-            }
-
-            if (video.TryGetProperty("download_addr", out var downloadAddr))
-            {
-                CollectUrlList(downloadAddr, "url_list", "video/mp4", width, height, fps, MediaVariantSource.StructuredData, variants);
-            }
-
-            if (variants.Count > 0)
-            {
-                assets.Add(new DouyinAssetCandidate(0, MediaKind.Video, variants));
-            }
+            ParseNormalVideo(video, assets);
         }
 
         if (assets.Count == 0)
@@ -270,6 +208,193 @@ internal static class DouyinPageParser
 
         data = new DouyinPageData(postId, title, authorName, assets, false, false, null);
         return true;
+    }
+
+    // 逐图解析：每张图产出静态照片（url_list）与动态视频（image.video）配对资产；
+    // 是否为实况图以存在可播放视频地址为最终依据，live_photo_type/clip_type 仅作辅助
+    private static void ParseImageItems(
+        JsonElement images,
+        List<DouyinAssetCandidate> assets)
+    {
+        var flatIndex = 0;
+        var sourceIndex = 0;
+
+        foreach (var image in images.EnumerateArray())
+        {
+            var pairId = $"live-{sourceIndex:D3}";
+
+            var stillVariants = CollectImageVariants(image);
+            var motionVariants = CollectImageMotionVariants(image);
+
+            // 有真实可播放的动态视频地址才算实况图（音乐链接已被过滤）
+            var isLivePhoto = motionVariants.Count > 0;
+
+            if (stillVariants.Count > 0)
+            {
+                assets.Add(new DouyinAssetCandidate(
+                    flatIndex++,
+                    MediaKind.Image,
+                    stillVariants,
+                    sourceIndex,
+                    isLivePhoto ? MediaAssetRole.LivePhotoStill : MediaAssetRole.Normal,
+                    isLivePhoto ? pairId : null));
+            }
+
+            if (motionVariants.Count > 0)
+            {
+                assets.Add(new DouyinAssetCandidate(
+                    flatIndex++,
+                    MediaKind.Video,
+                    motionVariants,
+                    sourceIndex,
+                    MediaAssetRole.LivePhotoMotion,
+                    pairId));
+            }
+
+            sourceIndex++;
+        }
+    }
+
+    // 收集单张图片的静态照片变体（url_list）
+    private static List<DouyinVariantCandidate> CollectImageVariants(JsonElement image)
+    {
+        var variants = new List<DouyinVariantCandidate>();
+        var width = GetInt(image, "width");
+        var height = GetInt(image, "height");
+        if (image.TryGetProperty("url_list", out var urls) && urls.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var url in urls.EnumerateArray())
+            {
+                if (url.GetString() is { Length: > 0 } text)
+                {
+                    variants.Add(new DouyinVariantCandidate(text, "image", width, height, null, null, null, null, MediaVariantSource.StructuredData));
+                }
+            }
+        }
+        return variants;
+    }
+
+    // 收集单张图片的动态视频变体（image.video）：
+    // 优先 H.264（Windows/普通播放器兼容性更好）：play_addr_h264 → play_addr → play_addr_265 → download_addr；
+    // 再并入 bit_rate 各档位；去除重复 URL；过滤音乐链接
+    private static List<DouyinVariantCandidate> CollectImageMotionVariants(JsonElement image)
+    {
+        var variants = new List<DouyinVariantCandidate>();
+
+        if (!image.TryGetProperty("video", out var video)
+            || video.ValueKind != JsonValueKind.Object)
+        {
+            return variants;
+        }
+
+        var width = GetInt(video, "width");
+        var height = GetInt(video, "height");
+
+        foreach (var propertyName in new[]
+                 {
+                     "play_addr_h264",
+                     "play_addr",
+                     "play_addr_265",
+                     "download_addr",
+                 })
+        {
+            if (video.TryGetProperty(propertyName, out var playAddress))
+            {
+                CollectUrlList(
+                    playAddress,
+                    "url_list",
+                    "video/mp4",
+                    width,
+                    height,
+                    GetInt(playAddress, "fps"),
+                    MediaVariantSource.StructuredData,
+                    variants);
+            }
+        }
+
+        if (video.TryGetProperty("bit_rate", out var bitRates)
+            && bitRates.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var bitRate in bitRates.EnumerateArray())
+            {
+                if (!bitRate.TryGetProperty("play_addr", out var playAddress))
+                {
+                    continue;
+                }
+
+                CollectUrlList(
+                    playAddress,
+                    "url_list",
+                    "video/mp4",
+                    GetInt(bitRate, "width") ?? width,
+                    GetInt(bitRate, "height") ?? height,
+                    GetInt(playAddress, "fps"),
+                    MediaVariantSource.StructuredData,
+                    variants,
+                    GetInt(bitRate, "bit_rate"));
+            }
+        }
+
+        return variants
+            .Where(v => !IsMusicUrl(v.Url))
+            .GroupBy(v => v.Url, StringComparer.Ordinal)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    // 普通视频作品：play_addr / bit_rate（各清晰度档）/ download_addr 为可下载变体；
+    // cover 是封面图（JPEG），不得作为视频变体参与下载
+    private static void ParseNormalVideo(
+        JsonElement video,
+        List<DouyinAssetCandidate> assets)
+    {
+        var variants = new List<DouyinVariantCandidate>();
+        var width = GetInt(video, "width") ?? GetNestedInt(video, "play_addr", "width");
+        var height = GetInt(video, "height") ?? GetNestedInt(video, "play_addr", "height");
+        var fps = GetNestedInt(video, "play_addr", "fps");
+
+        if (video.TryGetProperty("play_addr", out var playAddr))
+        {
+            CollectUrlList(playAddr, "url_list", "video/mp4", width, height, fps, MediaVariantSource.StructuredData, variants);
+        }
+
+        // 高清档位：bit_rate 数组每项含 play_addr（带该档分辨率/码率）
+        if (video.TryGetProperty("bit_rate", out var bitRates) && bitRates.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var bitRate in bitRates.EnumerateArray())
+            {
+                var bitrateValue = GetInt(bitRate, "bit_rate");
+                if (bitRate.TryGetProperty("play_addr", out var bitRatePlayAddr))
+                {
+                    var bitRateWidth = GetInt(bitRate, "width") ?? GetNestedInt(bitRate, "play_addr", "width");
+                    var bitRateHeight = GetInt(bitRate, "height") ?? GetNestedInt(bitRate, "play_addr", "height");
+                    CollectUrlList(
+                        bitRatePlayAddr, "url_list", "video/mp4",
+                        bitRateWidth, bitRateHeight, fps, MediaVariantSource.StructuredData, variants,
+                        bitrateValue);
+                }
+            }
+        }
+
+        if (video.TryGetProperty("download_addr", out var downloadAddr))
+        {
+            CollectUrlList(downloadAddr, "url_list", "video/mp4", width, height, fps, MediaVariantSource.StructuredData, variants);
+        }
+
+        if (variants.Count > 0)
+        {
+            assets.Add(new DouyinAssetCandidate(0, MediaKind.Video, variants));
+        }
+    }
+
+    // 音乐链接判定：ies-music 目录 / /music/ 路径 / .mp3 扩展名
+    private static bool IsMusicUrl(string url)
+    {
+        var lower = url.ToLowerInvariant();
+        return lower.Contains("ies-music", StringComparison.Ordinal)
+            || lower.Contains("/music/", StringComparison.Ordinal)
+            || lower.EndsWith(".mp3", StringComparison.Ordinal)
+            || lower.Contains(".mp3?", StringComparison.Ordinal);
     }
 
     // 查找作品详情节点：根级 aweme_detail/aweme 优先；

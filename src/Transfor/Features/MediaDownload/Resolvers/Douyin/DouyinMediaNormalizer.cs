@@ -54,7 +54,13 @@ internal static class DouyinMediaNormalizer
 
             if (variants.Count > 0)
             {
-                assets.Add(new MediaAsset(candidate.OrderIndex, candidate.Kind, variants));
+                assets.Add(new MediaAsset(
+                    candidate.OrderIndex,
+                    candidate.Kind,
+                    variants,
+                    candidate.SourceIndex,
+                    candidate.Role,
+                    candidate.PairId));
             }
         }
 

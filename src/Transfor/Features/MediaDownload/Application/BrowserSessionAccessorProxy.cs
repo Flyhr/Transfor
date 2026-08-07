@@ -102,8 +102,8 @@ internal sealed class BrowserSessionAccessorProxy : IBrowserSessionAccessor
         return current.GetCookiesAsync(browserSessionId, requestUri, cancellationToken);
     }
 
-    public Task PrefetchImagesAsync(
-        IReadOnlyList<Uri> imageUris,
+    public Task PrefetchMediaAsync(
+        IReadOnlyList<(Uri Uri, MediaKind Kind)> items,
         CancellationToken cancellationToken)
     {
         IBrowserSessionAccessor? current;
@@ -117,7 +117,7 @@ internal sealed class BrowserSessionAccessorProxy : IBrowserSessionAccessor
             return Task.CompletedTask;
         }
 
-        return current.PrefetchImagesAsync(imageUris, cancellationToken);
+        return current.PrefetchMediaAsync(items, cancellationToken);
     }
 
     // 可恢复关闭：转发给已附加的会话；未附加时为无操作
