@@ -6,7 +6,8 @@ namespace Transfor;
 // 任何网络错误 / 非成功状态 / JSON 损坏都抛异常（→ CheckFailed），不产出策略
 internal sealed class HttpUpdatePolicySource : IUpdatePolicySource
 {
-    public const string DefaultPolicyUrl = "https://raw.githubusercontent.com/Flyhr/Transfor/main/update-policy.json";
+    // 发布走 Release 分支：update-policy.json 与版本发布同分支维护
+    public const string DefaultPolicyUrl = "https://raw.githubusercontent.com/Flyhr/Transfor/Release/update-policy.json";
 
     private static readonly JsonSerializerOptions Options = new()
     {

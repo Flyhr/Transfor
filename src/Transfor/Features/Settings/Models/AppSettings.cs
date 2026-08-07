@@ -1,13 +1,13 @@
 namespace Transfor;
 
-// 应用设置：历史面板全局快捷键 + 两种转换功能各自的历史上限
-internal sealed record AppSettings(HotKeyBinding HistoryHotKey, int QuoteHistoryLimit, int SpaceHistoryLimit)
+// 应用设置：历史面板全局快捷键 + 两种转换功能各自的历史上限 + 更新通道
+internal sealed record AppSettings(HotKeyBinding HistoryHotKey, int QuoteHistoryLimit, int SpaceHistoryLimit, UpdateChannel UpdateChannel)
 {
     public const int MinimumHistoryLimit = 1;
     public const int MaximumHistoryLimit = 500;
 
-    // 默认设置：快捷键 Alt+Q，两种历史各保留 100 条
-    public static AppSettings Default => new(HotKeyBinding.Default, 100, 100);
+    // 默认设置：快捷键 Alt+Q，两种历史各保留 100 条，更新通道 Stable
+    public static AppSettings Default => new(HotKeyBinding.Default, 100, 100, UpdateChannel.Stable);
 
     // 校验设置合法性，非法时抛出异常
     public void Validate()
@@ -16,6 +16,10 @@ internal sealed record AppSettings(HotKeyBinding HistoryHotKey, int QuoteHistory
         HotKeyBinding.Create(HistoryHotKey.Modifiers, HistoryHotKey.Key);
         ValidateHistoryLimit(QuoteHistoryLimit, nameof(QuoteHistoryLimit));
         ValidateHistoryLimit(SpaceHistoryLimit, nameof(SpaceHistoryLimit));
+        if (!Enum.IsDefined(UpdateChannel))
+        {
+            throw new ArgumentOutOfRangeException(nameof(UpdateChannel), UpdateChannel, "更新通道非法。");
+        }
     }
 
     // 校验历史上限必须在 1–500 之间

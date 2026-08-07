@@ -1,0 +1,51 @@
+name: Release
+
+# 发布流程（Phase 2 Task 2.5）：
+#   1. 在 Release 分支更新 update-policy.json（latestVersion/minimumVersion/说明）
+#   2. 推送标签（稳定版 v0.9.0；测试版 v0.9.0-beta.1 自动走 Beta 通道）
+#      git tag v0.9.0 && git push origin v0.9.0
+#   3. 本工作流自动：测试 → 发布 → vpk 打包 → 创建 GitHub Release 并上传安装包/更新包
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: 还原与测试
+        run: dotnet test Transfor.slnx -c Release
+
+      - name: 安装 Velopack CLI
+        run: dotnet tool install --global vpk
+
+      - name: 发布应用（自包含 win-x64）
+        run: dotnet publish src/Transfor -c Release -r win-x64 --self-contained -o publish/Transfor
+
+      - name: Velopack 打包
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          # 标签含连字符（如 v1.0.0-beta.1）→ Beta 通道；否则 Stable 通道
+          $channel = if ("${{ github.ref_name }}" -match "-") { "beta" } else { "stable" }
+          vpk pack -u Transfor -v $tag -e Transfor.exe -p publish/Transfor -o releases -c $channel --packTitle "Transfor" --packAuthors "Flyhr" --skip-updates -y
+
+      - name: 创建 GitHub Release 并上传安装包/更新包
+        uses: softprops/action-gh-release@v2
+        with:
+          files: releases/*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true

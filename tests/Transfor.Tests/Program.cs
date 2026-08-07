@@ -103,6 +103,8 @@ TestUpdatePolicyParsing();
 TestUpdateStatusDecision();
 TestUpdateCheckFailed();
 TestUpdateChannelFilter();
+TestUpdateChannelPersistence();
+TestUpdateChannelSettingsValidation();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -2458,56 +2460,86 @@ static void TestUpdatePolicyParsing()
 // Phase 1 验收：版本决策矩阵（计划文档 Mock 数据）
 static void TestUpdateStatusDecision()
 {
-    var upToDate = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0"))), UpdateChannel.Stable, "1.5.0");
-    AssertEqual(UpdateStatus.UpToDate, upToDate.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "current == latest → UpToDate");
+    var upToDate = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0"))), "1.5.0");
+    AssertEqual(UpdateStatus.UpToDate, upToDate.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "current == latest → UpToDate");
 
-    var optional = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", "1.3.0"))), UpdateChannel.Stable, "1.4.0");
-    AssertEqual(UpdateStatus.OptionalUpdate, optional.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "current >= minimum and < latest → OptionalUpdate");
+    var optional = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", "1.3.0"))), "1.4.0");
+    AssertEqual(UpdateStatus.OptionalUpdate, optional.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "current >= minimum and < latest → OptionalUpdate");
 
-    var required = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", "1.3.0"))), UpdateChannel.Stable, "1.2.0");
-    AssertEqual(UpdateStatus.RequiredUpdate, required.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "current < minimum → RequiredUpdate");
+    var required = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", "1.3.0"))), "1.2.0");
+    AssertEqual(UpdateStatus.RequiredUpdate, required.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "current < minimum → RequiredUpdate");
 
-    var noMinimum = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0"))), UpdateChannel.Stable, "1.4.0");
-    AssertEqual(UpdateStatus.OptionalUpdate, noMinimum.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "no minimum → OptionalUpdate");
+    var noMinimum = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0"))), "1.4.0");
+    AssertEqual(UpdateStatus.OptionalUpdate, noMinimum.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "no minimum → OptionalUpdate");
 }
 
 // Phase 1 验收：更新检查失败 → CheckFailed，应用仍可运行（网络错误绝不判定 RequiredUpdate）
 static void TestUpdateCheckFailed()
 {
-    var failing = new UpdateService(new FakeUpdatePolicySource(() => Task.FromException<UpdatePolicy?>(new HttpRequestException("网络不可达"))), UpdateChannel.Stable, "1.4.0");
-    var failedResult = failing.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult();
+    var failing = new UpdateService(new FakeUpdatePolicySource(() => Task.FromException<UpdatePolicy?>(new HttpRequestException("网络不可达"))), "1.4.0");
+    var failedResult = failing.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult();
     AssertEqual(UpdateStatus.CheckFailed, failedResult.Status, "network error → CheckFailed");
     AssertEqual(true, !string.IsNullOrWhiteSpace(failedResult.Error), "check failed carries message");
 
-    var nullPolicy = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(null)), UpdateChannel.Stable, "1.4.0");
-    AssertEqual(UpdateStatus.CheckFailed, nullPolicy.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "missing policy → CheckFailed");
+    var nullPolicy = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(null)), "1.4.0");
+    AssertEqual(UpdateStatus.CheckFailed, nullPolicy.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "missing policy → CheckFailed");
 
-    var corruptLatest = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("not-a-version", "1.3.0"))), UpdateChannel.Stable, "1.4.0");
-    AssertEqual(UpdateStatus.CheckFailed, corruptLatest.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "corrupt latest version → CheckFailed");
+    var corruptLatest = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("not-a-version", "1.3.0"))), "1.4.0");
+    AssertEqual(UpdateStatus.CheckFailed, corruptLatest.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "corrupt latest version → CheckFailed");
 
-    var corruptMinimum = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", "abc"))), UpdateChannel.Stable, "1.4.0");
-    AssertEqual(UpdateStatus.CheckFailed, corruptMinimum.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "corrupt minimum version → CheckFailed");
+    var corruptMinimum = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", "abc"))), "1.4.0");
+    AssertEqual(UpdateStatus.CheckFailed, corruptMinimum.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "corrupt minimum version → CheckFailed");
 }
 
 // Phase 1：更新通道过滤与远程禁用
 static void TestUpdateChannelFilter()
 {
-    var disabled = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", enabled: false))), UpdateChannel.Stable, "1.4.0");
-    AssertEqual(UpdateStatus.Disabled, disabled.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "disabled policy → Disabled");
+    var disabled = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", enabled: false))), "1.4.0");
+    AssertEqual(UpdateStatus.Disabled, disabled.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "disabled policy → Disabled");
 
-    var stableRejectsBeta = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.6.0", channel: "beta"))), UpdateChannel.Stable, "1.4.0");
-    AssertEqual(UpdateStatus.UpToDate, stableRejectsBeta.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "stable client ignores beta policy");
+    var stableRejectsBeta = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.6.0", channel: "beta"))), "1.4.0");
+    AssertEqual(UpdateStatus.UpToDate, stableRejectsBeta.CheckForUpdatesAsync(UpdateChannel.Stable, CancellationToken.None).GetAwaiter().GetResult().Status, "stable client ignores beta policy");
 
-    var betaAcceptsStable = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0"))), UpdateChannel.Beta, "1.4.0");
-    AssertEqual(UpdateStatus.OptionalUpdate, betaAcceptsStable.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "beta client accepts stable policy");
+    var betaAcceptsStable = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0"))), "1.4.0");
+    AssertEqual(UpdateStatus.OptionalUpdate, betaAcceptsStable.CheckForUpdatesAsync(UpdateChannel.Beta, CancellationToken.None).GetAwaiter().GetResult().Status, "beta client accepts stable policy");
 
-    var betaAcceptsBeta = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.6.0-beta.1", channel: "beta"))), UpdateChannel.Beta, "1.4.0");
-    AssertEqual(UpdateStatus.OptionalUpdate, betaAcceptsBeta.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "beta client accepts beta policy");
+    var betaAcceptsBeta = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.6.0-beta.1", channel: "beta"))), "1.4.0");
+    AssertEqual(UpdateStatus.OptionalUpdate, betaAcceptsBeta.CheckForUpdatesAsync(UpdateChannel.Beta, CancellationToken.None).GetAwaiter().GetResult().Status, "beta client accepts beta policy");
 }
 
 // 测试辅助：构造更新策略
 static UpdatePolicy Policy(string latest, string? minimum = null, bool enabled = true, string? channel = null) =>
     new() { Enabled = enabled, LatestVersion = latest, MinimumVersion = minimum, Channel = channel };
+
+// Phase 2：更新通道设置持久化（旧配置文件无通道字段 → 默认 Stable）
+static void TestUpdateChannelPersistence()
+{
+    var directory = Path.Combine(Path.GetTempPath(), "TransforTests", Guid.NewGuid().ToString("N"));
+    var paths = new AppPaths(directory);
+    Directory.CreateDirectory(directory);
+
+    // 旧配置文件没有 UpdateChannel 字段 → 回退 Stable
+    File.WriteAllText(paths.SettingsFile, "{\"schemaVersion\":1,\"value\":{\"HotKeyModifiers\":262144,\"HotKeyKey\":81,\"QuoteHistoryLimit\":100,\"SpaceHistoryLimit\":100}}");
+    var store = TextStateStore.Load(paths);
+    AssertEqual(UpdateChannel.Stable, store.Settings.UpdateChannel, "legacy settings without channel default to Stable");
+
+    // 切换 Beta 并持久化 → 重载保持
+    store.UpdateSettings(store.Settings with { UpdateChannel = UpdateChannel.Beta });
+    var reloaded = TextStateStore.Load(paths);
+    AssertEqual(UpdateChannel.Beta, reloaded.Settings.UpdateChannel, "beta channel persists across reload");
+
+    // 切回 Stable
+    reloaded.UpdateSettings(reloaded.Settings with { UpdateChannel = UpdateChannel.Stable });
+    AssertEqual(UpdateChannel.Stable, TextStateStore.Load(paths).Settings.UpdateChannel, "stable channel persists across reload");
+}
+
+// Phase 2：AppSettings 通道校验
+static void TestUpdateChannelSettingsValidation()
+{
+    var invalid = AppSettings.Default with { UpdateChannel = (UpdateChannel)99 };
+    AssertThrows<ArgumentOutOfRangeException>(() => invalid.Validate(), "invalid update channel rejected");
+    AssertEqual(UpdateChannel.Stable, AppSettings.Default.UpdateChannel, "default channel is Stable");
+}
 
 // 通用断言：相等则通过，否则抛出带用例名的异常
 static void AssertEqual<T>(T expected, T actual, string name)

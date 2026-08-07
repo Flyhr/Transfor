@@ -9,8 +9,11 @@ internal sealed class AppServices : IDisposable, IAsyncDisposable
     // 全局快捷键管理器
     public required GlobalHotKeyManager HotKeys { get; init; }
 
-    // 更新服务：版本检查（Phase 1；下载安装由 Phase 2 接入）
+    // 更新服务：版本检查 + 更新安装器工厂（Velopack；下载/应用由 IUpdateInstaller 承担）
     public required UpdateService Updates { get; init; }
+
+    // 更新安装器工厂：按更新通道创建（设置中切换通道后即时生效）
+    public required Func<UpdateChannel, IUpdateInstaller> UpdateInstallerFactory { get; init; }
 
     // 粘贴协调器：把历史结果粘贴回呼出前的窗口
     public required PasteCoordinator PasteCoordinator { get; init; }

@@ -4,9 +4,9 @@
 
 ## 〇、当前版本与路线
 
-- **应用版本**：`0.8.0`（唯一来源：`src/Transfor/Transfor.csproj` 的 `<Version>`，SemVer）
+- **应用版本**：`0.9.0`（唯一来源：`src/Transfor/Transfor.csproj` 的 `<Version>`，SemVer）
 - **浏览器技术路线（2026-08-07 决策）**：后续 Phase 3 起用 **Microsoft Edge WebView2** 替换现有 Edge CDP 方案；旧实现保留到新实现成熟后再移除（不允许提前删除现有实现）
-- **Phase 进度**：Phase 0（架构整理）✅ 已打标签 `architecture-baseline`；Phase 1（版本检查）✅ 完成于分支 `feature/update-foundation`；Phase 2（Velopack 自动更新）未开始
+- **Phase 进度**：Phase 0（架构整理）✅ 已打标签 `architecture-baseline`；Phase 1（版本检查）✅ 完成于分支 `feature/update-foundation`；Phase 2（Velopack 自动更新）✅ 完成于分支 `feature/velopack-updater`；Phase 3（WebView2）未开始
 
 ## 一、项目概述
 
@@ -24,7 +24,7 @@ src/Transfor/
 │  ├─ TextTools/   # QuoteConverter / SpaceRemover / TextToolsPage
 │  ├─ History/     # HistoryEntry / PasteCoordinator / HistoryPanelForm
 │  ├─ Settings/    # AppSettings / HotKeyBinding / SettingsForm
-│  ├─ Updates/     # Phase 1 版本检查：UpdateService / VersionComparer(UpdateVersion) / IUpdatePolicySource(Http 策略源) / UpdateNoticeForm（可选+强制提示）
+│  ├─ Updates/     # 版本检查 + Velopack 安装：UpdateService / VersionComparer(UpdateVersion) / IUpdatePolicySource / IUpdateInstaller(VelopackUpdateInstaller, GithubSource) / UpdateNoticeForm + UpdateDownloadForm（进度/取消/重启）
 │  └─ MediaDownload/
 │     ├─ Contracts/   # IMediaResolver / IMediaDownloadService / IBrowserSessionAccessor / 浏览器捕获模型
 │     ├─ Models/      # MediaAsset / MediaVariant / ResolvedMediaPost / MediaDownloadBatch/Task/Result/Settings/HistoryEntry / MediaAssetRole
@@ -69,11 +69,12 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 
 ## 五、当前状态
 
-- **最新提交**：Phase 1 版本检查（分支 `feature/update-foundation`，未推送）
-- **测试**：608 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
-- **版本**：0.8.0（csproj `<Version>`，唯一来源）
+- **最新提交**：Phase 2 Velopack 自动更新（分支 `feature/velopack-updater`，未推送）
+- **测试**：613 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
+- **版本**：0.9.0（csproj `<Version>`，唯一来源）
+- **更新体系**：检查走 update-policy.json（GitHub raw `Release` 分支）；下载/安装/重启走 Velopack（GithubSource，Beta 通道读预发布）；`vpk pack -c stable|beta` 已实测通过（Setup.exe/nupkg/RELEASES）
 - **诊断目录**：`%TEMP%\Transfor\diagnostics\`（解析完成 capture-*.json + 下载失败 failed-media-*；临时诊断代码在 CaptureDiagnostics / MediaFileFinalizer.SaveFailureSample，定位后移除）
-- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新仅检查版本（Phase 1），自动下载安装（Velopack）为 Phase 2
+- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新包未做代码签名（无证书）；Velopack 更新在未安装（dev）模式不可用，报错但不阻断
 
 ## 六、开发注意事项（坑）
 
@@ -81,7 +82,8 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 - 勿用 PowerShell `-replace` 处理含 `\r\n` 字面量的文件（会误伤 C# 转义序列）——用 Edit 工具
 - WinForms 控件必须在 STA 线程创建（测试用 RunSta）
 - 当前浏览器方案为 Edge CDP（Platform/Windows/EdgeCdp）；**后续 Phase 3 起迁移 WebView2，旧实现保留到新实现成熟**
-- 更新检查流程在 TransforApplicationContext：后台 Task.Run + InvokeAsync 回主线程；网络失败静默（手动检查才提示）
+- 更新流程：检查在 Task.Run 后台执行，提示/下载/重启编排经 `InvokeUiAsync` 回 UI 线程；`VelopackApp.Build().Run()` 必须在 Program.Main 最先调用（try/catch 包裹，失败不阻断启动）
+- Velopack：`DownloadUpdatesAsync` 进度为 `Action<int>` 百分比；`Size` 非空 long；`ApplyUpdatesAndRestart(toApply: null, restartArgs: null)`；`vpk pack -c` 默认通道是 win，必须显式传 stable/beta
 - 所有网络操作带 CancellationToken；禁止 .Result/.Wait()（生产代码）
 - 修改状态存储方法内部已持久化，UI 不重复调 Save()
 - 提交信息用中文，不推送

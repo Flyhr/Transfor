@@ -1,5 +1,3 @@
-using System.Diagnostics;
-
 namespace Transfor;
 
 // 应用级上下文：持有主窗口、历史面板、托盘图标与全局热键，并协调它们之间的跳转
@@ -198,7 +196,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
         }
     }
 
-    // 检查并提示更新：检查在后台执行，UI 交互回到主线程；
+    // 检查并提示更新：检查在后台执行，提示/下载/重启编排回到 UI 线程；
     // 任何网络失败都静默（手动检查时给出提示），绝不阻断应用使用
     private async Task CheckAndPromptAsync(bool manual)
     {
@@ -213,7 +211,8 @@ internal sealed class TransforApplicationContext : ApplicationContext
             UpdateCheckResult result;
             try
             {
-                result = await Task.Run(() => updatesService.CheckForUpdatesAsync(CancellationToken.None)).ConfigureAwait(false);
+                result = await Task.Run(() => updatesService.CheckForUpdatesAsync(CurrentUpdateChannel, CancellationToken.None))
+                    .ConfigureAwait(false);
             }
             catch
             {
@@ -229,14 +228,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
                 return;
             }
 
-            if (manual && result.Status is UpdateStatus.UpToDate or UpdateStatus.CheckFailed)
-            {
-                var message = result.Status == UpdateStatus.UpToDate ? "当前已是最新版本。" : $"检查更新失败：{result.Error}";
-                mainForm.BeginInvoke(() => ShowNotice(message, MessageBoxIcon.Information));
-                return;
-            }
-
-            await PromptForResultAsync(result).ConfigureAwait(false);
+            await InvokeUiAsync(() => HandleUpdateResultAsync(result, manual)).ConfigureAwait(false);
         }
         finally
         {
@@ -244,66 +236,88 @@ internal sealed class TransforApplicationContext : ApplicationContext
         }
     }
 
-    // 按结果类型弹出对应提示：可选更新一次；强制更新进入阻断循环直到更新/退出
-    private async Task PromptForResultAsync(UpdateCheckResult result)
+    // 当前更新通道（设置中可切换，实时生效）
+    private UpdateChannel CurrentUpdateChannel => historyStore.Settings.UpdateChannel;
+
+    // 把异步动作调度到 UI 线程执行：对话框与窗体必须在 UI 线程创建，
+    // 动作内的 await 延续会回到 UI 线程上下文
+    private Task InvokeUiAsync(Func<Task> action)
     {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (mainForm.IsDisposed)
+        {
+            tcs.TrySetCanceled();
+            return tcs.Task;
+        }
+
+        mainForm.BeginInvoke(async () =>
+        {
+            try
+            {
+                await action();
+                tcs.TrySetResult();
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        });
+        return tcs.Task;
+    }
+
+    // UI 线程：按检查结果处理（可选更新提示一次；强制更新进入阻断循环）
+    private async Task HandleUpdateResultAsync(UpdateCheckResult result, bool manual)
+    {
+        if (manual && result.Status is UpdateStatus.UpToDate or UpdateStatus.CheckFailed)
+        {
+            var message = result.Status == UpdateStatus.UpToDate ? "当前已是最新版本。" : $"检查更新失败：{result.Error}";
+            ShowNotice(message, MessageBoxIcon.Information);
+            return;
+        }
+
         switch (result.Status)
         {
             case UpdateStatus.OptionalUpdate:
-                await mainForm.InvokeAsync(() =>
+                var action = UpdateNoticeForm.ShowOptional(mainForm.Visible ? mainForm : null, result);
+                if (action == UpdateNoticeForm.UserAction.UpdateNow)
                 {
-                    var action = UpdateNoticeForm.ShowOptional(mainForm.Visible ? mainForm : null, result);
-                    if (action == UpdateNoticeForm.UserAction.UpdateNow)
-                    {
-                        OpenDownloadPage(result);
-                    }
-                }).ConfigureAwait(false);
+                    await RunDownloadFlowAsync(result, required: false);
+                }
                 break;
 
             case UpdateStatus.RequiredUpdate:
-                await RunRequiredUpdateLoopAsync(result).ConfigureAwait(false);
+                await RunRequiredUpdateLoopAsync(result);
                 break;
         }
     }
 
-    // 强制更新阻断循环：退出 → 退出应用；立即更新 → 打开下载页并继续阻断；重新检查 → 重新判定
+    // 强制更新阻断循环：退出 → 退出应用；立即更新 → 下载（完成后必须重启）；重新检查 → 重新判定
     private async Task RunRequiredUpdateLoopAsync(UpdateCheckResult result)
     {
         while (!mainForm.IsDisposed)
         {
-            var action = await mainForm.InvokeAsync(() =>
-                UpdateNoticeForm.ShowRequired(mainForm.Visible ? mainForm : null, result)).ConfigureAwait(false);
-
+            var action = UpdateNoticeForm.ShowRequired(mainForm.Visible ? mainForm : null, result);
             switch (action)
             {
                 case UpdateNoticeForm.UserAction.Exit:
-                    mainForm.BeginInvoke(ExitApplication);
+                    ExitApplication();
                     return;
 
                 case UpdateNoticeForm.UserAction.UpdateNow:
-                    OpenDownloadPage(result);
-                    break;
+                    await RunDownloadFlowAsync(result, required: true);
+                    return;
 
                 case UpdateNoticeForm.UserAction.Recheck:
-                    UpdateCheckResult rechecked;
-                    try
+                    var rechecked = await Task.Run(() => updatesService.CheckForUpdatesAsync(CurrentUpdateChannel, CancellationToken.None))
+                        .ConfigureAwait(true);
+                    if (rechecked.Status == UpdateStatus.RequiredUpdate)
                     {
-                        rechecked = await Task.Run(() => updatesService.CheckForUpdatesAsync(CancellationToken.None))
-                            .ConfigureAwait(false);
-                    }
-                    catch
-                    {
-                        return;
+                        result = rechecked;
+                        continue;
                     }
 
-                    if (rechecked.Status != UpdateStatus.RequiredUpdate)
-                    {
-                        await PromptForResultAsync(rechecked).ConfigureAwait(false);
-                        return;
-                    }
-
-                    result = rechecked;
-                    break;
+                    await HandleUpdateResultAsync(rechecked, manual: false);
+                    return;
 
                 default:
                     return;
@@ -311,23 +325,36 @@ internal sealed class TransforApplicationContext : ApplicationContext
         }
     }
 
-    // 「立即更新」（Phase 1）：打开下载地址；Phase 2 接入 Velopack 后替换为真实下载安装流程
-    private void OpenDownloadPage(UpdateCheckResult result)
+    // 下载流程：进度窗体 → 下载 → 重启提示；强制更新下载完成直接重启；
+    // 「稍后重启」的更新已暂存，下次启动时由 Velopack 自动应用
+    private async Task RunDownloadFlowAsync(UpdateCheckResult result, bool required)
     {
-        var url = result.Policy?.DownloadUrl;
-        if (string.IsNullOrWhiteSpace(url))
-        {
-            ShowNotice("尚未提供下载地址，请稍后到项目主页获取新版本。", MessageBoxIcon.Information);
-            return;
-        }
-
+        var installer = services.UpdateInstallerFactory(CurrentUpdateChannel);
         try
         {
-            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            var action = await UpdateDownloadForm.RunAsync(mainForm.Visible ? mainForm : null, installer, result, required);
+            switch (action)
+            {
+                case UpdateDownloadForm.Result.RestartNow:
+                    // 应用更新并重启为新版本；成功后进程退出，应用不再返回
+                    installer.ApplyAndRestart();
+                    break;
+
+                case UpdateDownloadForm.Result.Later:
+                    break;
+
+                case UpdateDownloadForm.Result.Cancelled:
+                    ShowNotice("更新下载已取消。", MessageBoxIcon.Information);
+                    break;
+            }
         }
         catch (Exception ex)
         {
-            ShowNotice($"打开下载地址失败：{ex.Message}", MessageBoxIcon.Warning);
+            ShowNotice($"更新失败：{ex.Message}", MessageBoxIcon.Error);
+        }
+        finally
+        {
+            installer.Dispose();
         }
     }
 

@@ -130,12 +130,13 @@ internal sealed class TextStateStore : ITextHistoryRepository
         catch { return false; }
     }
 
-    // 设置的可持久化形态：把 Keys 枚举转换为 int，便于稳定存储
-    private sealed record PersistedSettings(int HotKeyModifiers, int HotKeyKey, int QuoteHistoryLimit, int SpaceHistoryLimit)
+    // 设置的可持久化形态：把 Keys 枚举转换为 int，便于稳定存储；
+    // UpdateChannel 缺省（旧配置文件）时回退为 Stable
+    private sealed record PersistedSettings(int HotKeyModifiers, int HotKeyKey, int QuoteHistoryLimit, int SpaceHistoryLimit, int UpdateChannel = 0)
     {
         public static PersistedSettings Default => From(AppSettings.Default);
-        public static PersistedSettings From(AppSettings settings) => new((int)settings.HistoryHotKey.Modifiers, (int)settings.HistoryHotKey.Key, settings.QuoteHistoryLimit, settings.SpaceHistoryLimit);
-        public AppSettings ToSettings() => new(HotKeyBinding.Create((System.Windows.Forms.Keys)HotKeyModifiers, (System.Windows.Forms.Keys)HotKeyKey), QuoteHistoryLimit, SpaceHistoryLimit);
+        public static PersistedSettings From(AppSettings settings) => new((int)settings.HistoryHotKey.Modifiers, (int)settings.HistoryHotKey.Key, settings.QuoteHistoryLimit, settings.SpaceHistoryLimit, (int)settings.UpdateChannel);
+        public AppSettings ToSettings() => new(HotKeyBinding.Create((System.Windows.Forms.Keys)HotKeyModifiers, (System.Windows.Forms.Keys)HotKeyKey), QuoteHistoryLimit, SpaceHistoryLimit, (UpdateChannel)UpdateChannel);
         public void Validate() => ToSettings().Validate();
     }
 

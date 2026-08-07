@@ -26,9 +26,11 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 
 ### 应用更新
 
-- 版本号统一来源于项目配置（SemVer，当前 `0.8.0` 开发版），启动后与托盘菜单均可检查更新
-- 远程 `update-policy.json` 策略：可选更新（稍后/立即）与强制更新（重新检查/立即/退出，不允许跳过）；Stable 通道已预留 Beta 扩展
-- 网络错误、JSON 损坏等一律视为检查失败并静默放行，绝不阻断应用使用；「立即更新」当前打开下载地址，自动下载安装（Velopack）为后续阶段
+- 版本号统一来源于项目配置（SemVer，当前 `0.9.0` 开发版），启动后与托盘菜单均可检查更新
+- 远程 `update-policy.json` 策略：可选更新（稍后/立即）与强制更新（重新检查/立即/退出，不允许跳过）
+- 更新下载基于 **Velopack**（GitHub Releases 为更新源）：下载进度/取消，「立即重启并更新」自动安装并重启；可选更新可「稍后重启」，下次启动自动应用
+- 更新通道（设置中切换）：**Stable** 只接收正式版；**Beta** 额外接收预发布
+- 网络错误、JSON 损坏等一律视为检查失败并静默放行，绝不阻断应用使用
 
 > 「最高质量」指当前公开页面或当前浏览器会话可访问的、可直接下载的媒体版本；不承诺作者原始文件、无水印或可访问私密/删除/付费作品。第一版不支持 DASH/HLS 分段流合并，发现分段媒体时会明确提示。
 
@@ -72,10 +74,10 @@ src/Transfor/
 │   │   │   └── TextUiState.cs               # 界面状态（最近查看的工具）
 │   │   └── UI/
 │   │       └── SettingsForm.cs              # 设置窗口（热键、上限、清空历史）
-│   └── Updates/                             # 应用更新：版本检查（Phase 1，仅检查不安装）
+│   └── Updates/                             # 应用更新：检查（Phase 1）+ 自动下载安装（Phase 2）
 │       ├── Models/                          # UpdateStatus / UpdateChannel / UpdatePolicy / UpdateCheckResult
-│       ├── Services/                        # UpdateVersion(SemVer) / VersionComparer / UpdateService / IUpdatePolicySource / HttpUpdatePolicySource
-│       └── UI/                              # UpdateNoticeForm（可选更新/强制更新提示）
+│       ├── Services/                        # UpdateVersion(SemVer) / VersionComparer / UpdateService / IUpdatePolicySource / HttpUpdatePolicySource / IUpdateInstaller / VelopackUpdateInstaller
+│       └── UI/                              # UpdateNoticeForm（可选/强制更新提示）/ UpdateDownloadForm（下载进度+重启）
 │   └── MediaDownload/                       # 媒体下载：契约、模型、协调器、服务、解析器与 UI
 │       ├── Contracts/                       # IMediaResolver / IMediaDownloadService / IBrowserSessionAccessor / 浏览器捕获模型
 │       ├── Models/                          # MediaAsset / MediaVariant / ResolvedMediaPost / 下载批次/设置/历史等
@@ -145,6 +147,20 @@ dotnet run --project src/Transfor
 # 运行测试（输出 "All N tests passed."）
 dotnet run --project tests/Transfor.Tests
 ```
+
+## 发布流程（Phase 2）
+
+发布在 `Release` 分支完成，由 GitHub Actions 自动打包：
+
+1. 在 `Release` 分支更新 `update-policy.json`（`latestVersion` / `minimumVersion` / 更新说明），推送该分支；
+2. 打版本标签并推送（稳定版 `v0.9.0`；测试版 `v0.9.0-beta.1` 自动走 Beta 通道与 GitHub 预发布）：
+
+   ```bash
+   git tag v0.9.0 && git push origin v0.9.0
+   ```
+
+3. 工作流 `release.yml` 自动执行：测试 → 发布（自包含 win-x64）→ `vpk` 打包（Setup.exe / nupkg / RELEASES）→ 创建 GitHub Release 并上传；
+4. 客户端从 GitHub Releases 拉取更新包完成升级（Velopack 负责下载/安装/重启，应用不覆盖运行中的 EXE）。
 
 ## 使用说明
 

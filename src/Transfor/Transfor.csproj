@@ -7,12 +7,13 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- 应用唯一版本来源（SemVer）：0.x 开发阶段，1.0.0 正式发布 -->
-    <Version>0.8.0</Version>
+    <Version>0.9.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- 进程复用：查找已运行的专用 Edge 主进程（profile + 调试端口） -->
     <PackageReference Include="System.Management" Version="9.0.7" />
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
 </Project>
