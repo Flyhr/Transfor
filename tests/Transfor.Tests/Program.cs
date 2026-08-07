@@ -2121,6 +2121,13 @@ static void TestDouyinStructuredDataFallbacks()
     // 无关 JSON（不含作品数据）：空壳
     var unrelated = DouyinPageParser.ParseStructuredData("{\"config\":{\"env\":\"prod\"}}");
     AssertEqual(0, unrelated.Assets.Count, "unrelated json yields no assets");
+
+    // JSON null / 非对象输入：空壳不抛异常（.NET 10 TryGetProperty 对非对象会抛，此处必须防御）
+    var nullData = DouyinPageParser.ParseStructuredData("null");
+    AssertEqual(0, nullData.Assets.Count, "json null yields no assets");
+    AssertEqual(true, nullData.EmptyShell, "json null is empty shell");
+    var arrayData = DouyinPageParser.ParseStructuredData("[1,2,3]");
+    AssertEqual(0, arrayData.Assets.Count, "json array yields no assets");
 }
 
 // 场景：详情接口 URL 匹配规则
@@ -2647,6 +2654,32 @@ static void TestBrowserCaptureSessionHelpers()
     AssertEqual("https", detailUri.Scheme, "detail api https");
     AssertEqual("www.douyin.com", detailUri.Host, "detail api host");
     AssertEqual(true, detailUri.Query.Contains("aweme_id=7670791950899991451"), "detail api carries work id");
+
+    // 浏览器下载分块响应解析：Null 安全（done/error/chunk 为 JSON null 不抛异常）
+    var (err1, done1, chunk1) = BrowserDownloadController.ParseChunkResponse("{\"chunk\":\"QUJD\"}");
+    AssertEqual(null, err1, "chunk response no error");
+    AssertEqual(false, done1, "chunk response not done");
+    AssertEqual("QUJD", chunk1, "chunk response base64 chunk");
+
+    var (err2, done2, chunk2) = BrowserDownloadController.ParseChunkResponse("{\"done\":true}");
+    AssertEqual(true, done2, "done response ends stream");
+    AssertEqual(null, chunk2, "done response no chunk");
+
+    var (err3, _, _) = BrowserDownloadController.ParseChunkResponse("{\"error\":\"HTTP 403\"}");
+    AssertEqual("HTTP 403", err3, "error response reported");
+
+    // JSON null 字段：GetBoolean/GetString 会抛的场景在此必须安全返回
+    var (err4, done4, chunk4) = BrowserDownloadController.ParseChunkResponse("{\"done\":null,\"chunk\":null}");
+    AssertEqual(null, err4, "null fields no error");
+    AssertEqual(false, done4, "null done treated as not done");
+    AssertEqual(null, chunk4, "null chunk treated as missing");
+
+    var (err5, done5, _) = BrowserDownloadController.ParseChunkResponse("null");
+    AssertEqual(null, err5, "script null result no error");
+    AssertEqual(false, done5, "script null result not done");
+
+    var (err6, _, _) = BrowserDownloadController.ParseChunkResponse("not-json");
+    AssertEqual(null, err6, "malformed json degrades safely");
 }
 
 // Phase 4B：网络资源记录解析与基础条件

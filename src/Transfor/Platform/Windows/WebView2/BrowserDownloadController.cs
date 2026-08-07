@@ -78,6 +78,11 @@ internal static class BrowserDownloadController
         try
         {
             using var startDoc = JsonDocument.Parse(startRaw);
+            if (startDoc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return "浏览器下载失败：响应无法解析。";
+            }
+
             if (startDoc.RootElement.TryGetProperty("error", out var errorElement))
             {
                 return $"浏览器下载失败：{errorElement.GetString()}";
@@ -117,36 +122,20 @@ internal static class BrowserDownloadController
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var raw = await core.ExecuteScriptAsync(chunkScript).ConfigureAwait(true);
-                string? chunk;
-                var done = false;
-                try
+                // 分块响应解析（纯函数，Null 安全：done/error/chunk 任一为 null 都按
+                // 无该字段处理，绝不因 JSON null 抛异常中断下载）
+                var response = ParseChunkResponse(raw);
+                if (response.Error is not null)
                 {
-                    using var doc = JsonDocument.Parse(raw);
-                    if (doc.RootElement.TryGetProperty("error", out var errorElement))
-                    {
-                        return $"浏览器下载失败：{errorElement.GetString()}";
-                    }
-
-                    if (doc.RootElement.TryGetProperty("done", out var doneElement) && doneElement.GetBoolean())
-                    {
-                        done = true;
-                    }
-
-                    chunk = doc.RootElement.TryGetProperty("chunk", out var chunkElement)
-                        ? chunkElement.GetString()
-                        : null;
-                }
-                catch (JsonException)
-                {
-                    return "浏览器下载中断：分块数据损坏。";
+                    return $"浏览器下载失败：{response.Error}";
                 }
 
-                if (done)
+                if (response.Done)
                 {
                     break;
                 }
 
-                if (string.IsNullOrEmpty(chunk))
+                if (string.IsNullOrEmpty(response.Chunk))
                 {
                     return "浏览器下载中断。";
                 }
@@ -154,7 +143,7 @@ internal static class BrowserDownloadController
                 byte[] data;
                 try
                 {
-                    data = Convert.FromBase64String(chunk);
+                    data = Convert.FromBase64String(response.Chunk);
                 }
                 catch (FormatException)
                 {
@@ -181,5 +170,50 @@ internal static class BrowserDownloadController
         }
 
         return null;
+    }
+
+    // 分块响应解析（纯函数，可离线测试）：
+    // 输入为 ExecuteScriptAsync 的 JSON 编码结果；脚本异常/JSON null/字段缺失
+    // 一律不抛——error/done/chunk 按缺失语义返回，由调用方决策。
+    // 注意：.NET 10 的 TryGetProperty 对非 Object 根元素会抛
+    // InvalidOperationException（而非返回 false），必须先判 ValueKind
+    internal static (string? Error, bool Done, string? Chunk) ParseChunkResponse(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return (null, false, null);
+            }
+
+            var error = root.TryGetProperty("error", out var errorElement)
+                && errorElement.ValueKind == JsonValueKind.String
+                    ? errorElement.GetString()
+                    : null;
+            if (error is not null)
+            {
+                return (error, false, null);
+            }
+
+            // ValueKind 直接比较而非 GetBoolean()：JSON null/非布尔不抛异常
+            var done = root.TryGetProperty("done", out var doneElement)
+                && doneElement.ValueKind == JsonValueKind.True;
+            var chunk = root.TryGetProperty("chunk", out var chunkElement)
+                && chunkElement.ValueKind == JsonValueKind.String
+                    ? chunkElement.GetString()
+                    : null;
+            return (null, done, chunk);
+        }
+        catch (JsonException)
+        {
+            return (null, false, null);
+        }
+        catch (InvalidOperationException)
+        {
+            // 非对象根元素（JSON null 等）的防御兜底
+            return (null, false, null);
+        }
     }
 }

@@ -66,7 +66,8 @@ internal static class DouyinPageParser
     }
 
     // 直接解析浏览器捕获的结构化 JSON（ExecuteScriptAsync 结果）；
-    // 支持纯 JSON 与 URL 编码 JSON 两种形态
+    // 支持纯 JSON 与 URL 编码 JSON 两种形态；
+    // JSON null / 非对象输入返回空壳，绝不抛异常（.NET 10 TryGetProperty 对非对象会抛）
     public static DouyinPageData ParseStructuredData(string json)
     {
         foreach (var candidate in DecodeJsonCandidates(json))
@@ -82,6 +83,10 @@ internal static class DouyinPageParser
             catch (JsonException)
             {
                 // 该候选不是作品 JSON，继续
+            }
+            catch (InvalidOperationException)
+            {
+                // 非对象根元素（JSON null 等）防御兜底，继续下一候选
             }
         }
 
@@ -177,6 +182,13 @@ internal static class DouyinPageParser
     private static bool TryParseWork(JsonElement root, out DouyinPageData data)
     {
         data = default!;
+        // .NET 10：TryGetProperty 对非 Object 根元素会抛异常（而非返回 false），
+        // JSON null / 数组 / 字符串输入必须在此拦截
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
         if (!TryFindWorkElement(root, out var detail))
         {
             return false;
