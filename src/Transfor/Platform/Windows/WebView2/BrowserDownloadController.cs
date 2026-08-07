@@ -1,63 +1,17 @@
-using System.Text;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 
 namespace Transfor;
 
-// 浏览器网络栈下载（Phase 4A）：在隐藏宿主的下载控件内以页面 fetch
-// （credentials: include，自动携带浏览器 Cookie/Referer）拉取媒体，
-// 经 response.body 流式逐块读取（每块转 base64 经 ExecuteScriptAsync 传回 C# 写盘）；
-// 不整体加载进浏览器内存（大视频文件内存可控）；
-// 真实浏览器网络栈规避抖音对非浏览器 TLS 客户端的指纹拦截；
+// 浏览器网络栈下载（Phase 4A）：经 WebView2 的 DevTools Protocol 直取媒体资源——
+// Network.loadNetworkResource（带浏览器 Cookie 与真实指纹）+ IO.read 流式写入 .part。
+// 不依赖页面 fetch（避免 CORS 拦截）也不依赖 ExecuteScriptAsync 的异步结果
+// （本机 WebView2 内核 151 下对 Promise 返回空对象）；
 // 必须在 UI 线程调用（由隐藏宿主调度）
 internal static class BrowserDownloadController
 {
-    // 单次分块字节数（base64 传输开销约 1.33x，2MB 块可控）
-    private const int ChunkBytes = 2 * 1024 * 1024;
-
-    // 第一步：fetch 建立流式响应，reader 暂存于 window（跨脚本调用保持）；
-    // 返回 { error } 或 { total }（content-length 可能缺失 → null）
-    private const string PrepareScriptTemplate = @"(async () => {
-        try {
-            const response = await fetch(URL, { credentials: 'include' });
-            if (!response.ok) return JSON.stringify({ error: 'HTTP ' + response.status });
-            const total = Number(response.headers.get('content-length')) || null;
-            const reader = response.body.getReader();
-            window.__mediaReader = reader;
-            return JSON.stringify({ total });
-        } catch (e) {
-            return JSON.stringify({ error: String(e) });
-        }
-    })()";
-
-    // 第二步：从 reader 读取至多 CHUNK 字节（read() 可能返回小块，循环凑满）；
-    // 返回 { error } / { done: true }（流结束）/ { chunk: base64 }（流式分块）
-    private const string ChunkScriptTemplate = @"(async () => {
-        try {
-            const reader = window.__mediaReader;
-            if (!reader) return JSON.stringify({ error: 'reader missing' });
-            const CHUNK = CHUNK;
-            const parts = [];
-            let total = 0;
-            while (total < CHUNK) {
-                const { done, value } = await reader.read();
-                if (done) { window.__mediaReader = null; break; }
-                if (value.length > 0) { parts.push(value); total += value.length; }
-            }
-            if (parts.length === 0) return JSON.stringify({ done: true });
-            const merged = new Uint8Array(total);
-            let offset = 0;
-            for (const part of parts) { merged.set(part, offset); offset += part.length; }
-            let binary = '';
-            const step = 0x8000;
-            for (let i = 0; i < total; i += step) {
-                binary += String.fromCharCode.apply(null, merged.subarray(i, i + step));
-            }
-            return JSON.stringify({ done: false, chunk: btoa(binary) });
-        } catch (e) {
-            return JSON.stringify({ error: String(e) });
-        }
-    })()";
+    // IO.read 单次读取字节数（base64 传输开销约 1.33x，64KB 块可控）
+    private const int ReadChunkSize = 64 * 1024;
 
     // 下载媒体到 partPath；返回 null 表示成功，否则错误信息；必须在 UI 线程调用
     public static async Task<string?> DownloadAsync(
@@ -68,186 +22,229 @@ internal static class BrowserDownloadController
         Action<long, long?>? progress,
         long? maxBytes)
     {
-        // 第一步：页面 fetch 建立流式响应（不加载进内存）；
-        // 注意：ExecuteScriptAsync 必须在 UI 线程调用，且循环的下一轮调用点
-        // 位于本轮 continuation——任何 ConfigureAwait(false) 都会把调用点
-        // 甩到线程池线程，触发 CoreWebView2 线程亲和检查崩溃
-        var prepareScript = PrepareScriptTemplate.Replace("URL", JsonSerializer.Serialize(mediaUri.ToString()), StringComparison.Ordinal);
-        var startRaw = await core.ExecuteScriptAsync(prepareScript).ConfigureAwait(true);
-        long? total;
+        // 第一步：获取当前 frameId（loadNetworkResource 必填）
+        string frameId;
         try
         {
-            using var startDoc = JsonDocument.Parse(startRaw);
-            if (startDoc.RootElement.ValueKind != JsonValueKind.Object)
-            {
-                return $"浏览器下载失败：响应无法解析（{TruncateForError(startRaw)}）。";
-            }
-
-            if (startDoc.RootElement.TryGetProperty("error", out var errorElement))
-            {
-                return $"浏览器下载失败：{errorElement.GetString()}";
-            }
-
-            if (startDoc.RootElement.TryGetProperty("total", out var totalElement) && totalElement.ValueKind == JsonValueKind.Number)
-            {
-                total = totalElement.GetInt64();
-            }
-            else
-            {
-                total = null;
-            }
+            var frameJson = await core.CallDevToolsProtocolMethodAsync("Page.getFrameTree", "{}").ConfigureAwait(true);
+            frameId = ParseFrameId(frameJson)
+                ?? throw new InvalidOperationException("无法获取页面 frame。");
         }
-        catch
+        catch (Exception ex)
         {
-            return $"浏览器下载失败：响应无法解析（{TruncateForError(startRaw)}）。";
+            return $"浏览器下载失败：{ErrorChainFormatter.Format(ex)}";
         }
 
-        if (total is not null && total <= 0)
+        // 第二步：浏览器网络栈直取媒体资源（带 Cookie；无 CORS 限制）
+        string loadJson;
+        try
         {
-            return "浏览器下载失败：媒体内容为空。";
+            loadJson = await core.CallDevToolsProtocolMethodAsync(
+                "Network.loadNetworkResource",
+                JsonSerializer.Serialize(new
+                {
+                    frameId,
+                    url = mediaUri.ToString(),
+                    options = new { disableCache = true, includeCredentials = true },
+                })).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            return $"浏览器下载失败：{ErrorChainFormatter.Format(ex)}";
         }
 
-        if (total is not null && maxBytes is not null && total > maxBytes)
+        var resource = ParseLoadResource(loadJson);
+        if (!resource.Success || resource.Stream is null)
         {
-            return "媒体内容超过大小限制。";
+            return $"浏览器下载失败：资源请求被拒（netError={resource.NetErrorName ?? "-"}，HTTP {(resource.HttpStatusCode ?? 0)}）。";
         }
 
-        // 第二步：流式逐块读取 base64 并写入 .part
-        var chunkScript = ChunkScriptTemplate.Replace("CHUNK", ChunkBytes.ToString(), StringComparison.Ordinal);
-        await using (var stream = new FileStream(
-            partPath, FileMode.Create, FileAccess.Write, FileShare.None, 128 * 1024, useAsync: true))
+        // 第三步：流式读取响应体并写入 .part
+        try
         {
-            var position = 0L;
+            await using var stream = new FileStream(
+                partPath, FileMode.Create, FileAccess.Write, FileShare.None, ReadChunkSize, useAsync: true);
+            long position = 0;
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var raw = await core.ExecuteScriptAsync(chunkScript).ConfigureAwait(true);
-                // 分块响应解析（纯函数，Null 安全）；Empty 状态带原始返回摘要，
-                // 便于定位脚本行为（ExecuteScriptAsync 返回 null = 脚本执行失败）
-                var response = ParseChunkResponse(raw);
-                switch (response.Status)
+                var chunkJson = await core.CallDevToolsProtocolMethodAsync(
+                    "IO.read",
+                    JsonSerializer.Serialize(new { handle = resource.Stream, size = ReadChunkSize })).ConfigureAwait(true);
+                var chunk = ParseIoChunk(chunkJson);
+                if (chunk.Data.Length == 0)
                 {
-                    case ChunkParseStatus.Error:
-                        return $"浏览器下载失败：{response.Error}";
-
-                    case ChunkParseStatus.Done:
-                        // 第一轮即结束：流未产出任何数据
-                        if (position == 0)
-                        {
-                            return "浏览器下载失败：媒体内容为空（流未产出数据）。";
-                        }
-                        break;
-
-                    case ChunkParseStatus.Empty:
-                        return $"浏览器下载中断：脚本返回异常数据（{TruncateForError(raw)}）。";
+                    return "浏览器下载中断：媒体流读取为空。";
                 }
 
-                if (response.Done)
-                {
-                    break;
-                }
-
-                if (string.IsNullOrEmpty(response.Chunk))
-                {
-                    return "浏览器下载中断。";
-                }
-
-                byte[] data;
+                byte[] bytes;
                 try
                 {
-                    data = Convert.FromBase64String(response.Chunk);
+                    bytes = chunk.Base64Encoded ? Convert.FromBase64String(chunk.Data) : System.Text.Encoding.UTF8.GetBytes(chunk.Data);
                 }
                 catch (FormatException)
                 {
-                    return "浏览器下载中断：分块数据损坏。";
+                    return "浏览器下载中断：媒体流数据损坏。";
                 }
 
-                if (data.Length == 0)
+                if (bytes.Length == 0)
                 {
-                    return "浏览器下载中断：无分块数据。";
+                    return "浏览器下载中断：媒体流无数据。";
                 }
 
-                position += data.Length;
+                position += bytes.Length;
                 if (maxBytes is not null && position > maxBytes)
                 {
                     return "媒体内容超过大小限制。";
                 }
 
-                // 写入 continuation 必须回 UI 线程：下一轮 ExecuteScriptAsync 的调用点在此
-                await stream.WriteAsync(data, cancellationToken).ConfigureAwait(true);
-                progress?.Invoke(position, total);
+                await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(true);
+                progress?.Invoke(position, resource.ContentLength);
+                if (chunk.Eof)
+                {
+                    break;
+                }
             }
 
             await stream.FlushAsync(cancellationToken).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return $"浏览器下载中断：{ErrorChainFormatter.Format(ex)}";
+        }
+        finally
+        {
+            try
+            {
+                await core.CallDevToolsProtocolMethodAsync(
+                    "IO.close",
+                    JsonSerializer.Serialize(new { handle = resource.Stream })).ConfigureAwait(true);
+            }
+            catch
+            {
+                // 流已关闭等场景忽略
+            }
         }
 
         return null;
     }
 
-    // 分块响应解析状态：Chunk 有效分块 / Done 流结束 / Error 脚本报错 / Empty 无有效数据
-    internal enum ChunkParseStatus
-    {
-        Chunk,
-        Done,
-        Error,
-        Empty,
-    }
-
-    // 分块响应解析（纯函数，可离线测试）：
-    // 输入为 ExecuteScriptAsync 的 JSON 编码结果；脚本异常/JSON null/字段缺失
-    // 一律不抛——error/done/chunk 按缺失语义返回，由调用方决策。
-    // 注意：.NET 10 的 TryGetProperty 对非 Object 根元素会抛
-    // InvalidOperationException（而非返回 false），必须先判 ValueKind
-    internal static (ChunkParseStatus Status, string? Error, bool Done, string? Chunk) ParseChunkResponse(string raw)
+    // Page.getFrameTree 响应 → 主 frame id（纯函数，可离线测试）
+    internal static string? ParseFrameId(string frameJson)
     {
         try
         {
-            using var doc = JsonDocument.Parse(raw);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-            {
-                return (ChunkParseStatus.Empty, null, false, null);
-            }
-
-            var error = root.TryGetProperty("error", out var errorElement)
-                && errorElement.ValueKind == JsonValueKind.String
-                    ? errorElement.GetString()
+            using var doc = JsonDocument.Parse(frameJson);
+            return doc.RootElement.TryGetProperty("frameTree", out var tree)
+                && tree.ValueKind == JsonValueKind.Object
+                && tree.TryGetProperty("frame", out var frame)
+                && frame.ValueKind == JsonValueKind.Object
+                && frame.TryGetProperty("id", out var id)
+                && id.ValueKind == JsonValueKind.String
+                    ? id.GetString()
                     : null;
-            if (error is not null)
-            {
-                return (ChunkParseStatus.Error, error, false, null);
-            }
-
-            // ValueKind 直接比较而非 GetBoolean()：JSON null/非布尔不抛异常
-            var done = root.TryGetProperty("done", out var doneElement)
-                && doneElement.ValueKind == JsonValueKind.True;
-            var chunk = root.TryGetProperty("chunk", out var chunkElement)
-                && chunkElement.ValueKind == JsonValueKind.String
-                    ? chunkElement.GetString()
-                    : null;
-            if (done)
-            {
-                return (ChunkParseStatus.Done, null, true, null);
-            }
-
-            return chunk is null
-                ? (ChunkParseStatus.Empty, null, false, null)
-                : (ChunkParseStatus.Chunk, null, false, chunk);
         }
         catch (JsonException)
         {
-            return (ChunkParseStatus.Empty, null, false, null);
+            return null;
         }
         catch (InvalidOperationException)
         {
-            // 非对象根元素（JSON null 等）的防御兜底
-            return (ChunkParseStatus.Empty, null, false, null);
+            // .NET 10 TryGetProperty 对非对象会抛，防御兜底
+            return null;
         }
     }
 
-    // 错误消息摘要：截断脚本原始返回，避免海量 base64 刷屏
-    private static string TruncateForError(string raw)
-        => string.IsNullOrEmpty(raw)
-            ? "(空)"
-            : raw.Length <= 200 ? raw : raw[..200] + "…";
+    // Network.loadNetworkResource 响应 → 资源结果（纯函数，可离线测试）
+    internal static LoadResourceResult ParseLoadResource(string loadJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(loadJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object
+                || !doc.RootElement.TryGetProperty("resource", out var resource)
+                || resource.ValueKind != JsonValueKind.Object)
+            {
+                return LoadResourceResult.Failed;
+            }
+
+            var success = resource.TryGetProperty("success", out var successElement)
+                && successElement.ValueKind == JsonValueKind.True;
+            var stream = resource.TryGetProperty("stream", out var streamElement)
+                && streamElement.ValueKind == JsonValueKind.String
+                    ? streamElement.GetString()
+                    : null;
+            var netErrorName = resource.TryGetProperty("netErrorName", out var netErrorElement)
+                && netErrorElement.ValueKind == JsonValueKind.String
+                    ? netErrorElement.GetString()
+                    : null;
+            var httpStatus = resource.TryGetProperty("httpStatusCode", out var httpElement)
+                && httpElement.ValueKind == JsonValueKind.Number
+                    ? httpElement.GetInt32()
+                    : (int?)null;
+            var contentLength = resource.TryGetProperty("contentLength", out var lengthElement)
+                && lengthElement.ValueKind == JsonValueKind.Number
+                    ? lengthElement.GetInt64()
+                    : (long?)null;
+            return new LoadResourceResult(success, stream, netErrorName, httpStatus, contentLength);
+        }
+        catch (JsonException)
+        {
+            return LoadResourceResult.Failed;
+        }
+        catch (InvalidOperationException)
+        {
+            return LoadResourceResult.Failed;
+        }
+    }
+
+    // IO.read 响应 → 数据块（纯函数，可离线测试）
+    internal static IoChunk ParseIoChunk(string chunkJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(chunkJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return IoChunk.Empty;
+            }
+
+            var data = doc.RootElement.TryGetProperty("data", out var dataElement)
+                && dataElement.ValueKind == JsonValueKind.String
+                    ? dataElement.GetString() ?? string.Empty
+                    : string.Empty;
+            var base64 = doc.RootElement.TryGetProperty("base64Encoded", out var base64Element)
+                && base64Element.ValueKind == JsonValueKind.True;
+            var eof = doc.RootElement.TryGetProperty("eof", out var eofElement)
+                && eofElement.ValueKind == JsonValueKind.True;
+            return new IoChunk(data, base64, eof);
+        }
+        catch (JsonException)
+        {
+            return IoChunk.Empty;
+        }
+        catch (InvalidOperationException)
+        {
+            return IoChunk.Empty;
+        }
+    }
+
+    internal sealed record LoadResourceResult(
+        bool Success,
+        string? Stream,
+        string? NetErrorName,
+        int? HttpStatusCode,
+        long? ContentLength)
+    {
+        public static LoadResourceResult Failed => new(false, null, null, null, null);
+    }
+
+    internal sealed record IoChunk(string Data, bool Base64Encoded, bool Eof)
+    {
+        public static IoChunk Empty => new(string.Empty, false, false);
+    }
 }

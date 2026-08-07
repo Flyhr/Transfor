@@ -2655,36 +2655,39 @@ static void TestBrowserCaptureSessionHelpers()
     AssertEqual("www.douyin.com", detailUri.Host, "detail api host");
     AssertEqual(true, detailUri.Query.Contains("aweme_id=7670791950899991451"), "detail api carries work id");
 
-    // 浏览器下载分块响应解析：Null 安全（done/error/chunk 为 JSON null 不抛异常）
-    var (status1, err1, done1, chunk1) = BrowserDownloadController.ParseChunkResponse("{\"chunk\":\"QUJD\"}");
-    AssertEqual(BrowserDownloadController.ChunkParseStatus.Chunk, status1, "chunk response status");
-    AssertEqual(null, err1, "chunk response no error");
-    AssertEqual(false, done1, "chunk response not done");
-    AssertEqual("QUJD", chunk1, "chunk response base64 chunk");
+    // 浏览器 CDP 下载解析：Page.getFrameTree / Network.loadNetworkResource / IO.read（Null 安全）
+    AssertEqual("7995A6451BC8F66A80D4038517B1D946", BrowserDownloadController.ParseFrameId("{\"frameTree\":{\"frame\":{\"id\":\"7995A6451BC8F66A80D4038517B1D946\",\"url\":\"about:blank\"}}}"), "frame id parsed");
+    AssertEqual(null, BrowserDownloadController.ParseFrameId("{\"frameTree\":{}}"), "missing frame returns null");
+    AssertEqual(null, BrowserDownloadController.ParseFrameId("null"), "null frame json returns null");
+    AssertEqual(null, BrowserDownloadController.ParseFrameId("not-json"), "malformed frame json returns null");
 
-    var (status2, err2, done2, chunk2) = BrowserDownloadController.ParseChunkResponse("{\"done\":true}");
-    AssertEqual(BrowserDownloadController.ChunkParseStatus.Done, status2, "done response status");
-    AssertEqual(true, done2, "done response ends stream");
-    AssertEqual(null, chunk2, "done response no chunk");
+    var loaded = BrowserDownloadController.ParseLoadResource("{\"resource\":{\"success\":true,\"stream\":\"stream-1\",\"netErrorName\":null,\"httpStatusCode\":200,\"contentLength\":1048576}}");
+    AssertEqual(true, loaded.Success, "load resource success");
+    AssertEqual("stream-1", loaded.Stream, "load resource stream handle");
+    AssertEqual(null, loaded.NetErrorName, "load resource no net error");
+    AssertEqual(200, loaded.HttpStatusCode, "load resource http status");
+    AssertEqual(1048576, loaded.ContentLength, "load resource content length");
 
-    var (status3, err3, _, _) = BrowserDownloadController.ParseChunkResponse("{\"error\":\"HTTP 403\"}");
-    AssertEqual(BrowserDownloadController.ChunkParseStatus.Error, status3, "error response status");
-    AssertEqual("HTTP 403", err3, "error response reported");
+    var rejected = BrowserDownloadController.ParseLoadResource("{\"resource\":{\"success\":false,\"stream\":null,\"netErrorName\":\"ERR_ACCESS_DENIED\",\"httpStatusCode\":0}}");
+    AssertEqual(false, rejected.Success, "load resource rejected");
+    AssertEqual("ERR_ACCESS_DENIED", rejected.NetErrorName, "load resource net error name");
+    AssertEqual(null, rejected.Stream, "rejected resource has no stream");
 
-    // JSON null 字段：GetBoolean/GetString 会抛的场景在此必须安全返回
-    var (status4, err4, done4, chunk4) = BrowserDownloadController.ParseChunkResponse("{\"done\":null,\"chunk\":null}");
-    AssertEqual(BrowserDownloadController.ChunkParseStatus.Empty, status4, "null fields treated as empty");
-    AssertEqual(null, err4, "null fields no error");
-    AssertEqual(false, done4, "null done treated as not done");
-    AssertEqual(null, chunk4, "null chunk treated as missing");
+    var failed = BrowserDownloadController.ParseLoadResource("null");
+    AssertEqual(false, failed.Success, "null load json fails safely");
 
-    var (status5, err5, done5, _) = BrowserDownloadController.ParseChunkResponse("null");
-    AssertEqual(BrowserDownloadController.ChunkParseStatus.Empty, status5, "script null result is empty");
-    AssertEqual(null, err5, "script null result no error");
-    AssertEqual(false, done5, "script null result not done");
+    var chunk = BrowserDownloadController.ParseIoChunk("{\"data\":\"QUJD\",\"base64Encoded\":true,\"eof\":false}");
+    AssertEqual("QUJD", chunk.Data, "io chunk data");
+    AssertEqual(true, chunk.Base64Encoded, "io chunk base64 flag");
+    AssertEqual(false, chunk.Eof, "io chunk not eof");
 
-    var (status6, _, _, _) = BrowserDownloadController.ParseChunkResponse("not-json");
-    AssertEqual(BrowserDownloadController.ChunkParseStatus.Empty, status6, "malformed json degrades safely");
+    var lastChunk = BrowserDownloadController.ParseIoChunk("{\"data\":\"\",\"eof\":true}");
+    AssertEqual(true, lastChunk.Eof, "io chunk eof");
+    AssertEqual(string.Empty, lastChunk.Data, "io chunk empty data at eof");
+
+    var emptyChunk = BrowserDownloadController.ParseIoChunk("not-json");
+    AssertEqual(false, emptyChunk.Eof, "malformed io chunk degrades safely");
+    AssertEqual(string.Empty, emptyChunk.Data, "malformed io chunk empty data");
 }
 
 // Phase 4B：网络资源记录解析与基础条件
