@@ -27,6 +27,11 @@ internal static class AppBootstrapper
         var mediaCache = new MediaCache(paths.MediaCacheDirectory);
         // 下载服务：流式 + 安全链路；Cookie 源经代理（未启用浏览器时为空）
         var downloadService = new MediaDownloadService(requestSender, browserSessions, mediaCache: mediaCache);
+        // 更新服务（Phase 1：仅检查版本，不下载不安装）；通道默认 Stable（设置入口 Phase 2 增加）
+        var updateService = new UpdateService(
+            new HttpUpdatePolicySource(httpClient, validator),
+            UpdateChannel.Stable,
+            AppVersion.Current);
         // 解析器注册：专用解析器（抖音）优先，Direct 最后兜底
         // 抖音传输偏好为会话级熔断状态（进程内共享，重启复位）
         var douyinPreference = new DouyinTransportPreferenceState();
@@ -53,6 +58,7 @@ internal static class AppBootstrapper
         return new AppServices
         {
             State = textState,
+            Updates = updateService,
             // 全局快捷键管理器：负责系统级热键的注册/替换/释放
             HotKeys = new GlobalHotKeyManager(),
             // 粘贴协调器：写剪贴板 → 恢复目标窗口 → 模拟 Ctrl+V

@@ -98,6 +98,11 @@ TestBatchCompletedEvent();
 TestWorkIdExtraction();
 TestLivePhotoFileNaming();
 TestMusicUrlFiltering();
+TestVersionComparer();
+TestUpdatePolicyParsing();
+TestUpdateStatusDecision();
+TestUpdateCheckFailed();
+TestUpdateChannelFilter();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -2404,6 +2409,106 @@ static void TestMusicUrlFiltering()
     AssertEqual(MediaKind.Image, data.Assets[0].Kind, "music-only: still kind");
 }
 
+// Phase 1 验收：版本比较（SemVer 排序 + 预发布规则）
+static void TestVersionComparer()
+{
+    AssertEqual(0, VersionComparer.Compare("1.5.0", "1.5.0"), "equal versions");
+    AssertEqual(true, VersionComparer.Compare("1.4.0", "1.5.0") < 0, "minor below");
+    AssertEqual(true, VersionComparer.Compare("1.5.0", "1.4.9") > 0, "patch above");
+    AssertEqual(0, VersionComparer.Compare("1.2.3.0", "1.2.3"), "assembly 4-part equals semver");
+    AssertEqual(0, VersionComparer.Compare("1.5.0+build.7", "1.5.0"), "build metadata ignored");
+    AssertEqual(true, VersionComparer.Compare("1.2.0-beta.1", "1.2.0") < 0, "prerelease below release");
+    AssertEqual(true, VersionComparer.Compare("1.2.0-beta.1", "1.2.0-beta.2") < 0, "beta numeric order");
+    AssertEqual(true, VersionComparer.Compare("1.2.0-beta.2", "1.2.0-rc.1") < 0, "beta below rc");
+    AssertEqual(true, VersionComparer.Compare("1.2.0-rc.1", "1.2.0-beta.9") > 0, "rc above beta");
+    AssertEqual(true, VersionComparer.Compare("1.2.0-alpha", "1.2.0-alpha.1") < 0, "shorter prerelease below longer");
+    AssertEqual(true, VersionComparer.Compare("1.6.0", "1.6.0-beta.1") > 0, "release above prerelease");
+    AssertEqual(true, VersionComparer.Compare("0.9.9", "1.0.0") < 0, "major compare");
+    AssertThrows<FormatException>(() => VersionComparer.Compare("abc", "1.0.0"), "invalid version throws");
+    AssertThrows<FormatException>(() => VersionComparer.Compare("1.0.0", "1.0.0-beta.01"), "numeric prerelease leading zero rejected");
+}
+
+// Phase 1 验收：远程策略 JSON 解析（样例与计划文档一致）
+static void TestUpdatePolicyParsing()
+{
+    var json = """
+        {
+          "enabled": true,
+          "latestVersion": "1.5.0",
+          "minimumVersion": "1.3.0",
+          "channel": "stable",
+          "releaseDate": "2026-08-07",
+          "title": "Transfor 1.5.0",
+          "message": "新增媒体解析功能并修复部分问题。",
+          "changelog": ["新增功能 A", "优化功能 B", "修复问题 C"],
+          "downloadUrl": "https://example.com/transfor-1.5.0.zip",
+          "sha256": "abc123"
+        }
+        """;
+    var policy = JsonSerializer.Deserialize<UpdatePolicy>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+    AssertEqual(true, policy!.Enabled, "policy enabled");
+    AssertEqual("1.5.0", policy.LatestVersion, "policy latest version");
+    AssertEqual("1.3.0", policy.MinimumVersion, "policy minimum version");
+    AssertEqual(UpdateChannel.Stable, policy.ChannelKind, "policy channel stable");
+    AssertEqual(3, policy.Changelog!.Count, "policy changelog count");
+    AssertEqual("Transfor 1.5.0", policy.Title, "policy title");
+    AssertEqual(new DateTimeOffset(new DateTime(2026, 8, 7)), policy.ReleaseDate, "policy release date");
+}
+
+// Phase 1 验收：版本决策矩阵（计划文档 Mock 数据）
+static void TestUpdateStatusDecision()
+{
+    var upToDate = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0"))), UpdateChannel.Stable, "1.5.0");
+    AssertEqual(UpdateStatus.UpToDate, upToDate.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "current == latest → UpToDate");
+
+    var optional = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", "1.3.0"))), UpdateChannel.Stable, "1.4.0");
+    AssertEqual(UpdateStatus.OptionalUpdate, optional.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "current >= minimum and < latest → OptionalUpdate");
+
+    var required = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", "1.3.0"))), UpdateChannel.Stable, "1.2.0");
+    AssertEqual(UpdateStatus.RequiredUpdate, required.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "current < minimum → RequiredUpdate");
+
+    var noMinimum = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0"))), UpdateChannel.Stable, "1.4.0");
+    AssertEqual(UpdateStatus.OptionalUpdate, noMinimum.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "no minimum → OptionalUpdate");
+}
+
+// Phase 1 验收：更新检查失败 → CheckFailed，应用仍可运行（网络错误绝不判定 RequiredUpdate）
+static void TestUpdateCheckFailed()
+{
+    var failing = new UpdateService(new FakeUpdatePolicySource(() => Task.FromException<UpdatePolicy?>(new HttpRequestException("网络不可达"))), UpdateChannel.Stable, "1.4.0");
+    var failedResult = failing.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult();
+    AssertEqual(UpdateStatus.CheckFailed, failedResult.Status, "network error → CheckFailed");
+    AssertEqual(true, !string.IsNullOrWhiteSpace(failedResult.Error), "check failed carries message");
+
+    var nullPolicy = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(null)), UpdateChannel.Stable, "1.4.0");
+    AssertEqual(UpdateStatus.CheckFailed, nullPolicy.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "missing policy → CheckFailed");
+
+    var corruptLatest = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("not-a-version", "1.3.0"))), UpdateChannel.Stable, "1.4.0");
+    AssertEqual(UpdateStatus.CheckFailed, corruptLatest.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "corrupt latest version → CheckFailed");
+
+    var corruptMinimum = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", "abc"))), UpdateChannel.Stable, "1.4.0");
+    AssertEqual(UpdateStatus.CheckFailed, corruptMinimum.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "corrupt minimum version → CheckFailed");
+}
+
+// Phase 1：更新通道过滤与远程禁用
+static void TestUpdateChannelFilter()
+{
+    var disabled = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0", enabled: false))), UpdateChannel.Stable, "1.4.0");
+    AssertEqual(UpdateStatus.Disabled, disabled.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "disabled policy → Disabled");
+
+    var stableRejectsBeta = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.6.0", channel: "beta"))), UpdateChannel.Stable, "1.4.0");
+    AssertEqual(UpdateStatus.UpToDate, stableRejectsBeta.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "stable client ignores beta policy");
+
+    var betaAcceptsStable = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.5.0"))), UpdateChannel.Beta, "1.4.0");
+    AssertEqual(UpdateStatus.OptionalUpdate, betaAcceptsStable.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "beta client accepts stable policy");
+
+    var betaAcceptsBeta = new UpdateService(new FakeUpdatePolicySource(() => Task.FromResult<UpdatePolicy?>(Policy("1.6.0-beta.1", channel: "beta"))), UpdateChannel.Beta, "1.4.0");
+    AssertEqual(UpdateStatus.OptionalUpdate, betaAcceptsBeta.CheckForUpdatesAsync(CancellationToken.None).GetAwaiter().GetResult().Status, "beta client accepts beta policy");
+}
+
+// 测试辅助：构造更新策略
+static UpdatePolicy Policy(string latest, string? minimum = null, bool enabled = true, string? channel = null) =>
+    new() { Enabled = enabled, LatestVersion = latest, MinimumVersion = minimum, Channel = channel };
+
 // 通用断言：相等则通过，否则抛出带用例名的异常
 static void AssertEqual<T>(T expected, T actual, string name)
 {
@@ -3030,4 +3135,14 @@ file sealed class FakeCdpServer : IDisposable
         try { listener.Close(); } catch { }
         try { serverTask?.Wait(1000); } catch { }
     }
+}
+
+// 测试辅助：可控返回的更新策略源（file 类必须位于文件末尾）
+file sealed class FakeUpdatePolicySource : IUpdatePolicySource
+{
+    private readonly Func<Task<UpdatePolicy?>> fetcher;
+
+    public FakeUpdatePolicySource(Func<Task<UpdatePolicy?>> fetcher) => this.fetcher = fetcher;
+
+    public Task<UpdatePolicy?> FetchAsync(CancellationToken cancellationToken) => fetcher();
 }
