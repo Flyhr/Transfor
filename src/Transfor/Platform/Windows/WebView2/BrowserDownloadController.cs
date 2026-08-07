@@ -72,9 +72,16 @@ internal static class BrowserDownloadController
                     "IO.read",
                     JsonSerializer.Serialize(new { handle = resource.Stream, size = ReadChunkSize })).ConfigureAwait(true);
                 var chunk = ParseIoChunk(chunkJson);
+                // eof 是流的正常结束标志（尾块 data 为空）：必须先于空数据判断，
+                // 否则把下载完成误判为"读取为空"
+                if (chunk.Eof)
+                {
+                    break;
+                }
+
                 if (chunk.Data.Length == 0)
                 {
-                    return "浏览器下载中断：媒体流读取为空。";
+                    return $"浏览器下载中断：媒体流读取为空（已读取 {position} 字节）。";
                 }
 
                 byte[] bytes;
@@ -100,10 +107,6 @@ internal static class BrowserDownloadController
 
                 await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(true);
                 progress?.Invoke(position, resource.ContentLength);
-                if (chunk.Eof)
-                {
-                    break;
-                }
             }
 
             await stream.FlushAsync(cancellationToken).ConfigureAwait(true);
