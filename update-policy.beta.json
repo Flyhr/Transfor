@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "latestVersion": "0.14.0",
+  "minimumVersion": "0.8.0",
+  "channel": "beta",
+  "releaseDate": "2026-08-07T00:00:00Z",
+  "title": "Transfor 0.14.0 测试版",
+  "message": "Beta 通道首版：与 Stable 同版本（后续 Beta 先发预发布版）",
+  "changelog": [
+    "Beta 通道策略文件：独立于 Stable，供预发布验证"
+  ]
+}

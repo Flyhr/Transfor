@@ -1,17 +1,15 @@
 {
   "enabled": true,
-  "latestVersion": "0.9.0",
+  "latestVersion": "0.14.0",
   "minimumVersion": "0.8.0",
   "channel": "stable",
-  "releaseDate": "2026-08-07",
-  "title": "Transfor 0.9.0",
-  "message": "新增自动更新能力：发现新版本后可下载、安装并自动重启。",
+  "releaseDate": "2026-08-07T00:00:00Z",
+  "title": "Transfor 0.14.0 正式版",
+  "message": "首个正式发布：抖音媒体下载（图文/视频/实况图）、内置浏览器、更新体系完整可用",
   "changelog": [
-    "接入 Velopack 自动更新（下载进度 / 取消 / 立即重启并更新）",
-    "可选更新支持稍后重启，更新在下次启动时自动应用",
-    "设置新增更新通道：Stable 稳定版 / Beta 测试版",
-    "新增 GitHub Actions 自动发布流程（tag → 构建 → 打包 → Release）"
-  ],
-  "downloadUrl": "",
-  "sha256": ""
+    "抖音媒体下载：视频/图文/实况图（静态+动态配对）、多清晰度、封面过滤",
+    "内置浏览器（WebView2）：登录态持久化、媒体解析/下载走浏览器网络栈",
+    "更新体系：策略检查 + Velopack 增量更新（Stable/Beta 双通道）",
+    "修复：强制更新不可绕过、更新网络与媒体网络分离、实况配对兜底"
+  ]
 }
