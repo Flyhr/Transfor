@@ -2656,30 +2656,35 @@ static void TestBrowserCaptureSessionHelpers()
     AssertEqual(true, detailUri.Query.Contains("aweme_id=7670791950899991451"), "detail api carries work id");
 
     // 浏览器下载分块响应解析：Null 安全（done/error/chunk 为 JSON null 不抛异常）
-    var (err1, done1, chunk1) = BrowserDownloadController.ParseChunkResponse("{\"chunk\":\"QUJD\"}");
+    var (status1, err1, done1, chunk1) = BrowserDownloadController.ParseChunkResponse("{\"chunk\":\"QUJD\"}");
+    AssertEqual(BrowserDownloadController.ChunkParseStatus.Chunk, status1, "chunk response status");
     AssertEqual(null, err1, "chunk response no error");
     AssertEqual(false, done1, "chunk response not done");
     AssertEqual("QUJD", chunk1, "chunk response base64 chunk");
 
-    var (err2, done2, chunk2) = BrowserDownloadController.ParseChunkResponse("{\"done\":true}");
+    var (status2, err2, done2, chunk2) = BrowserDownloadController.ParseChunkResponse("{\"done\":true}");
+    AssertEqual(BrowserDownloadController.ChunkParseStatus.Done, status2, "done response status");
     AssertEqual(true, done2, "done response ends stream");
     AssertEqual(null, chunk2, "done response no chunk");
 
-    var (err3, _, _) = BrowserDownloadController.ParseChunkResponse("{\"error\":\"HTTP 403\"}");
+    var (status3, err3, _, _) = BrowserDownloadController.ParseChunkResponse("{\"error\":\"HTTP 403\"}");
+    AssertEqual(BrowserDownloadController.ChunkParseStatus.Error, status3, "error response status");
     AssertEqual("HTTP 403", err3, "error response reported");
 
     // JSON null 字段：GetBoolean/GetString 会抛的场景在此必须安全返回
-    var (err4, done4, chunk4) = BrowserDownloadController.ParseChunkResponse("{\"done\":null,\"chunk\":null}");
+    var (status4, err4, done4, chunk4) = BrowserDownloadController.ParseChunkResponse("{\"done\":null,\"chunk\":null}");
+    AssertEqual(BrowserDownloadController.ChunkParseStatus.Empty, status4, "null fields treated as empty");
     AssertEqual(null, err4, "null fields no error");
     AssertEqual(false, done4, "null done treated as not done");
     AssertEqual(null, chunk4, "null chunk treated as missing");
 
-    var (err5, done5, _) = BrowserDownloadController.ParseChunkResponse("null");
+    var (status5, err5, done5, _) = BrowserDownloadController.ParseChunkResponse("null");
+    AssertEqual(BrowserDownloadController.ChunkParseStatus.Empty, status5, "script null result is empty");
     AssertEqual(null, err5, "script null result no error");
     AssertEqual(false, done5, "script null result not done");
 
-    var (err6, _, _) = BrowserDownloadController.ParseChunkResponse("not-json");
-    AssertEqual(null, err6, "malformed json degrades safely");
+    var (status6, _, _, _) = BrowserDownloadController.ParseChunkResponse("not-json");
+    AssertEqual(BrowserDownloadController.ChunkParseStatus.Empty, status6, "malformed json degrades safely");
 }
 
 // Phase 4B：网络资源记录解析与基础条件

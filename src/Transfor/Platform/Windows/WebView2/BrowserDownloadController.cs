@@ -80,7 +80,7 @@ internal static class BrowserDownloadController
             using var startDoc = JsonDocument.Parse(startRaw);
             if (startDoc.RootElement.ValueKind != JsonValueKind.Object)
             {
-                return "浏览器下载失败：响应无法解析。";
+                return $"浏览器下载失败：响应无法解析（{TruncateForError(startRaw)}）。";
             }
 
             if (startDoc.RootElement.TryGetProperty("error", out var errorElement))
@@ -99,7 +99,7 @@ internal static class BrowserDownloadController
         }
         catch
         {
-            return "浏览器下载失败：响应无法解析。";
+            return $"浏览器下载失败：响应无法解析（{TruncateForError(startRaw)}）。";
         }
 
         if (total is not null && total <= 0)
@@ -122,12 +122,24 @@ internal static class BrowserDownloadController
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var raw = await core.ExecuteScriptAsync(chunkScript).ConfigureAwait(true);
-                // 分块响应解析（纯函数，Null 安全：done/error/chunk 任一为 null 都按
-                // 无该字段处理，绝不因 JSON null 抛异常中断下载）
+                // 分块响应解析（纯函数，Null 安全）；Empty 状态带原始返回摘要，
+                // 便于定位脚本行为（ExecuteScriptAsync 返回 null = 脚本执行失败）
                 var response = ParseChunkResponse(raw);
-                if (response.Error is not null)
+                switch (response.Status)
                 {
-                    return $"浏览器下载失败：{response.Error}";
+                    case ChunkParseStatus.Error:
+                        return $"浏览器下载失败：{response.Error}";
+
+                    case ChunkParseStatus.Done:
+                        // 第一轮即结束：流未产出任何数据
+                        if (position == 0)
+                        {
+                            return "浏览器下载失败：媒体内容为空（流未产出数据）。";
+                        }
+                        break;
+
+                    case ChunkParseStatus.Empty:
+                        return $"浏览器下载中断：脚本返回异常数据（{TruncateForError(raw)}）。";
                 }
 
                 if (response.Done)
@@ -172,12 +184,21 @@ internal static class BrowserDownloadController
         return null;
     }
 
+    // 分块响应解析状态：Chunk 有效分块 / Done 流结束 / Error 脚本报错 / Empty 无有效数据
+    internal enum ChunkParseStatus
+    {
+        Chunk,
+        Done,
+        Error,
+        Empty,
+    }
+
     // 分块响应解析（纯函数，可离线测试）：
     // 输入为 ExecuteScriptAsync 的 JSON 编码结果；脚本异常/JSON null/字段缺失
     // 一律不抛——error/done/chunk 按缺失语义返回，由调用方决策。
     // 注意：.NET 10 的 TryGetProperty 对非 Object 根元素会抛
     // InvalidOperationException（而非返回 false），必须先判 ValueKind
-    internal static (string? Error, bool Done, string? Chunk) ParseChunkResponse(string raw)
+    internal static (ChunkParseStatus Status, string? Error, bool Done, string? Chunk) ParseChunkResponse(string raw)
     {
         try
         {
@@ -185,7 +206,7 @@ internal static class BrowserDownloadController
             var root = doc.RootElement;
             if (root.ValueKind != JsonValueKind.Object)
             {
-                return (null, false, null);
+                return (ChunkParseStatus.Empty, null, false, null);
             }
 
             var error = root.TryGetProperty("error", out var errorElement)
@@ -194,7 +215,7 @@ internal static class BrowserDownloadController
                     : null;
             if (error is not null)
             {
-                return (error, false, null);
+                return (ChunkParseStatus.Error, error, false, null);
             }
 
             // ValueKind 直接比较而非 GetBoolean()：JSON null/非布尔不抛异常
@@ -204,16 +225,29 @@ internal static class BrowserDownloadController
                 && chunkElement.ValueKind == JsonValueKind.String
                     ? chunkElement.GetString()
                     : null;
-            return (null, done, chunk);
+            if (done)
+            {
+                return (ChunkParseStatus.Done, null, true, null);
+            }
+
+            return chunk is null
+                ? (ChunkParseStatus.Empty, null, false, null)
+                : (ChunkParseStatus.Chunk, null, false, chunk);
         }
         catch (JsonException)
         {
-            return (null, false, null);
+            return (ChunkParseStatus.Empty, null, false, null);
         }
         catch (InvalidOperationException)
         {
             // 非对象根元素（JSON null 等）的防御兜底
-            return (null, false, null);
+            return (ChunkParseStatus.Empty, null, false, null);
         }
     }
+
+    // 错误消息摘要：截断脚本原始返回，避免海量 base64 刷屏
+    private static string TruncateForError(string raw)
+        => string.IsNullOrEmpty(raw)
+            ? "(空)"
+            : raw.Length <= 200 ? raw : raw[..200] + "…";
 }
