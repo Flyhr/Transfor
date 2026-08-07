@@ -52,14 +52,17 @@ internal sealed class BrowserHostForm : Form
     }
 
     // 捕获页面数据：导航 → 等待加载 → 轮询提取结构化数据与 DOM 候选；
+    // 导航全程记录真实网络请求（供嗅探兜底与真实接口 URL 识别）；
     // 可跨线程调用（内部调度 UI 线程）
-    public async Task<(string? StructuredJson, IReadOnlyList<BrowserCapturedCandidate> Candidates)> CapturePageAsync(
+    public async Task<(string? StructuredJson, IReadOnlyList<BrowserCapturedCandidate> Candidates, IReadOnlyList<NetworkResourceRecord> NetworkRecords)> CapturePageAsync(
         Uri pageUri,
         CancellationToken cancellationToken)
     {
         return await RunOnUiAsync(async () =>
         {
             var core = await GetCaptureControlAsync().ConfigureAwait(true);
+            using var networkCapture = new NetworkCaptureService(core);
+            networkCapture.Enable();
 
             var navigationTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e) => navigationTcs.TrySetResult();
@@ -91,7 +94,7 @@ internal sealed class BrowserHostForm : Form
                 await Task.Delay(1000, cancellationToken).ConfigureAwait(true);
             }
 
-            return (structuredJson, candidates);
+            return (structuredJson, candidates, networkCapture.DisableAndSnapshot());
         }, cancellationToken).ConfigureAwait(false);
     }
 

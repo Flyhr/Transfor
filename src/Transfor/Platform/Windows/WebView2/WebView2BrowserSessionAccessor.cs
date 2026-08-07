@@ -37,8 +37,9 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
         }
     }
 
-    // 捕获页面：惰性初始化隐藏宿主 → 导航 → 提取结构化数据与 DOM 候选；
-    // 页面脚本无作品数据时按作品 ID 经浏览器 fetch 直取详情接口
+    // 捕获页面：惰性初始化隐藏宿主 → 导航（全程网络记录）→ 提取结构化数据与 DOM 候选；
+    // 结构化数据缺失时：嗅探网络候选兜底（严格模式，仅白名单命中）；并按真实详情接口 URL
+    // （网络捕获）或作品 ID 直取详情接口
     public async Task<BrowserCaptureResult> CaptureAsync(
         Uri pageUri,
         bool interactive,
@@ -47,17 +48,33 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
         try
         {
             await browserService.EnsureHostAsync(uiOwner, cancellationToken).ConfigureAwait(false);
-            var (structuredJson, candidates) = await browserService.Host
+            var (structuredJson, domCandidates, networkRecords) = await browserService.Host
                 .CapturePageAsync(pageUri, cancellationToken).ConfigureAwait(false);
 
-            // 页面脚本无作品数据时：从页面配置提取作品 ID，经浏览器网络栈直取详情接口
+            // 网络嗅探兜底：结构化数据缺失时，命中作品媒体白名单的网络请求产出候选
+            // （严格模式：无白名单则零产出，广告/头像/预加载绝不误抓）
+            IReadOnlyList<BrowserCapturedCandidate> candidates = domCandidates;
+            if (structuredJson is null || !BrowserCaptureSession.HasWorkData(structuredJson))
+            {
+                var sniffed = new MediaSniffer().Sniff(networkRecords, structuredJson);
+                if (sniffed.Count > 0)
+                {
+                    candidates = domCandidates.Concat(sniffed).ToArray();
+                }
+            }
+
+            // 详情接口：优先使用网络捕获的真实 URL（携带页面实际参数），
+            // 其次按作品 ID 拼接标准接口 URL
             if (!BrowserCaptureSession.HasWorkData(structuredJson))
             {
+                var detailUri = networkRecords
+                    .Select(record => record.Uri)
+                    .FirstOrDefault(uri => DouyinDetailEndpointMatcher.IsDetailEndpoint(uri.ToString(), null));
                 var workId = BrowserCaptureSession.ExtractWorkId(structuredJson);
-                if (workId is not null)
+                if (detailUri is not null || workId is not null)
                 {
                     var fetched = await browserService.Host
-                        .FetchDetailAsync(BrowserCaptureSession.BuildDetailApiUri(workId), cancellationToken)
+                        .FetchDetailAsync(detailUri ?? BrowserCaptureSession.BuildDetailApiUri(workId!), cancellationToken)
                         .ConfigureAwait(false);
                     if (BrowserCaptureSession.HasWorkData(fetched))
                     {

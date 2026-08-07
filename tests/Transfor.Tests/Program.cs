@@ -108,6 +108,9 @@ TestUpdateChannelSettingsValidation();
 TestBrowserAddressNormalization();
 TestBrowserProfile();
 TestBrowserCaptureSessionHelpers();
+TestNetworkResourceParsing();
+TestMediaUrlExtractor();
+TestMediaSniffer();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -2594,6 +2597,114 @@ static void TestBrowserCaptureSessionHelpers()
     AssertEqual("https", detailUri.Scheme, "detail api https");
     AssertEqual("www.douyin.com", detailUri.Host, "detail api host");
     AssertEqual(true, detailUri.Query.Contains("aweme_id=7670791950899991451"), "detail api carries work id");
+}
+
+// Phase 4B：网络资源记录解析与基础条件
+static void TestNetworkResourceParsing()
+{
+    var record = NetworkCaptureService.Parse("https://v3-dy.com/a.mp4", "GET", "video/mp4; charset=utf-8", 200);
+    AssertEqual("https://v3-dy.com/a.mp4", record.Uri.ToString(), "record uri");
+    AssertEqual("GET", record.Method, "record method");
+    AssertEqual("video/mp4", record.ContentType, "content type params stripped");
+    AssertEqual(200, record.StatusCode, "record status");
+
+    var invalid = NetworkCaptureService.Parse("not-a-url", "POST", null, 404);
+    AssertEqual("about:blank", invalid.Uri.ToString(), "invalid url falls back to blank");
+    AssertEqual(null, invalid.ContentType, "empty content type becomes null");
+    AssertEqual(false, invalid.IsSuccessfulGet, "post 404 not successful get");
+
+    var ok = NetworkCaptureService.Parse("https://a.com/b.jpg", "get", "image/jpeg", 206);
+    AssertEqual(true, ok.IsSuccessfulGet, "lowercase get with 206 is successful");
+    var notOk = NetworkCaptureService.Parse("https://a.com/b.jpg", "GET", "image/jpeg", 304);
+    AssertEqual(false, notOk.IsSuccessfulGet, "304 not successful get");
+}
+
+// Phase 4B：结构化 JSON → 作品媒体 URL 白名单
+static void TestMediaUrlExtractor()
+{
+    var json = "{\"aweme_detail\":{\"images\":[{\"url_list\":[\"https://p3-sign.douyinpic.com/obj/123.jpeg\"]}],\"video\":{\"play_addr\":{\"url_list\":[\"https://v3-dy.com/video.mp4\"]}},\"author\":{\"nickname\":\"a\",\"avatar_thumb\":{\"url_list\":[\"https://p3-sign.douyinpic.com/avatar/x.jpeg\"]}}}}";
+    var urls = MediaUrlExtractor.ExtractUrls(json);
+    AssertEqual(3, urls.Count, "all urls extracted");
+    AssertEqual(true, urls.Contains("https://p3-sign.douyinpic.com/obj/123.jpeg"), "image url in whitelist");
+    AssertEqual(true, urls.Contains("https://v3-dy.com/video.mp4"), "video url in whitelist");
+
+    AssertEqual(0, MediaUrlExtractor.ExtractUrls(null).Count, "null json yields empty whitelist");
+    AssertEqual(0, MediaUrlExtractor.ExtractUrls("not json").Count, "corrupt json yields empty whitelist");
+    AssertEqual(0, MediaUrlExtractor.ExtractUrls("{\"a\":123,\"b\":[\"x\",\"ftp://y\"]}").Count, "non-http urls ignored");
+
+    AssertEqual("https://v3-dy.com/a.mp4", MediaUrlExtractor.NormalizeUrl(new Uri("HTTPS://V3-DY.com/a.mp4#frag")), "url normalized");
+}
+
+// Phase 4B：媒体嗅探（严格模式——白名单命中才产出，广告/头像/预加载绝不误抓）
+static void TestMediaSniffer()
+{
+    const string workJson = "{\"aweme_detail\":{\"images\":[{\"url_list\":[\"https://p3-sign.douyinpic.com/obj/123.jpeg\"]}],\"video\":{\"play_addr\":{\"url_list\":[\"https://v3-dy.com/video.mp4\"]}},\"author\":{\"avatar_thumb\":{\"url_list\":[\"https://p3-sign.douyinpic.com/avatar/x.jpeg\"]}}}}";
+    var sniffer = new MediaSniffer();
+
+    // 白名单命中：图片与视频产出 Network 候选
+    var records = new List<NetworkResourceRecord>
+    {
+        new(new Uri("https://p3-sign.douyinpic.com/obj/123.jpeg"), "GET", "image/jpeg", 200),
+        new(new Uri("https://v3-dy.com/video.mp4"), "GET", "video/mp4", 200),
+    };
+    var hits = sniffer.Sniff(records, workJson);
+    AssertEqual(2, hits.Count, "whitelisted media both sniffed");
+    AssertEqual(MediaKind.Image, hits[0].Kind, "jpeg classified as image");
+    AssertEqual(MediaKind.Video, hits[1].Kind, "mp4 classified as video");
+    AssertEqual(BrowserCandidateSource.Network, hits[0].Source, "network source marked");
+    AssertEqual(0, hits[0].OrderIndex, "candidate order follows record order");
+
+    // 防误抓核心用例：不在白名单的广告/预加载视频绝不产出
+    var ads = new List<NetworkResourceRecord>
+    {
+        new(new Uri("https://p3-sign.douyinpic.com/obj/ad-123.mp4"), "GET", "video/mp4", 200),
+        new(new Uri("https://v3-dy.com/preload-video.mp4"), "GET", "video/mp4", 200),
+        new(new Uri("https://p3-sign.douyinpic.com/obj/123.jpeg"), "GET", "image/jpeg", 200),
+    };
+    var filtered = sniffer.Sniff(ads, workJson);
+    AssertEqual(1, filtered.Count, "only whitelisted media survives, ads/preload dropped");
+
+    // 噪音层：白名单内的头像 URL 被丢弃
+    var withAvatar = new List<NetworkResourceRecord>
+    {
+        new(new Uri("https://p3-sign.douyinpic.com/avatar/x.jpeg"), "GET", "image/jpeg", 200),
+    };
+    AssertEqual(0, sniffer.Sniff(withAvatar, workJson).Count, "avatar in whitelist still dropped as noise");
+
+    // 接口 JSON 不产出媒体候选
+    var detail = new List<NetworkResourceRecord>
+    {
+        new(new Uri("https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id=1"), "GET", "application/json", 200),
+    };
+    AssertEqual(0, sniffer.Sniff(detail, workJson).Count, "detail api json not a media candidate");
+
+    // 基础层：POST/非 2xx/非识别类型（URL 均为白名单内，验证类型与状态过滤）
+    var baseFiltered = new List<NetworkResourceRecord>
+    {
+        new(new Uri("https://v3-dy.com/video.mp4"), "POST", "video/mp4", 200),
+        new(new Uri("https://v3-dy.com/video.mp4"), "GET", "video/mp4", 404),
+        new(new Uri("https://v3-dy.com/video.mp4"), "GET", "text/html", 200),
+        new(new Uri("https://p3-sign.douyinpic.com/obj/123.jpeg"), "GET", "image/png", 200),
+        new(new Uri("https://p3-sign.douyinpic.com/obj/123.jpeg"), "GET", "image/gif", 200),
+        new(new Uri("https://p3-sign.douyinpic.com/obj/123.jpeg"), "GET", "image/webp", 200),
+        new(new Uri("https://p3-sign.douyinpic.com/obj/123.jpeg"), "GET", "video/webm", 200),
+    };
+    var baseHits = sniffer.Sniff(baseFiltered, workJson);
+    AssertEqual(4, baseHits.Count, "only successful gets with recognized types survive");
+
+    // 严格模式：无结构化数据 → 零产出（即使记录全为作品媒体）
+    var strictRecords = new List<NetworkResourceRecord>
+    {
+        new(new Uri("https://v3-dy.com/video.mp4"), "GET", "video/mp4", 200),
+    };
+    AssertEqual(0, sniffer.Sniff(strictRecords, null).Count, "no structured data yields no candidates");
+    AssertEqual(0, sniffer.Sniff(strictRecords, "corrupt{json").Count, "corrupt structured data yields no candidates");
+
+    // 类型分类矩阵
+    AssertEqual(true, MediaSniffer.TryClassify("image/jpeg", out var k1) && k1 == MediaKind.Image, "jpeg type");
+    AssertEqual(true, MediaSniffer.TryClassify("video/mp4", out var k2) && k2 == MediaKind.Video, "mp4 type");
+    AssertEqual(false, MediaSniffer.TryClassify("application/json", out _), "json not media type");
+    AssertEqual(false, MediaSniffer.TryClassify(null, out _), "null type not media");
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常
