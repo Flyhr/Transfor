@@ -7,9 +7,14 @@ internal sealed class UpdateDownloadForm : Form
 {
     public enum Result
     {
+        // 用户主动取消（强制更新不允许跳过，由调用方回到强制更新循环）
         Cancelled,
+        // 更新已应用并请求重启
         RestartNow,
+        // 可选更新：用户选择稍后重启（更新已暂存）
         Later,
+        // 下载/安装失败（与取消区分：失败后应允许重试或退出，而不是静默放过）
+        Failed,
     }
 
     private readonly UpdateCheckResult updateResult;
@@ -104,7 +109,7 @@ internal sealed class UpdateDownloadForm : Form
         catch (Exception ex)
         {
             form.OnFailed(ex.Message);
-            return Result.Cancelled;
+            return Result.Failed;
         }
         finally
         {
