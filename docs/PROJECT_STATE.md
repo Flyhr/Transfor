@@ -4,9 +4,9 @@
 
 ## 〇、当前版本与路线
 
-- **应用版本**：`0.13.0`（唯一来源：`src/Transfor/Transfor.csproj` 的 `<Version>`，SemVer）
+- **应用版本**：`0.14.0`（唯一来源：`src/Transfor/Transfor.csproj` 的 `<Version>`，SemVer）
 - **浏览器技术路线**：WebView2 已落地（浏览器页 + 隐藏宿主）；媒体解析/下载兜底为 WebView2（`WebView2BrowserSessionAccessor`，与浏览器页共享 Profile 登录态）；旧 Edge CDP 实现保留未删除、不再被实例化
-- **Phase 进度**：Phase 0（架构整理）✅ 标签 `architecture-baseline`；Phase 1（版本检查）✅；Phase 2（Velopack 自动更新）✅；Phase 3（WebView2 浏览器模块）✅；Phase 4A（浏览器兜底切 WebView2）✅；Phase 4B（Network Capture + MediaSniffer）✅；Phase 4C（CDP 响应体捕获）✅ 完成于 dev；Phase 4D（实况专项）未开始
+- **Phase 进度**：Phase 0（架构整理）✅ 标签 `architecture-baseline`；Phase 1（版本检查）✅；Phase 2（Velopack 自动更新）✅；Phase 3（WebView2 浏览器模块）✅；Phase 4A（浏览器兜底切 WebView2）✅；Phase 4B（Network Capture + MediaSniffer）✅；Phase 4C（CDP 响应体捕获）✅；Phase 4D（实况图 LIVE 标记）✅ 完成于 dev；Phase 5（现代 UI 基础框架）未开始
 
 ## 一、项目概述
 
@@ -71,9 +71,9 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 
 ## 五、当前状态
 
-- **最新提交**：Phase 4C CDP 响应体捕获（dev 分支，未推送）
-- **测试**：676 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
-- **版本**：0.13.0（csproj `<Version>`，唯一来源）
+- **最新提交**：Phase 4D 实况图 LIVE 标记（dev 分支，未推送）
+- **测试**：680 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
+- **版本**：0.14.0（csproj `<Version>`，唯一来源）
 - **更新体系**：检查走 update-policy.json（GitHub raw `Release` 分支）；下载/安装/重启走 Velopack（GithubSource，Beta 通道读预发布）；`vpk pack -c stable|beta` 已实测通过
 - **浏览器（Phase 3/4A/4B/4C）**：WebView2 1.0.4129.50，独立 Profile `Browser\UserData`；浏览器页 + 隐藏宿主共用登录态；解析/下载兜底 WebView2BrowserSessionAccessor；4B 网络捕获 + MediaSniffer 白名单嗅探；**4C：CDP Network 域读取详情接口响应体（登录态最可靠数据源，优先于页面脚本提取）**
 - **诊断目录**：`%TEMP%\Transfor\diagnostics\`（解析完成 capture-*.json + 下载失败 failed-media-*；临时诊断代码在 CaptureDiagnostics / MediaFileFinalizer.SaveFailureSample，定位后移除）

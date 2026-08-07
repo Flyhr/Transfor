@@ -112,6 +112,7 @@ TestNetworkResourceParsing();
 TestMediaUrlExtractor();
 TestMediaSniffer();
 TestCdpResponseBodyParsing();
+TestLivePhotoTypeText();
 
 Console.WriteLine($"All {TestCounter.Passed} tests passed.");
 static void TestPendingMigrationRecovery()
@@ -2722,6 +2723,15 @@ static void TestCdpResponseBodyParsing()
     AssertEqual(null, CdpNetworkCaptureService.ParseResponseBody("{\"error\":{\"message\":\"No resource with given identifier\"}}"), "error result yields null");
     AssertEqual(null, CdpNetworkCaptureService.ParseResponseBody("{\"base64Encoded\":false}"), "missing body yields null");
     AssertEqual(null, CdpNetworkCaptureService.ParseResponseBody("{\"body\":\"!!!not-base64!!!\",\"base64Encoded\":true}"), "invalid base64 yields null");
+}
+
+// Phase 4D：资产表类型列 LIVE 标记（实况图配对显示）
+static void TestLivePhotoTypeText()
+{
+    AssertEqual("图片", MediaAssetGrid.GetTypeText(MediaKind.Image, MediaAssetRole.Normal), "normal image type text");
+    AssertEqual("视频", MediaAssetGrid.GetTypeText(MediaKind.Video, MediaAssetRole.Normal), "normal video type text");
+    AssertEqual("图片 LIVE", MediaAssetGrid.GetTypeText(MediaKind.Image, MediaAssetRole.LivePhotoStill), "live still shows LIVE");
+    AssertEqual("视频 LIVE", MediaAssetGrid.GetTypeText(MediaKind.Video, MediaAssetRole.LivePhotoMotion), "live motion shows LIVE");
 }
 
 // 通用断言：相等则通过，否则抛出带用例名的异常

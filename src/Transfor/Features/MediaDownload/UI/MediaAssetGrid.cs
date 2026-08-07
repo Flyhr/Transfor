@@ -63,7 +63,7 @@ internal sealed class MediaAssetGrid : UserControl
             row.Tag = (asset, variant);
             row.Cells.Add(new DataGridViewCheckBoxCell { Value = defaultSelectAll && selection?.Status == MediaSelectionStatus.Selected && variant is not null });
             row.Cells.Add(new DataGridViewTextBoxCell { Value = (i + 1).ToString("D2") });
-            row.Cells.Add(new DataGridViewTextBoxCell { Value = asset.Kind == MediaKind.Image ? "图片" : "视频" });
+            row.Cells.Add(new DataGridViewTextBoxCell { Value = GetTypeText(asset.Kind, asset.Role) });
             row.Cells.Add(new DataGridViewTextBoxCell
             {
                 Value = variant is not null && variant.Width.HasValue && variant.Height.HasValue
@@ -85,6 +85,14 @@ internal sealed class MediaAssetGrid : UserControl
     }
 
     public void Clear() => grid.Rows.Clear();
+
+    // 类型列文本（纯函数，可测）：实况图配对的静态照片/动态视频显示 LIVE 标记（Phase 4D）
+    internal static string GetTypeText(MediaKind kind, MediaAssetRole role) => role switch
+    {
+        MediaAssetRole.LivePhotoStill => "图片 LIVE",
+        MediaAssetRole.LivePhotoMotion => "视频 LIVE",
+        _ => kind == MediaKind.Image ? "图片" : "视频",
+    };
 
     public void SelectAll()
     {
