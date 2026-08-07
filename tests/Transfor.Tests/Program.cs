@@ -2425,7 +2425,7 @@ static void TestVersionComparer()
     AssertEqual(0, VersionComparer.Compare("1.5.0", "1.5.0"), "equal versions");
     AssertEqual(true, VersionComparer.Compare("1.4.0", "1.5.0") < 0, "minor below");
     AssertEqual(true, VersionComparer.Compare("1.5.0", "1.4.9") > 0, "patch above");
-    AssertEqual(0, VersionComparer.Compare("1.2.3.0", "1.2.3"), "assembly 4-part equals semver");
+    AssertThrows<FormatException>(() => VersionComparer.Compare("1.2.3.0", "1.2.3"), "assembly 4-part rejected (strict semver)");
     AssertEqual(0, VersionComparer.Compare("1.5.0+build.7", "1.5.0"), "build metadata ignored");
     AssertEqual(true, VersionComparer.Compare("1.2.0-beta.1", "1.2.0") < 0, "prerelease below release");
     AssertEqual(true, VersionComparer.Compare("1.2.0-beta.1", "1.2.0-beta.2") < 0, "beta numeric order");

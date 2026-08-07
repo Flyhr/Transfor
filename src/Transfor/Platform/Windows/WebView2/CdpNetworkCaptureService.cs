@@ -16,6 +16,9 @@ internal sealed class CdpNetworkCaptureService : IDisposable
     private readonly CoreWebView2 core;
     private readonly Dictionary<string, TaskCompletionSource<string?>> pendingBodies = new(StringComparer.Ordinal);
     private readonly object sync = new();
+    // 持久化首个有效详情响应（Phase 4C 时序修复）：等待方随时可挂接，
+    // 详情接口晚于 WaitForDetailResponseAsync 调用到达也能完成，而不是错过
+    private TaskCompletionSource<string?>? firstDetail;
     private CoreWebView2DevToolsProtocolEventReceiver? responseReceiver;
     private CoreWebView2DevToolsProtocolEventReceiver? finishedReceiver;
     private bool enabled;
@@ -33,6 +36,7 @@ internal sealed class CdpNetworkCaptureService : IDisposable
             return;
         }
 
+        firstDetail = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
         responseReceiver = core.GetDevToolsProtocolEventReceiver(ResponseReceivedEvent);
         finishedReceiver = core.GetDevToolsProtocolEventReceiver(LoadingFinishedEvent);
         responseReceiver.DevToolsProtocolEventReceived += OnResponseReceived;
@@ -44,19 +48,25 @@ internal sealed class CdpNetworkCaptureService : IDisposable
     // 等待首个作品详情接口响应体（最多 timeout）；超时或无捕获返回 null
     public async Task<string?> WaitForDetailResponseAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
-        Task<string?>[] pending;
+        TaskCompletionSource<string?>? pending;
         lock (sync)
         {
-            pending = pendingBodies.Values.Select(tcs => tcs.Task).ToArray();
+            pending = firstDetail;
         }
 
-        if (pending.Length == 0)
+        if (pending is null)
         {
             return null;
         }
 
-        var first = await Task.WhenAny(pending).WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
-        return first.Result;
+        try
+        {
+            return await pending.Task.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return null;
+        }
     }
 
     // CDP 事件回调（UI 线程）：详情接口响应登记
@@ -115,7 +125,8 @@ internal sealed class CdpNetworkCaptureService : IDisposable
         }
     }
 
-    // 读取已加载完成请求的响应体（Network.getResponseBody）
+    // 读取已加载完成请求的响应体（Network.getResponseBody）；
+    // 仅首个有效响应完成 firstDetail（无效/读取失败不设置，继续等下一个请求）
     private async Task FetchBodyAsync(string requestId, TaskCompletionSource<string?> tcs)
     {
         try
@@ -123,7 +134,15 @@ internal sealed class CdpNetworkCaptureService : IDisposable
             var result = await core.CallDevToolsProtocolMethodAsync(
                 "Network.getResponseBody",
                 JsonSerializer.Serialize(new { requestId }));
-            tcs.TrySetResult(ParseResponseBody(result));
+            var body = ParseResponseBody(result);
+            tcs.TrySetResult(body);
+            if (!string.IsNullOrEmpty(body))
+            {
+                lock (sync)
+                {
+                    firstDetail?.TrySetResult(body);
+                }
+            }
         }
         catch
         {
@@ -186,6 +205,8 @@ internal sealed class CdpNetworkCaptureService : IDisposable
 
         lock (sync)
         {
+            firstDetail?.TrySetResult(null);
+            firstDetail = null;
             foreach (var tcs in pendingBodies.Values)
             {
                 tcs.TrySetResult(null);

@@ -67,7 +67,18 @@ internal sealed class BrowserHostForm : Form
             await cdpCapture.EnableAsync().ConfigureAwait(true);
 
             var navigationTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e) => navigationTcs.TrySetResult();
+            void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+            {
+                // 只认成功导航；失败（DNS/HTTP/证书等）立即抛给等待方，避免死等超时或抓空数据
+                if (e.IsSuccess)
+                {
+                    navigationTcs.TrySetResult();
+                }
+                else
+                {
+                    navigationTcs.TrySetException(new InvalidOperationException($"页面导航失败：{e.WebErrorStatus}"));
+                }
+            }
             core.NavigationCompleted += OnNavigationCompleted;
             try
             {
