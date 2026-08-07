@@ -70,10 +70,12 @@ internal static class BrowserCaptureSession
         } catch (e) { return null; }
     })()";
 
-    // 提取结构化数据（页面字符串）；ExecuteScriptAsync 结果按 JSON 编码反序列化
+    // 提取结构化数据（页面字符串）；ExecuteScriptAsync 结果按 JSON 编码反序列化；
+    // ConfigureAwait(true)：本方法在 BrowserHostForm UI 线程上下文执行，
+    // 统一保持线程亲和（后续若在 continuation 访问 core 不会再踩线程坑）
     public static async Task<string?> ExtractStructuredDataAsync(CoreWebView2 core, CancellationToken cancellationToken)
     {
-        var raw = await core.ExecuteScriptAsync(StructuredDataScript).ConfigureAwait(false);
+        var raw = await core.ExecuteScriptAsync(StructuredDataScript).ConfigureAwait(true);
         if (string.IsNullOrWhiteSpace(raw) || raw == "null")
         {
             return null;
@@ -101,7 +103,7 @@ internal static class BrowserCaptureSession
         CoreWebView2 core,
         CancellationToken cancellationToken)
     {
-        var raw = await core.ExecuteScriptAsync(DomCandidatesScript).ConfigureAwait(false);
+        var raw = await core.ExecuteScriptAsync(DomCandidatesScript).ConfigureAwait(true);
         if (string.IsNullOrWhiteSpace(raw) || raw == "null")
         {
             return Array.Empty<BrowserCapturedCandidate>();
@@ -126,7 +128,7 @@ internal static class BrowserCaptureSession
     public static async Task<string?> FetchDetailAsync(CoreWebView2 core, Uri detailUri, CancellationToken cancellationToken)
     {
         var script = FetchDetailScript.Replace("URL", JsonSerializer.Serialize(detailUri.ToString()), StringComparison.Ordinal);
-        var raw = await core.ExecuteScriptAsync(script).ConfigureAwait(false);
+        var raw = await core.ExecuteScriptAsync(script).ConfigureAwait(true);
         if (string.IsNullOrWhiteSpace(raw) || raw == "null")
         {
             return null;

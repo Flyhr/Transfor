@@ -68,9 +68,12 @@ internal static class BrowserDownloadController
         Action<long, long?>? progress,
         long? maxBytes)
     {
-        // 第一步：页面 fetch 建立流式响应（不加载进内存）
+        // 第一步：页面 fetch 建立流式响应（不加载进内存）；
+        // 注意：ExecuteScriptAsync 必须在 UI 线程调用，且循环的下一轮调用点
+        // 位于本轮 continuation——任何 ConfigureAwait(false) 都会把调用点
+        // 甩到线程池线程，触发 CoreWebView2 线程亲和检查崩溃
         var prepareScript = PrepareScriptTemplate.Replace("URL", JsonSerializer.Serialize(mediaUri.ToString()), StringComparison.Ordinal);
-        var startRaw = await core.ExecuteScriptAsync(prepareScript).ConfigureAwait(false);
+        var startRaw = await core.ExecuteScriptAsync(prepareScript).ConfigureAwait(true);
         long? total;
         try
         {
@@ -113,7 +116,7 @@ internal static class BrowserDownloadController
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var raw = await core.ExecuteScriptAsync(chunkScript).ConfigureAwait(false);
+                var raw = await core.ExecuteScriptAsync(chunkScript).ConfigureAwait(true);
                 string? chunk;
                 var done = false;
                 try
@@ -169,11 +172,12 @@ internal static class BrowserDownloadController
                     return "媒体内容超过大小限制。";
                 }
 
-                await stream.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+                // 写入 continuation 必须回 UI 线程：下一轮 ExecuteScriptAsync 的调用点在此
+                await stream.WriteAsync(data, cancellationToken).ConfigureAwait(true);
                 progress?.Invoke(position, total);
             }
 
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(true);
         }
 
         return null;
