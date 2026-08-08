@@ -82,9 +82,69 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
         RegisterSavedHotKey();
         mainForm.Shown += MainForm_Shown;
+        // 主窗体延迟显示：先完成启动更新检查——
+        // 强制更新时不进入主业务界面，直接进入阻断更新循环；其余情况正常显示
+        _ = ShowAfterStartupCheckAsync();
+    }
+
+    // 启动流程：后台检查更新（最多等待 timeout）；强制更新 → 不显示主窗体直接进入阻断循环；
+    // 检查完成/超时/失败 → 正常显示主窗体；可选更新在显示后弹提示
+    private async Task ShowAfterStartupCheckAsync()
+    {
+        var (result, timedOut) = await WaitStartupCheckAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(true);
+        if (mainForm.IsDisposed)
+        {
+            return;
+        }
+
+        if (!timedOut && result?.Status == UpdateStatus.RequiredUpdate)
+        {
+            // 强制更新：不进入主业务界面；循环内「重新检查」变正常后回到这里继续显示
+            await RunRequiredUpdateLoopAsync(result).ConfigureAwait(true);
+            if (mainForm.IsDisposed)
+            {
+                return;
+            }
+        }
+
+        if (mainForm.Visible)
+        {
+            return;
+        }
+
         mainForm.Show();
-        // 启动后后台静默检查更新：失败不打扰；可选/强制更新按状态提示
-        _ = CheckAndPromptAsync(manual: false);
+
+        if (result is not null && !timedOut)
+        {
+            await HandleUpdateResultAsync(result, manual: false).ConfigureAwait(true);
+        }
+    }
+
+    // 启动更新检查（最多等待 timeout）：网络缓慢/失败按正常启动处理（用户可手动检查）
+    private async Task<(UpdateCheckResult? Result, bool TimedOut)> WaitStartupCheckAsync(TimeSpan timeout)
+    {
+        var checkTask = Task.Run(() => updatesService.CheckForUpdatesAsync(CurrentUpdateChannel, CancellationToken.None));
+        var completed = await Task.WhenAny(checkTask, Task.Delay(timeout)).ConfigureAwait(true);
+        if (completed != checkTask)
+        {
+            // 超时后检查任务仍可能失败：观察异常避免未观察任务异常
+            _ = checkTask.ContinueWith(
+                t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted,
+                TaskScheduler.Default);
+            return (null, true);
+        }
+
+        try
+        {
+            return (checkTask.Result, false);
+        }
+        catch
+        {
+            // 启动检查失败按正常启动处理（不打扰用户，可手动检查）
+            return (null, false);
+        }
     }
 
     // 构建托盘右键菜单：打开主窗口 / 设置 / 检查更新 / 退出
