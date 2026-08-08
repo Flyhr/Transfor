@@ -102,8 +102,9 @@ TestVersionComparer();
 TestUpdatePolicyParsing();
 TestUpdateStatusDecision();
 TestUpdateCheckFailed();
-TestUpdateChannelFilter();
-TestUpdateChannelPersistence();
+    TestUpdateChannelFilter();
+    TestUpdateChannelPersistence();
+    TestUpdateNoticeForm();
 TestUpdateChannelSettingsValidation();
 TestBrowserAddressNormalization();
 TestBrowserProfile();
@@ -2596,6 +2597,68 @@ static void TestUpdateChannelFilter()
 // 测试辅助：构造更新策略
 static UpdatePolicy Policy(string latest, string? minimum = null, bool enabled = true, string? channel = null) =>
     new() { Enabled = enabled, LatestVersion = latest, MinimumVersion = minimum, Channel = channel };
+
+// 测试辅助：版本字符串 → UpdateVersion
+static UpdateVersion? V(string version) => UpdateVersion.TryParse(version, out var parsed) ? parsed : null;
+
+// 更新提示窗体（STA）：根布局挂载、标题/内容/按钮齐全（修复空窗口回归）
+static void TestUpdateNoticeForm()
+{
+    RunSta(() =>
+    {
+        var policy = new UpdatePolicy
+        {
+            Enabled = true,
+            LatestVersion = "1.5.0",
+            MinimumVersion = "1.3.0",
+            Message = "修复若干问题",
+            Changelog = new() { "修复 A", "新增 B" },
+        };
+        var optional = new UpdateCheckResult(UpdateStatus.OptionalUpdate, V("1.4.0"), V("1.5.0"), V("1.3.0"), policy, null);
+
+        using (var form = new UpdateNoticeForm(optional, required: false))
+        {
+            AssertEqual("发现新版本 1.5.0", form.Text, "optional title carries version");
+            AssertEqual(1, form.Controls.Count, "optional form hosts root layout");
+            var root = (TableLayoutPanel)form.Controls[0];
+            AssertEqual(3, root.Controls.Count, "optional root: title/content/buttons");
+            // 内容区：更新内容标签 + 正文（message + changelog）
+            var content = (TableLayoutPanel)root.Controls[1];
+            AssertEqual(2, content.Controls.Count, "content: label + body");
+            var body = (TextBox)content.Controls[1];
+            AssertEqual(true, body.Text.Contains("修复若干问题"), "body shows policy message");
+            AssertEqual(true, body.Text.Contains("• 修复 A"), "body shows changelog bullets");
+            // 按钮：稍后更新 + 立即更新
+            var buttons = (FlowLayoutPanel)root.Controls[2];
+            AssertEqual(2, buttons.Controls.Count, "optional has two buttons");
+        }
+
+        var required = new UpdateCheckResult(UpdateStatus.RequiredUpdate, V("1.2.0"), V("1.5.0"), V("1.5.0"), policy, null);
+        using (var form = new UpdateNoticeForm(required, required: true))
+        {
+            AssertEqual("需要更新", form.Text, "required title");
+            AssertEqual(1, form.Controls.Count, "required form hosts root layout");
+            var root = (TableLayoutPanel)form.Controls[0];
+            AssertEqual(2, root.Controls.Count, "required root: title/buttons");
+            var title = (Label)root.Controls[0];
+            AssertEqual(true, title.Text.Contains("当前版本已停止支持"), "required title states unsupported");
+            AssertEqual(true, title.Text.Contains("当前版本：1.2.0"), "required title shows current version");
+            AssertEqual(true, title.Text.Contains("最新版本：1.5.0"), "required title shows latest version");
+            var buttons = (FlowLayoutPanel)root.Controls[1];
+            AssertEqual(3, buttons.Controls.Count, "required has three buttons");
+        }
+
+        // 无策略：可选更新内容区显示占位文案
+        var empty = new UpdateCheckResult(UpdateStatus.OptionalUpdate, V("1.4.0"), V("1.5.0"), null, null, null);
+        using (var form = new UpdateNoticeForm(empty, required: false))
+        {
+            var root = (TableLayoutPanel)form.Controls[0];
+            var content = (TableLayoutPanel)root.Controls[1];
+            var body = (TextBox)content.Controls[1];
+            AssertEqual("暂无更新说明。", body.Text, "empty policy shows placeholder");
+        }
+    });
+}
 
 // Phase 2：更新通道设置持久化（旧配置文件无通道字段 → 默认 Stable）
 static void TestUpdateChannelPersistence()

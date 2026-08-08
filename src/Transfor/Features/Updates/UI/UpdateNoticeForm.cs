@@ -1,7 +1,8 @@
 namespace Transfor;
 
-// 更新提示窗体：可选更新（稍后更新/立即更新）与强制更新（重新检查/立即更新/退出）；
-// Phase 1 无安装能力，「立即更新」由调用方打开下载地址；Phase 2 接入 Velopack 后替换为真实安装
+// 更新提示窗体：可选更新（发现新版本 + 更新内容 + 稍后/立即）
+// 与强制更新（停止支持说明 + 版本信息 + 重新检查/立即/退出）；
+// Phase 2 接入 Velopack：「立即更新」由调用方执行真实下载安装
 internal sealed class UpdateNoticeForm : Form
 {
     public enum UserAction
@@ -14,11 +15,11 @@ internal sealed class UpdateNoticeForm : Form
 
     private readonly bool required;
 
-    private UpdateNoticeForm(UpdateCheckResult result, bool required)
+    internal UpdateNoticeForm(UpdateCheckResult result, bool required)
     {
         this.required = required;
 
-        Text = required ? "需要更新" : "发现新版本";
+        Text = required ? "需要更新" : $"发现新版本 {result.LatestVersion}";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -27,12 +28,13 @@ internal sealed class UpdateNoticeForm : Form
         ClientSize = new Size(480, 320);
         Font = new Font("Microsoft YaHei UI", 10F);
 
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 1, RowCount = 3 };
+        // 根布局：标题 /（可选）更新内容 / 按钮行
+        var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 1 };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
 
-        // 标题：可选更新一行；强制更新两行（当前/最新版本）
+        // 标题区（加粗）：普通显示最新版本；强制显示停止支持说明与当前/最新版本
         var title = new Label
         {
             Dock = DockStyle.Fill,
@@ -45,50 +47,73 @@ internal sealed class UpdateNoticeForm : Form
         };
         root.Controls.Add(title, 0, 0);
 
-        // 更新内容：发布说明 + 变更列表
-        var bodyParts = new List<string>();
-        if (!string.IsNullOrWhiteSpace(result.Policy?.Message))
+        if (required)
         {
-            bodyParts.Add(result.Policy.Message);
+            // 强制更新：无内容区（标题 + 按钮两行）
+            root.RowCount = 2;
+            root.RowStyles.RemoveAt(1);
+        }
+        else
+        {
+            // 可选更新：更新内容（发布说明 + 变更列表）
+            var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+            content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            content.Controls.Add(new Label
+            {
+                Dock = DockStyle.Fill,
+                Text = "更新内容：",
+                Padding = new Padding(0, 0, 0, 4),
+            }, 0, 0);
+
+            var bodyParts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(result.Policy?.Message))
+            {
+                bodyParts.Add(result.Policy.Message);
+            }
+
+            if (result.Policy?.Changelog is { Count: > 0 })
+            {
+                bodyParts.Add(string.Join(Environment.NewLine, result.Policy.Changelog.Take(8).Select(line => $"• {line}")));
+            }
+
+            content.Controls.Add(new TextBox
+            {
+                Dock = DockStyle.Fill,
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                BorderStyle = BorderStyle.FixedSingle,
+                Text = bodyParts.Count > 0 ? string.Join(Environment.NewLine + Environment.NewLine, bodyParts) : "暂无更新说明。",
+            }, 0, 1);
+            root.Controls.Add(content, 0, 1);
         }
 
-        if (result.Policy?.Changelog is { Count: > 0 })
-        {
-            bodyParts.Add(string.Join(Environment.NewLine, result.Policy.Changelog.Take(8).Select(line => $"• {line}")));
-        }
-
-        var body = new TextBox
-        {
-            Dock = DockStyle.Fill,
-            Multiline = true,
-            ReadOnly = true,
-            ScrollBars = ScrollBars.Vertical,
-            BorderStyle = BorderStyle.FixedSingle,
-            Text = bodyParts.Count > 0 ? string.Join(Environment.NewLine + Environment.NewLine, bodyParts) : "暂无更新说明。",
-        };
-        root.Controls.Add(body, 0, 1);
-
-        // 按钮行：可选 = 稍后/立即；强制 = 重新检查/立即/退出
+        // 按钮行（RightToLeft 布局，第一个添加的控件在最右）：
+        // 普通 = [稍后更新][立即更新]；强制 = [重新检查][立即更新][退出]（左→右显示）
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft };
         Button? laterButton = null;
         Button? exitButton = null;
         var updateNowButton = new Button { Text = "立即更新", AutoSize = true, DialogResult = DialogResult.OK };
-        buttons.Controls.Add(updateNowButton);
-
         if (required)
         {
             exitButton = new Button { Text = "退出", AutoSize = true, DialogResult = DialogResult.Abort };
-            buttons.Controls.Add(exitButton);
             var recheckButton = new Button { Text = "重新检查", AutoSize = true, DialogResult = DialogResult.Retry };
+            buttons.Controls.Add(exitButton);
+            buttons.Controls.Add(updateNowButton);
             buttons.Controls.Add(recheckButton);
         }
         else
         {
             laterButton = new Button { Text = "稍后更新", AutoSize = true, DialogResult = DialogResult.No };
+            buttons.Controls.Add(updateNowButton);
             buttons.Controls.Add(laterButton);
         }
 
-        root.Controls.Add(buttons, 0, 2);
+        root.Controls.Add(buttons, 0, required ? 1 : 2);
+
+        // 根布局挂载到窗体（此前缺失导致窗口内容为空）
+        Controls.Add(root);
 
         AcceptButton = updateNowButton;
         CancelButton = laterButton ?? exitButton;
