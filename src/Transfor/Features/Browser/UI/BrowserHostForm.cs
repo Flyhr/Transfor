@@ -77,28 +77,53 @@ internal sealed class BrowserHostForm : Form
             using var cdpCapture = new CdpNetworkCaptureService(core);
             await cdpCapture.EnableAsync().ConfigureAwait(true);
 
-            var navigationTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+            // 导航带重试：ConnectionReset / 网络波动 / 抖音风控等瞬态错误可经重试恢复；
+            // 快速失败毫秒级返回，重试开销小；超时慢导航罕见
+            const int MaxNavigationAttempts = 3;
+            Exception? navigationError = null;
+            for (var attempt = 1; attempt <= MaxNavigationAttempts; attempt++)
             {
-                // 只认成功导航；失败（DNS/HTTP/证书等）立即抛给等待方，避免死等超时或抓空数据
-                if (e.IsSuccess)
+                cancellationToken.ThrowIfCancellationRequested();
+                var navigationTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
                 {
-                    navigationTcs.TrySetResult();
+                    // 只认成功导航；失败（DNS/HTTP/证书/连接重置等）交给重试逻辑
+                    if (e.IsSuccess)
+                    {
+                        navigationTcs.TrySetResult();
+                    }
+                    else
+                    {
+                        navigationTcs.TrySetException(new InvalidOperationException($"页面导航失败：{e.WebErrorStatus}"));
+                    }
                 }
-                else
+
+                core.NavigationCompleted += OnNavigationCompleted;
+                try
                 {
-                    navigationTcs.TrySetException(new InvalidOperationException($"页面导航失败：{e.WebErrorStatus}"));
+                    core.Navigate(pageUri.ToString());
+                    await navigationTcs.Task.WaitAsync(TimeSpan.FromSeconds(45), cancellationToken).ConfigureAwait(true);
+                    navigationError = null;
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    navigationError = ex;
+                    if (attempt < MaxNavigationAttempts)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(1.5), cancellationToken).ConfigureAwait(true);
+                    }
+                }
+                finally
+                {
+                    core.NavigationCompleted -= OnNavigationCompleted;
                 }
             }
-            core.NavigationCompleted += OnNavigationCompleted;
-            try
+
+            if (navigationError is not null)
             {
-                core.Navigate(pageUri.ToString());
-                await navigationTcs.Task.WaitAsync(TimeSpan.FromSeconds(45), cancellationToken).ConfigureAwait(true);
-            }
-            finally
-            {
-                core.NavigationCompleted -= OnNavigationCompleted;
+                throw new InvalidOperationException(
+                    $"{navigationError.Message}（已重试 {MaxNavigationAttempts} 次），可能是网络波动或抖音风控，请稍后重试。");
             }
 
             // CDP：登录态详情接口响应体（完整作品数据，优先于页面脚本）
