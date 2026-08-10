@@ -274,7 +274,10 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
         try
         {
-            // 主窗体仍存活：释放服务并关闭浏览器
+            // 先关闭新界面宿主（WebView2 进程随窗体释放），再释放服务
+            appShell?.Close();
+            appShell = null;
+            // 释放全部服务：媒体先取消下载，浏览器宿主最后释放
             await services.DisposeAsync();
             historyPanel.CloseForExit();
             mainForm.CloseForExit();

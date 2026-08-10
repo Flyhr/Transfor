@@ -24,19 +24,21 @@ internal sealed class AppServices : IDisposable, IAsyncDisposable
     // 媒体模块服务组合
     public required MediaServices Media { get; init; }
 
-    // 退出时释放全局热键、浏览器与媒体服务（下载取消、浏览器会话、HttpClient）
+    // 退出释放顺序（计划要求）：
+    // 热键 → 媒体（取消并等待下载 → 协调器/浏览器会话 → HttpClient）→ 浏览器服务；
+    // 浏览器服务（WebView2 隐藏宿主）必须最后释放——下载任务仍在使用它
     public void Dispose()
     {
         HotKeys.Dispose();
-        Browser.Dispose();
         Media.Dispose();
+        Browser.Dispose();
     }
 
-    // 异步退出：媒体服务先取消下载并等待落定，再释放浏览器会话与 HttpClient
+    // 异步退出：媒体服务先取消下载并等待落定，再释放浏览器会话与 HttpClient，最后释放浏览器服务
     public async ValueTask DisposeAsync()
     {
         HotKeys.Dispose();
-        Browser.Dispose();
         await Media.DisposeAsync();
+        Browser.Dispose();
     }
 }
