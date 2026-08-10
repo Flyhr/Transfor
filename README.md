@@ -34,6 +34,15 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - 初始化失败（如 WebView2 Runtime 缺失）时页面显示明确提示，不影响应用其他功能
 - 依赖系统 Edge WebView2 Runtime（Windows 11 内置；Windows 10 随 Edge 浏览器更新）
 
+### 新界面（Phase 5 预览）
+
+- 托盘菜单「新界面（预览）」打开现代化界面宿主：WinForms Host + WebView2 + 本地 HTML/CSS/JS
+- 左侧边栏导航（首页/媒体下载/浏览器/历史/设置）+ 页面容器；Design System 基础组件（按钮/输入/卡片/对话框/Toast/进度条/侧边栏）
+- 主题：跟随系统/浅色/深色（统一 CSS 变量，`prefers-color-scheme` 跟随）
+- App Bridge：JSON 消息协议（`getAppInfo`/`getSettings`/`saveSettings`/`checkUpdate` 已接入真实服务）
+- **安全隔离**：AppWebView 使用独立 Profile（`Browser\AppUi`，与互联网浏览器 `Browser\UserData` 严格分离）、禁止外部导航与新窗口，仅经 Bridge 协议访问应用服务
+- 现有 WinForms 主界面完整保留；业务页面逐页迁移为 Phase 6
+
 ### 应用更新
 
 - 版本号统一来源于项目配置（SemVer，当前 `0.9.0` 开发版），启动后与托盘菜单均可检查更新
@@ -92,6 +101,11 @@ src/Transfor/
 │       ├── Contracts/                       # IBrowserService（环境/Profile 生命周期门面）
 │       ├── Services/                        # BrowserService（共享环境 + UI 线程调度）/ BrowserProfileService / BrowserNavigationService / BrowserCookieService
 │       └── UI/                              # BrowserView（浏览器功能页）/ BrowserHostForm（解析+下载隐藏宿主）
+│   └── ModernUi/                            # 新界面（Phase 5 预览）：Web UI + App Bridge
+│       ├── AppShellForm.cs                  # WinForms 宿主窗体（AppWebView，独立 Profile + 导航拦截）
+│       ├── WebUiResources.cs                # 嵌入资源读取（index.html）
+│       ├── Bridge/                          # AppBridge（方法分发）/ AppBridgeProtocol（JSON 消息协议）
+│       └── webui/index.html                 # 单文件 UI：Design System + 侧边栏 + 主题 + Bridge JS
 │   └── MediaDownload/                       # 媒体下载：契约、模型、协调器、服务、解析器与 UI
 │       ├── Contracts/                       # IMediaResolver / IMediaDownloadService / IBrowserSessionAccessor / 浏览器捕获模型
 │       ├── Models/                          # MediaAsset / MediaVariant / ResolvedMediaPost / 下载批次/设置/历史等

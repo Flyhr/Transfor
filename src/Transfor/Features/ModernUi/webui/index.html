@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transfor</title>
+<style>
+/* ===== Design System（Phase 5C/5D）：Windows 11 + Fluent，统一主题变量 ===== */
+:root {
+  --font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  --radius-sm: 4px; --radius-md: 8px; --radius-lg: 12px;
+  --spacing-1: 4px; --spacing-2: 8px; --spacing-3: 12px; --spacing-4: 16px; --spacing-5: 24px;
+  --shadow-card: 0 2px 8px rgba(0,0,0,.08);
+  --transition: 150ms ease;
+}
+:root[data-theme="light"], :root[data-theme="system"] {
+  color-scheme: light;
+  --bg: #f3f3f3; --bg-surface: #ffffff; --bg-sidebar: #f9f9f9;
+  --text: #1b1b1b; --text-secondary: #6e6e6e;
+  --border: #e5e5e5;
+  --accent: #0067c0; --accent-hover: #0078d4; --accent-text: #ffffff;
+  --danger: #c42b1c;
+  --hover: rgba(0,0,0,.05);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #202020; --bg-surface: #2b2b2b; --bg-sidebar: #262626;
+  --text: #f3f3f3; --text-secondary: #9d9d9d;
+  --border: #3d3d3d;
+  --accent: #4cc2ff; --accent-hover: #6fd0ff; --accent-text: #0a0a0a;
+  --danger: #ff99a4;
+  --hover: rgba(255,255,255,.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] { color-scheme: dark;
+    --bg: #202020; --bg-surface: #2b2b2b; --bg-sidebar: #262626;
+    --text: #f3f3f3; --text-secondary: #9d9d9d;
+    --border: #3d3d3d; --accent: #4cc2ff; --accent-hover: #6fd0ff; --accent-text: #0a0a0a;
+    --danger: #ff99a4; --hover: rgba(255,255,255,.06); }
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--font-family); font-size: 14px;
+  background: var(--bg); color: var(--text);
+  display: flex; overflow: hidden; transition: background var(--transition), color var(--transition);
+}
+
+/* ===== 侧边栏 ===== */
+.sidebar {
+  width: 200px; flex-shrink: 0; background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: var(--spacing-3);
+}
+.sidebar-brand { font-size: 16px; font-weight: 600; padding: var(--spacing-3) var(--spacing-2) var(--spacing-4); }
+.nav-item {
+  display: flex; align-items: center; gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-3); border-radius: var(--radius-sm);
+  cursor: pointer; color: var(--text); border: none; background: transparent;
+  font-size: 14px; text-align: left; transition: background var(--transition);
+}
+.nav-item:hover { background: var(--hover); }
+.nav-item.active { background: var(--hover); font-weight: 600; }
+.sidebar-footer { margin-top: auto; padding: var(--spacing-3) var(--spacing-2); font-size: 12px; color: var(--text-secondary); }
+
+/* ===== 内容区 ===== */
+.content { flex: 1; overflow-y: auto; padding: var(--spacing-5); }
+.page { display: none; max-width: 860px; }
+.page.active { display: block; }
+.page h1 { font-size: 22px; font-weight: 600; margin-bottom: var(--spacing-2); }
+.page .placeholder { color: var(--text-secondary); margin-bottom: var(--spacing-5); }
+
+/* ===== 组件 ===== */
+.card {
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius-md); box-shadow: var(--shadow-card);
+  padding: var(--spacing-4); margin-bottom: var(--spacing-4);
+}
+.card h3 { font-size: 15px; margin-bottom: var(--spacing-3); }
+.btn {
+  font-family: inherit; font-size: 14px; padding: 6px 14px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+  background: var(--bg-surface); color: var(--text); cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+.btn:hover { background: var(--hover); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.input {
+  font-family: inherit; font-size: 14px; padding: 6px 10px;
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+  background: var(--bg-surface); color: var(--text); outline: none;
+}
+.input:focus { border-color: var(--accent); }
+.progress { width: 100%; height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.progress > div { height: 100%; background: var(--accent); border-radius: 3px; transition: width var(--transition); }
+.row { display: flex; align-items: center; gap: var(--spacing-3); margin-bottom: var(--spacing-3); }
+.row .label { width: 110px; color: var(--text-secondary); }
+
+/* ===== Toast ===== */
+.toast-container { position: fixed; right: 16px; top: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 1000; }
+.toast {
+  background: var(--bg-surface); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm); padding: 10px 14px; min-width: 200px; box-shadow: var(--shadow-card);
+  animation: toast-in 200ms ease;
+}
+.toast.error { border-left-color: var(--danger); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+
+/* ===== 对话框 ===== */
+.dialog-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none;
+  align-items: center; justify-content: center; z-index: 999;
+}
+.dialog-backdrop.open { display: flex; }
+.dialog {
+  background: var(--bg-surface); border-radius: var(--radius-lg);
+  padding: var(--spacing-5); min-width: 360px; box-shadow: var(--shadow-card);
+}
+.dialog h3 { margin-bottom: var(--spacing-3); }
+.dialog .dialog-actions { display: flex; justify-content: flex-end; gap: var(--spacing-2); margin-top: var(--spacing-4); }
+</style>
+</head>
+<body>
+
+<div class="sidebar">
+  <div class="sidebar-brand">Transfor</div>
+  <button class="nav-item active" data-page="home">首页</button>
+  <button class="nav-item" data-page="media">媒体下载</button>
+  <button class="nav-item" data-page="browser">浏览器</button>
+  <button class="nav-item" data-page="history">历史</button>
+  <button class="nav-item" data-page="settings">设置</button>
+  <div class="sidebar-footer">
+    <div id="app-version">版本 …</div>
+    <div style="margin-top:6px">
+      <button class="btn" id="theme-toggle" title="切换主题" style="font-size:12px;padding:3px 10px">主题：跟随系统</button>
+    </div>
+  </div>
+</div>
+
+<div class="content">
+  <section class="page active" id="page-home">
+    <h1>首页</h1>
+    <p class="placeholder">快捷操作、最近记录、版本与更新状态（Phase 6 迁移）。</p>
+    <div class="card">
+      <h3>设计系统组件预览（Phase 5 验收）</h3>
+      <div class="row"><span class="label">按钮</span>
+        <button class="btn" id="demo-toast">普通按钮</button>
+        <button class="btn btn-primary" id="demo-dialog">主按钮</button>
+        <button class="btn" id="demo-progress">进度演示</button>
+      </div>
+      <div class="row"><span class="label">输入框</span><input class="input" placeholder="输入框演示" style="flex:1"></div>
+      <div class="row"><span class="label">进度条</span>
+        <div class="progress" style="flex:1"><div id="demo-progress-bar" style="width:35%"></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" id="page-media"><h1>媒体下载</h1><p class="placeholder">粘贴链接解析与下载（Phase 6.2 迁移）。</p></section>
+  <section class="page" id="page-browser"><h1>浏览器</h1><p class="placeholder">内置浏览器（Phase 6.5 迁移）。</p></section>
+  <section class="page" id="page-history"><h1>历史</h1><p class="placeholder">文本/媒体/下载历史（Phase 6.4 迁移）。</p></section>
+
+  <section class="page" id="page-settings">
+    <h1>设置</h1>
+    <p class="placeholder">常规/下载/浏览器/更新/外观/快捷键（Phase 6.6 迁移）。</p>
+    <div class="card">
+      <h3>更新通道（经 App Bridge 读写真实设置）</h3>
+      <div class="row">
+        <span class="label">更新通道</span>
+        <select class="input" id="setting-channel" style="padding:5px">
+          <option value="stable">Stable 稳定版</option>
+          <option value="beta">Beta 测试版</option>
+        </select>
+      </div>
+      <div class="row">
+        <button class="btn btn-primary" id="setting-save">保存设置</button>
+        <button class="btn" id="setting-check-update">检查更新</button>
+        <span id="setting-result" style="color:var(--text-secondary)"></span>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+<div class="dialog-backdrop" id="dialog-backdrop">
+  <div class="dialog">
+    <h3>演示对话框</h3>
+    <p>对话框组件（Design System 之一）。</p>
+    <div class="dialog-actions">
+      <button class="btn" id="dialog-cancel">取消</button>
+      <button class="btn btn-primary" id="dialog-ok">确定</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ===== App Bridge（Phase 5B）：JSON 消息协议 ===== */
+const Bridge = (() => {
+  let nextId = 1;
+  const pending = new Map();
+  const webview = window.chrome.webview;
+
+  function invoke(method, params = {}) {
+    return new Promise((resolve, reject) => {
+      const id = nextId++;
+      pending.set(id, { resolve, reject });
+      webview.postMessage(JSON.stringify({ id, method, params }));
+      setTimeout(() => { if (pending.delete(id)) reject(new Error("调用超时")); }, 15000);
+    });
+  }
+
+  webview.addEventListener("message", (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.id !== undefined && msg.id !== null) {
+      const entry = pending.get(msg.id);
+      if (!entry) return;
+      pending.delete(msg.id);
+      if (msg.error !== undefined && msg.error !== null) entry.reject(new Error(msg.error));
+      else entry.resolve(msg.result);
+    }
+  });
+
+  return { invoke };
+})();
+
+/* ===== 主题（Phase 5D）：跟随系统 + 手动切换 ===== */
+const THEMES = ["system", "light", "dark"];
+const THEME_LABELS = { system: "跟随系统", light: "浅色", dark: "深色" };
+let currentTheme = "system";
+const themeToggle = document.getElementById("theme-toggle");
+function applyTheme(theme) {
+  currentTheme = theme;
+  document.documentElement.dataset.theme = theme;
+  themeToggle.textContent = "主题：" + THEME_LABELS[theme];
+}
+themeToggle.addEventListener("click", () => {
+  applyTheme(THEMES[(THEMES.indexOf(currentTheme) + 1) % THEMES.length]);
+});
+
+/* ===== 导航 ===== */
+document.querySelectorAll(".nav-item").forEach((item) => {
+  item.addEventListener("click", () => {
+    document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
+    document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
+    item.classList.add("active");
+    document.getElementById("page-" + item.dataset.page).classList.add("active");
+  });
+});
+
+/* ===== Toast ===== */
+function toast(message, type = "") {
+  const el = document.createElement("div");
+  el.className = "toast " + type;
+  el.textContent = message;
+  document.getElementById("toast-container").appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+/* ===== 对话框 ===== */
+const backdrop = document.getElementById("dialog-backdrop");
+document.getElementById("demo-dialog").addEventListener("click", () => backdrop.classList.add("open"));
+document.getElementById("dialog-cancel").addEventListener("click", () => backdrop.classList.remove("open"));
+document.getElementById("dialog-ok").addEventListener("click", () => { backdrop.classList.remove("open"); toast("已确定"); });
+
+/* ===== 演示 ===== */
+document.getElementById("demo-toast").addEventListener("click", () => toast("Toast 组件演示"));
+let progressValue = 35;
+document.getElementById("demo-progress").addEventListener("click", () => {
+  progressValue = progressValue >= 100 ? 0 : progressValue + 15;
+  document.getElementById("demo-progress-bar").style.width = progressValue + "%";
+  if (progressValue >= 100) toast("进度完成");
+});
+
+/* ===== 设置页（真实 Bridge 调用） ===== */
+const channelSelect = document.getElementById("setting-channel");
+const settingResult = document.getElementById("setting-result");
+
+document.getElementById("setting-save").addEventListener("click", async () => {
+  try {
+    const settings = await Bridge.invoke("saveSettings", { updateChannel: channelSelect.value });
+    channelSelect.value = settings.updateChannel;
+    toast("设置已保存");
+  } catch (e) { toast(e.message, "error"); }
+});
+
+document.getElementById("setting-check-update").addEventListener("click", async () => {
+  settingResult.textContent = "检查中…";
+  try {
+    const info = await Bridge.invoke("checkUpdate");
+    const labels = { upToDate: "已是最新版本", optionalUpdate: "发现新版本", requiredUpdate: "需要强制更新", checkFailed: "检查失败", disabled: "更新已禁用" };
+    settingResult.textContent = labels[info.status] || info.status;
+  } catch (e) { settingResult.textContent = "检查失败：" + e.message; }
+});
+
+/* ===== 初始化 ===== */
+(async () => {
+  try {
+    const info = await Bridge.invoke("getAppInfo");
+    document.getElementById("app-version").textContent = "Transfor v" + info.version + " · " + (info.channel === "beta" ? "Beta" : "Stable");
+    const settings = await Bridge.invoke("getSettings");
+    channelSelect.value = settings.updateChannel;
+  } catch (e) {
+    document.getElementById("app-version").textContent = "Bridge 不可用：" + e.message;
+  }
+})();
+</script>
+</body>
+</html>

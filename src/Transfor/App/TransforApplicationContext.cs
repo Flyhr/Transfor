@@ -20,6 +20,9 @@ internal sealed class TransforApplicationContext : ApplicationContext
     // 更新检查进行中（防止托盘多次触发并发检查）
     private bool updateCheckRunning;
 
+    // 新界面宿主（Phase 5 预览）：首次打开创建，关闭后仍可再次打开
+    private AppShellForm? appShell;
+
     public TransforApplicationContext(AppServices services)
     {
         this.services = services;
@@ -147,11 +150,12 @@ internal sealed class TransforApplicationContext : ApplicationContext
         }
     }
 
-    // 构建托盘右键菜单：打开主窗口 / 设置 / 检查更新 / 退出
+    // 构建托盘右键菜单：打开主窗口 / 新界面（预览）/ 设置 / 检查更新 / 退出
     private ContextMenuStrip CreateTrayMenu()
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add("打开主窗口", null, (_, _) => ShowMainWindow());
+        menu.Items.Add("新界面（预览）", null, (_, _) => ShowAppShell());
         menu.Items.Add("设置", null, (_, _) => ShowSettings());
         menu.Items.Add("检查更新", null, (_, _) => _ = CheckAndPromptAsync(manual: true));
         menu.Items.Add(new ToolStripSeparator());
@@ -219,6 +223,20 @@ internal sealed class TransforApplicationContext : ApplicationContext
     {
         using var settings = new SettingsForm(historyStore, hotKeyManager, services.Browser);
         settings.ShowDialog(mainForm.Visible ? mainForm : null);
+    }
+
+    // 打开新界面宿主（Phase 5 预览）：Web UI + App Bridge；独立 Profile 与互联网浏览器隔离
+    private void ShowAppShell()
+    {
+        if (appShell is null || appShell.IsDisposed)
+        {
+            appShell = new AppShellForm(
+                new AppBridge(historyStore, updatesService),
+                AppPaths.Default.AppUiProfileDirectory);
+        }
+
+        appShell.Show();
+        appShell.Activate();
     }
 
     // 呼出历史面板：记录当前前台窗口句柄，作为稍后粘贴的目标

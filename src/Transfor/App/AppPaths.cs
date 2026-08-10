@@ -38,6 +38,9 @@ internal sealed class AppPaths
     // WebView2 浏览器独立 Profile 目录（Cookie/LocalStorage/缓存/登录状态持久化，Task 3.3）
     public string BrowserProfileDirectory => Path.Combine(ApplicationDirectory, "Browser", "UserData");
 
+    // 新 UI（Phase 5）AppWebView 独立 Profile 目录（与互联网浏览器 Profile 严格隔离）
+    public string AppUiProfileDirectory => Path.Combine(ApplicationDirectory, "Browser", "AppUi");
+
     // 媒体本地缓存目录（解析阶段预取的图片响应，按 URL 哈希命名）
     public string MediaCacheDirectory => Path.Combine(ApplicationDirectory, "MediaCache");
 
