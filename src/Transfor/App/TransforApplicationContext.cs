@@ -88,6 +88,8 @@ internal sealed class TransforApplicationContext : ApplicationContext
         // 主窗体延迟显示：先完成启动更新检查——
         // 强制更新时不进入主业务界面，直接进入阻断更新循环；其余情况正常显示
         _ = ShowAfterStartupCheckAsync();
+        // 新界面为当前主界面：启动即打开（主窗体保留作托盘/热键载体与旧界面入口）
+        ShowAppShell();
     }
 
     // 启动流程：后台检查更新（最多等待 timeout）；强制更新 → 不显示主窗体直接进入阻断循环；

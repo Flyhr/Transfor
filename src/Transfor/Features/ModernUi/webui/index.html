@@ -430,6 +430,7 @@ function renderPost(post) {
   document.getElementById("media-title").textContent = post.title || "未命名作品";
   document.getElementById("media-author").textContent = post.authorName ? "作者：" + post.authorName : "";
   mediaGrid.innerHTML = "";
+  const previewLoaders = [];
   post.assets.forEach((asset) => {
     const card = document.createElement("div");
     card.className = "card";
@@ -437,16 +438,11 @@ function renderPost(post) {
     const thumb = document.createElement("div");
     thumb.style.cssText = "height:110px;background:var(--hover);border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:12px;overflow:hidden";
     const canPreview = asset.kind === "image" && asset.status === "Selected";
-    thumb.textContent = canPreview ? "点击预览" : (asset.status !== "Selected" ? (asset.message || "不可下载") : (asset.kind === "video" ? "视频" : "图片"));
+    thumb.textContent = canPreview ? "加载预览…" : (asset.status !== "Selected" ? (asset.message || "不可下载") : (asset.kind === "video" ? "视频" : "图片"));
     if (canPreview) {
       thumb.style.cursor = "pointer";
-      thumb.addEventListener("click", async () => {
-        thumb.textContent = "加载中…";
-        try {
-          const { dataUrl } = await Bridge.invoke("getPreview", { assetIndex: asset.index }, 120000);
-          thumb.innerHTML = `<img src="${dataUrl}" style="width:100%;height:100%;object-fit:contain">`;
-        } catch (e) { thumb.textContent = "预览失败"; }
-      });
+      thumb.addEventListener("click", () => loadPreview(thumb, asset.index));
+      previewLoaders.push({ thumb, assetIndex: asset.index });
     }
     const info = document.createElement("div");
     info.style.cssText = "display:flex;flex-direction:column;gap:2px;font-size:12px";
@@ -466,6 +462,37 @@ function renderPost(post) {
     mediaGrid.appendChild(card);
   });
   mediaPost.style.display = "block";
+
+  // 全选控件与卡片勾选状态同步（可选媒体默认全勾选）
+  const selectAll = document.getElementById("media-select-all");
+  const boxes = mediaGrid.querySelectorAll("input[type=checkbox]");
+  selectAll.checked = boxes.length > 0 && [...boxes].every((cb) => cb.checked || cb.disabled);
+
+  // 图片预览默认自动加载（节流：每次并发 2 个，避免多图作品瞬间大 JSON 传输）
+  loadPreviewsSequential(previewLoaders);
+}
+
+async function loadPreviewsSequential(loaders) {
+  const concurrency = 2;
+  let index = 0;
+  const workers = Array.from({ length: Math.min(concurrency, loaders.length) }, async () => {
+    while (index < loaders.length) {
+      const item = loaders[index++];
+      await loadPreview(item.thumb, item.assetIndex);
+    }
+  });
+  await Promise.all(workers);
+}
+
+async function loadPreview(thumb, assetIndex) {
+  if (thumb.dataset.loaded) return;
+  thumb.dataset.loaded = "1";
+  thumb.textContent = "加载中…";
+  try {
+    const { dataUrl } = await Bridge.invoke("getPreview", { assetIndex }, 120000);
+    thumb.innerHTML = `<img src="${dataUrl}" style="width:100%;height:100%;object-fit:contain">`;
+    thumb.style.cursor = "default";
+  } catch (e) { thumb.textContent = "预览失败"; }
 }
 
 document.getElementById("media-select-all").addEventListener("change", (e) => {

@@ -76,12 +76,22 @@ internal sealed class AppShellForm : Form
             core.WebMessageReceived += OnWebMessageReceived;
             core.Navigate("https://appassets.transfor/index.html");
 
-            // 事件推送：下载协调器事件 → UI 线程 → PostWebMessageAsJson；
+            // 事件推送：下载协调器事件 → UI 线程 → 经 ExecuteScriptAsync 注入
+            // window.__bridgeDeliver（与请求响应同一条可靠通道；postMessage 事件不可达）；
             // 随窗体生命周期挂接/摘除
             events = new AppBridgeEvents(
                 downloadCoordinator,
                 webView,
-                json => webView.CoreWebView2?.PostWebMessageAsJson(json));
+                json =>
+                {
+                    if (webView.CoreWebView2 is { } eventCore)
+                    {
+                        var eventScript = $"window.__bridgeDeliver({System.Text.Json.JsonSerializer.Serialize(json)})";
+                        // 事件注入失败（页面销毁等）静默忽略，不影响下载批次
+                        _ = eventCore.ExecuteScriptAsync(eventScript)
+                            .ContinueWith(task => _ = task.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                    }
+                });
         }
         catch (Exception ex)
         {
