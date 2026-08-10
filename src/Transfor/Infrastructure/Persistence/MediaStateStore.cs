@@ -116,6 +116,51 @@ internal sealed class MediaStateStore : IMediaDownloadHistoryRepository
         }
     }
 
+    // 清空全部批次历史并立即落盘；写入失败时恢复原历史
+    public void ClearHistory()
+    {
+        lock (sync)
+        {
+            var snapshot = history.ToArray();
+            history.Clear();
+            try
+            {
+                SaveHistoryCore();
+            }
+            catch
+            {
+                history.Clear();
+                history.AddRange(snapshot);
+                throw;
+            }
+        }
+    }
+
+    // 删除指定索引的批次历史并立即落盘；索引越界抛异常；写入失败恢复原历史
+    public void RemoveAt(int index)
+    {
+        lock (sync)
+        {
+            if (index < 0 || index >= history.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(index), "历史索引越界。");
+            }
+
+            var snapshot = history.ToArray();
+            history.RemoveAt(index);
+            try
+            {
+                SaveHistoryCore();
+            }
+            catch
+            {
+                history.Clear();
+                history.AddRange(snapshot);
+                throw;
+            }
+        }
+    }
+
     private static bool TryValidate(MediaDownloadSettings settings)
     {
         try

@@ -73,6 +73,7 @@ internal sealed class MediaDownloadCoordinator : IDisposable
                 {
                     BatchId = batch.Id,
                     Task = task,
+                    Post = batch.Post,
                     SourceShareLink = batch.SourceShareLink,
                     AssetIndex = i,
                 };
@@ -183,6 +184,33 @@ internal sealed class MediaDownloadCoordinator : IDisposable
             {
                 // 批次因取消而结束属于预期
             }
+        }
+    }
+
+    // 构造进程内重试候选：复用原任务 Asset/Variant（CDN URL 可能仍有效）与作品上下文，
+    // 按统一文件名规则生成新目标路径；仅活动批次内有效——
+    // 运行时随批次落定清理，落定后返回 null（调用方引导走历史重新执行）
+    public RetryCandidate? CreateRetryTask(Guid taskId, string downloadDirectory)
+    {
+        lock (sync)
+        {
+            if (!taskRuntimes.TryGetValue(taskId, out var runtime))
+            {
+                return null;
+            }
+
+            // 仅失败/取消可重试（成功任务与进行中任务不可）
+            if (runtime.Result is null || runtime.Result.Status == MediaDownloadStatus.Succeeded)
+            {
+                return null;
+            }
+
+            var asset = runtime.Task.Asset;
+            var variant = runtime.Task.SelectedVariant;
+            var fileName = DownloadFileNameBuilder.BuildFileName(runtime.Post, asset, variant);
+            var target = DownloadFileNameBuilder.BuildUniquePath(downloadDirectory, fileName);
+            var retryTask = new MediaDownloadTask(Guid.NewGuid(), asset, variant, target);
+            return new RetryCandidate(runtime.SourceShareLink, runtime.Post, retryTask);
         }
     }
 
@@ -389,6 +417,7 @@ internal sealed class MediaDownloadCoordinator : IDisposable
     {
         public required Guid BatchId { get; init; }
         public required MediaDownloadTask Task { get; init; }
+        public required ResolvedMediaPost Post { get; init; }
         public required string SourceShareLink { get; init; }
         public required int AssetIndex { get; init; }
         public DownloadPhase Phase;
@@ -397,3 +426,9 @@ internal sealed class MediaDownloadCoordinator : IDisposable
         public MediaDownloadResult? Result;
     }
 }
+
+// 进程内重试候选：原作品上下文 + 新构造的下载任务（复用 Asset/Variant）
+internal sealed record RetryCandidate(
+    string SourceShareLink,
+    ResolvedMediaPost Post,
+    MediaDownloadTask Task);

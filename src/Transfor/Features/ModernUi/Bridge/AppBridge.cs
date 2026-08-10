@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Transfor;
 
 // App Bridge（Phase 5B + Phase 6）：处理 Web UI 发来的 JSON 消息并调用应用服务；
@@ -58,6 +60,15 @@ internal sealed class AppBridge
                 "resolveMedia" => await ResolveMediaAsync(request).ConfigureAwait(false),
                 "getPreview" => await GetPreviewAsync(request).ConfigureAwait(false),
                 "downloadSelected" => AppBridgeProtocol.CreateSuccessResponse(request.Id, DownloadSelected(request)),
+                "getDownloads" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetDownloads()),
+                "cancelTask" => AppBridgeProtocol.CreateSuccessResponse(request.Id, CancelTask(request)),
+                "cancelAllDownloads" => AppBridgeProtocol.CreateSuccessResponse(request.Id, CancelAllDownloads()),
+                "retryTask" => AppBridgeProtocol.CreateSuccessResponse(request.Id, RetryTask(request)),
+                "openFile" => AppBridgeProtocol.CreateSuccessResponse(request.Id, OpenExistingPath(request, folder: false)),
+                "openFolder" => AppBridgeProtocol.CreateSuccessResponse(request.Id, OpenExistingPath(request, folder: true)),
+                "getHistory" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetHistory()),
+                "clearHistory" => AppBridgeProtocol.CreateSuccessResponse(request.Id, ClearHistory(request)),
+                "deleteHistoryEntry" => AppBridgeProtocol.CreateSuccessResponse(request.Id, DeleteHistoryEntry(request)),
                 _ => AppBridgeProtocol.CreateErrorResponse(request.Id, $"未知方法：{request.Method}"),
             };
         }
@@ -327,5 +338,182 @@ internal sealed class AppBridge
                 };
             }).ToArray(),
         };
+    }
+
+    // 当前下载任务快照（活动 + 排队批次；批次落定后清理）
+    private object GetDownloads() => downloadCoordinator.GetSnapshot()
+        .Select(s => new
+        {
+            batchId = s.BatchId,
+            taskId = s.TaskId,
+            phase = s.Phase.ToString().ToLowerInvariant(),
+            status = s.Status?.ToString().ToLowerInvariant(),
+            assetIndex = s.AssetIndex,
+            kind = s.Kind.ToString().ToLowerInvariant(),
+            targetPath = s.TargetPath,
+            bytesDownloaded = s.BytesDownloaded,
+            totalBytes = s.TotalBytes,
+            percent = s.Percent,
+            error = s.Error,
+            savedPath = s.SavedPath,
+        })
+        .ToArray();
+
+    // 取消单个任务（活动任务取消；排队批次出队落定）
+    private object CancelTask(BridgeRequest request)
+    {
+        downloadCoordinator.CancelTask(ParseGuid(request, "taskId"));
+        return new { cancelled = true };
+    }
+
+    // 取消全部活动与排队任务（后台执行，立即返回）
+    private object CancelAllDownloads()
+    {
+        _ = downloadCoordinator.CancelAllAsync();
+        return new { cancelled = true };
+    }
+
+    // 进程内重试：复用原任务 Asset/Variant 构造新任务入队；仅活动批次内有效
+    private object RetryTask(BridgeRequest request)
+    {
+        var taskId = ParseGuid(request, "taskId");
+        var candidate = downloadCoordinator.CreateRetryTask(taskId, mediaStateStore.Settings.DownloadDirectory);
+        if (candidate is null)
+        {
+            throw new InvalidOperationException("任务已结束，无法重试。请在历史中重新执行。");
+        }
+
+        var batch = new MediaDownloadBatch(Guid.NewGuid(), candidate.SourceShareLink, candidate.Post, new[] { candidate.Task });
+        _ = downloadCoordinator.EnqueueBatchAsync(batch, CancellationToken.None);
+        return new { accepted = 1, batchId = batch.Id, taskId = candidate.Task.Id };
+    }
+
+    // 打开文件（默认程序）/ 打开所在文件夹（explorer 定位选中）；
+    // 仅限下载目录内且存在的文件（防路径逃逸与任意文件）
+    private object OpenExistingPath(BridgeRequest request, bool folder)
+    {
+        var path = request.GetString("path");
+        if (string.IsNullOrWhiteSpace(path)
+            || !ShouldAllowOpen(mediaStateStore.Settings.DownloadDirectory, path))
+        {
+            throw new ArgumentException("路径不在下载目录内或不存在。");
+        }
+
+        try
+        {
+            if (folder)
+            {
+                Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+            }
+            else
+            {
+                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"打开失败：{ex.Message}");
+        }
+
+        return new { opened = true };
+    }
+
+    // 打开路径校验（纯函数，可离线测试）：下载目录内（无 .. 逃逸）且文件存在
+    internal static bool ShouldAllowOpen(string downloadDirectory, string path) =>
+        !string.IsNullOrWhiteSpace(downloadDirectory)
+        && !string.IsNullOrWhiteSpace(path)
+        && DownloadFileNameBuilder.IsWithinDirectory(downloadDirectory, path)
+        && File.Exists(path);
+
+    // 历史（合并：文本转换 + 媒体下载，带类型标记）
+    private object GetHistory() => new
+    {
+        text = new
+        {
+            quote = stateStore.GetHistory(TextToolId.QuoteConversion)
+                .Select(h => new { input = h.OriginalInput, output = h.ConvertedOutput, time = h.CreatedAtUtc })
+                .ToArray(),
+            space = stateStore.GetHistory(TextToolId.SpaceRemoval)
+                .Select(h => new { input = h.OriginalInput, output = h.ConvertedOutput, time = h.CreatedAtUtc })
+                .ToArray(),
+        },
+        media = mediaStateStore.GetHistory()
+            .Select(h => new
+            {
+                provider = h.Provider.ToString().ToLowerInvariant(),
+                sourceShareLink = h.SourceShareLink,
+                title = h.Title,
+                savedDirectory = h.SavedDirectory,
+                savedFiles = h.SavedFiles,
+                successCount = h.SuccessCount,
+                failureCount = h.FailureCount,
+                cancelledCount = h.CancelledCount,
+                time = h.DownloadedAtUtc,
+            })
+            .ToArray(),
+    };
+
+    // 清空历史：text（tool=quote/space）/ media（整组）
+    private object ClearHistory(BridgeRequest request)
+    {
+        switch (request.GetString("type"))
+        {
+            case "text":
+                stateStore.ClearHistory(ParseTextTool(request));
+                break;
+
+            case "media":
+                mediaStateStore.ClearHistory();
+                break;
+
+            default:
+                throw new ArgumentException($"非法历史类型：{request.GetString("type") ?? "(空)"}");
+        }
+
+        return new { cleared = true };
+    }
+
+    // 删除单条历史：text（tool + index）/ media（index）
+    private object DeleteHistoryEntry(BridgeRequest request)
+    {
+        var index = request.Parameters.HasValue
+            && request.Parameters.Value.TryGetProperty("index", out var indexElement)
+            && indexElement.ValueKind == System.Text.Json.JsonValueKind.Number
+                ? indexElement.GetInt32()
+                : -1;
+
+        switch (request.GetString("type"))
+        {
+            case "text":
+                stateStore.RemoveHistory(ParseTextTool(request), index);
+                break;
+
+            case "media":
+                mediaStateStore.RemoveAt(index);
+                break;
+
+            default:
+                throw new ArgumentException($"非法历史类型：{request.GetString("type") ?? "(空)"}");
+        }
+
+        return new { deleted = true };
+    }
+
+    private static TextToolId ParseTextTool(BridgeRequest request) => request.GetString("tool") switch
+    {
+        "quote" => TextToolId.QuoteConversion,
+        "space" => TextToolId.SpaceRemoval,
+        var other => throw new ArgumentException($"非法文本历史类型：{other ?? "(空)"}"),
+    };
+
+    private static Guid ParseGuid(BridgeRequest request, string name)
+    {
+        var value = request.GetString(name);
+        if (!Guid.TryParse(value, out var guid))
+        {
+            throw new ArgumentException($"非法参数：{name}");
+        }
+
+        return guid;
     }
 }

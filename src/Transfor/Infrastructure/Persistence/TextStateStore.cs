@@ -90,6 +90,29 @@ internal sealed class TextStateStore : ITextHistoryRepository
         }
     }
 
+    // 删除指定工具历史中的单条并立即落盘；索引越界抛异常；写入失败恢复原历史
+    public void RemoveHistory(TextToolId tool, int index)
+    {
+        var list = GetList(tool);
+        if (index < 0 || index >= list.Count)
+        {
+            throw new ArgumentOutOfRangeException(nameof(index), "历史索引越界。");
+        }
+
+        var snapshot = list.ToArray();
+        list.RemoveAt(index);
+        try
+        {
+            SaveHistory();
+        }
+        catch
+        {
+            list.Clear();
+            list.AddRange(snapshot);
+            throw;
+        }
+    }
+
     // 更新设置并立即落盘（同时按新上限重新裁剪历史）；
     // 任一写入失败时恢复原内存设置与裁剪结果，并向调用方抛出原异常
     public void UpdateSettings(AppSettings settings)
