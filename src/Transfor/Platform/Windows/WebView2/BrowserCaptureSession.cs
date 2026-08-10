@@ -29,46 +29,75 @@ internal static class BrowserCaptureSession
         return null;
     })()";
 
-    // DOM 媒体候选提取：滚动触发懒加载（图文/实况轮播图进入视口才加载），
-    // src 缺失回退 data-src/data-raw-src/data-original；携带 naturalWidth/Height 供过滤
-    private const string DomCandidatesScript = @"(async () => {
-        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-        const body = document.body || document.documentElement;
-        const height = body.scrollHeight;
-        for (let y = 0; y < height; y += 600) {
-            window.scrollTo(0, y);
-            await sleep(80);
-        }
-        window.scrollTo(0, 0);
-        await sleep(400);
+    // DOM 媒体候选提取（触发脚本）：同步启动异步收集任务并写入全局状态；
+    // 本机 WebView2 内核（151）下 ExecuteScriptAsync 对 Promise 返回空对象 {}，
+    // 因此必须「同步触发 + 全局状态轮询」（见 AGENTS.md）
+    private const string DomCandidatesTriggerScript = @"(() => {
+        if (window.__transforDomResult) return window.__transforDomResult;
+        if (window.__transforDomPending) return null;
+        window.__transforDomPending = true;
+        (async () => {
+            try {
+                const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+                const body = document.body || document.documentElement;
+                const height = body.scrollHeight;
+                for (let y = 0; y < height; y += 600) {
+                    window.scrollTo(0, y);
+                    await sleep(80);
+                }
+                window.scrollTo(0, 0);
+                await sleep(400);
 
-        const pick = (el) => {
-            const src = el.currentSrc || el.src
-                || (el.dataset && (el.dataset.src || el.dataset.rawSrc))
-                || el.getAttribute('data-raw-src')
-                || el.getAttribute('data-original')
-                || '';
-            if (!src || !src.startsWith('http')) return null;
-            return { src, w: el.naturalWidth || el.width || 0, h: el.naturalHeight || el.height || 0 };
-        };
-        const imgs = [...document.querySelectorAll('img')]
-            .map(pick).filter(Boolean);
-        const videos = [...document.querySelectorAll('video')]
-            .map(pick).filter(Boolean);
-        const sources = [...document.querySelectorAll('video source')]
-            .map(s => s.src).filter(u => u && u.startsWith('http'))
-            .map(u => ({ src: u, w: 0, h: 0 }));
-        return JSON.stringify({ images: imgs, videos: [...videos, ...sources] });
+                const pick = (el) => {
+                    const src = el.currentSrc || el.src
+                        || (el.dataset && (el.dataset.src || el.dataset.rawSrc))
+                        || el.getAttribute('data-raw-src')
+                        || el.getAttribute('data-original')
+                        || '';
+                    if (!src || !src.startsWith('http')) return null;
+                    return { src, w: el.naturalWidth || el.width || 0, h: el.naturalHeight || el.height || 0 };
+                };
+                const imgs = [...document.querySelectorAll('img')]
+                    .map(pick).filter(Boolean);
+                const videos = [...document.querySelectorAll('video')]
+                    .map(pick).filter(Boolean);
+                const sources = [...document.querySelectorAll('video source')]
+                    .map(s => s.src).filter(u => u && u.startsWith('http'))
+                    .map(u => ({ src: u, w: 0, h: 0 }));
+                window.__transforDomResult = JSON.stringify({ images: imgs, videos: [...videos, ...sources] });
+            } catch (e) {
+                window.__transforDomResult = 'null';
+            }
+        })();
+        return null;
     })()";
 
-    // 经页面 fetch 直取详情接口（credentials: include 携带浏览器 Cookie 与指纹）
-    private const string FetchDetailScript = @"(async () => {
-        try {
-            const r = await fetch(URL, { credentials: 'include' });
-            if (!r.ok) return null;
-            return await r.text();
-        } catch (e) { return null; }
+    // DOM 候选读取脚本：返回全局状态中的结果（字符串或 null）
+    private const string DomCandidatesReaderScript = @"(() => window.__transforDomResult || null)()";
+
+    // 经页面 fetch 直取详情接口（触发脚本）：同步启动 fetch 并写入全局状态；
+    // credentials: include 携带浏览器 Cookie 与指纹；结果字符串或 'null'
+    private const string FetchDetailTriggerScript = @"(() => {
+        if (window.__transforFetchResult) return window.__transforFetchResult;
+        if (window.__transforFetchPending) return null;
+        window.__transforFetchPending = true;
+        (async () => {
+            try {
+                const r = await fetch(URL, { credentials: 'include' });
+                window.__transforFetchResult = r.ok ? await r.text() : 'null';
+            } catch (e) {
+                window.__transforFetchResult = 'null';
+            }
+        })();
+        return null;
     })()";
+
+    // 详情接口读取脚本
+    private const string FetchDetailReaderScript = @"(() => window.__transforFetchResult || null)()";
+
+    // 重置全局捕获状态（每次捕获会话开始前调用，避免旧页面结果残留）
+    public static Task ResetAsync(CoreWebView2 core)
+        => core.ExecuteScriptAsync("window.__transforDomResult = null; window.__transforDomPending = false; window.__transforFetchResult = null; window.__transforFetchPending = false;");
 
     // 提取结构化数据（页面字符串）；ExecuteScriptAsync 结果按 JSON 编码反序列化；
     // ConfigureAwait(true)：本方法在 BrowserHostForm UI 线程上下文执行，
@@ -98,20 +127,25 @@ internal static class BrowserCaptureSession
         }
     }
 
-    // 提取 DOM 媒体候选（DOM 顺序即作品顺序）
-    public static async Task<IReadOnlyList<BrowserCapturedCandidate>> ExtractDomCandidatesAsync(
+    // 触发 DOM 候选异步收集（幂等：已完成/进行中直接返回）
+    public static Task TriggerDomCandidatesAsync(CoreWebView2 core)
+        => core.ExecuteScriptAsync(DomCandidatesTriggerScript);
+
+    // 读取 DOM 候选收集结果（未完成时返回空列表；由调用方轮询）
+    public static async Task<IReadOnlyList<BrowserCapturedCandidate>> ReadDomCandidatesAsync(
         CoreWebView2 core,
         CancellationToken cancellationToken)
     {
-        var raw = await core.ExecuteScriptAsync(DomCandidatesScript).ConfigureAwait(true);
-        if (string.IsNullOrWhiteSpace(raw) || raw == "null")
+        var raw = await core.ExecuteScriptAsync(DomCandidatesReaderScript).ConfigureAwait(true);
+        var value = DecodeResult(raw);
+        if (value is null)
         {
             return Array.Empty<BrowserCapturedCandidate>();
         }
 
         try
         {
-            using var document = JsonDocument.Parse(raw);
+            using var document = JsonDocument.Parse(value);
             var root = document.RootElement;
             var results = new List<BrowserCapturedCandidate>();
             CollectFromArray(root, "images", MediaKind.Image, results);
@@ -124,11 +158,37 @@ internal static class BrowserCaptureSession
         }
     }
 
-    // 经页面 fetch 直取详情接口响应文本（登录态最可靠的数据来源）
-    public static async Task<string?> FetchDetailAsync(CoreWebView2 core, Uri detailUri, CancellationToken cancellationToken)
+    // 经页面 fetch 直取详情接口响应文本（同步触发 + 轮询读取，最长 timeout）
+    public static async Task<string?> FetchDetailAsync(
+        CoreWebView2 core,
+        Uri detailUri,
+        CancellationToken cancellationToken,
+        TimeSpan? timeout = null)
     {
-        var script = FetchDetailScript.Replace("URL", JsonSerializer.Serialize(detailUri.ToString()), StringComparison.Ordinal);
-        var raw = await core.ExecuteScriptAsync(script).ConfigureAwait(true);
+        var triggerScript = FetchDetailTriggerScript.Replace("URL", JsonSerializer.Serialize(detailUri.ToString()), StringComparison.Ordinal);
+        await core.ExecuteScriptAsync(triggerScript).ConfigureAwait(true);
+
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var raw = await core.ExecuteScriptAsync(FetchDetailReaderScript).ConfigureAwait(true);
+            var value = DecodeResult(raw);
+            if (value is not null)
+            {
+                return value;
+            }
+
+            await Task.Delay(300, cancellationToken).ConfigureAwait(true);
+        }
+
+        return null;
+    }
+
+    // 解码 ExecuteScriptAsync 返回：JSON 编码字符串 → 原始文本；
+    // null（JS null 或 'null' 字面量）与损坏返回 null
+    internal static string? DecodeResult(string raw)
+    {
         if (string.IsNullOrWhiteSpace(raw) || raw == "null")
         {
             return null;
@@ -136,11 +196,17 @@ internal static class BrowserCaptureSession
 
         try
         {
-            return JsonSerializer.Deserialize<string>(raw);
+            var value = JsonSerializer.Deserialize<string>(raw);
+            if (value is null || value == "null")
+            {
+                return null;
+            }
+
+            return value;
         }
-        catch
+        catch (JsonException)
         {
-            return null;
+            return raw;
         }
     }
 

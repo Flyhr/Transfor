@@ -135,20 +135,23 @@ internal sealed class BrowserHostForm : Form
                 structuredJson = null;
             }
 
-            // 轮询提取结构化数据与 DOM 候选（SPA 渲染/懒加载窗口）
+            // 轮询提取结构化数据与 DOM 候选（SPA 渲染/懒加载窗口）：
+            // DOM 候选为「同步触发 + 全局状态轮询」（本机内核 ExecuteScriptAsync 对 Promise 返回 {}）
+            await BrowserCaptureSession.ResetAsync(core).ConfigureAwait(true);
+            await BrowserCaptureSession.TriggerDomCandidatesAsync(core).ConfigureAwait(true);
             IReadOnlyList<BrowserCapturedCandidate> candidates = Array.Empty<BrowserCapturedCandidate>();
             var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
             while (DateTime.UtcNow < deadline)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 structuredJson ??= await BrowserCaptureSession.ExtractStructuredDataAsync(core, cancellationToken).ConfigureAwait(true);
-                candidates = await BrowserCaptureSession.ExtractDomCandidatesAsync(core, cancellationToken).ConfigureAwait(true);
+                candidates = await BrowserCaptureSession.ReadDomCandidatesAsync(core, cancellationToken).ConfigureAwait(true);
                 if (BrowserCaptureSession.HasWorkData(structuredJson) || candidates.Count > 0)
                 {
                     break;
                 }
 
-                await Task.Delay(1000, cancellationToken).ConfigureAwait(true);
+                await Task.Delay(500, cancellationToken).ConfigureAwait(true);
             }
 
             return (structuredJson, candidates, networkCapture.DisableAndSnapshot());
