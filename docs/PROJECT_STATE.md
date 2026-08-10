@@ -6,7 +6,7 @@
 
 - **应用版本**：`0.15.0`（唯一来源：`src/Transfor/Transfor.csproj` 的 `<Version>`，SemVer）
 - **浏览器技术路线**：WebView2 已落地（浏览器页 + 隐藏宿主 + 新界面 AppWebView）；媒体解析/下载兜底为 WebView2（`WebView2BrowserSessionAccessor`，与浏览器页共享 Profile 登录态）；旧 Edge CDP 实现保留未删除、不再被实例化
-- **Phase 进度**：Phase 0（架构整理）✅ 标签 `architecture-baseline`；Phase 1（版本检查）✅；Phase 2（Velopack 自动更新）✅；Phase 3（WebView2 浏览器模块）✅；Phase 4A/4B/4C/4D ✅；Phase 5（现代 UI 基础框架）✅ 完成于 dev（Shell + Bridge + Design System + 主题，空页面预览）；Phase 6（逐页面迁移）未开始
+- **Phase 进度**：Phase 0（架构整理）✅ 标签 `architecture-baseline`；Phase 1（版本检查）✅；Phase 2（Velopack 自动更新）✅；Phase 3（WebView2 浏览器模块）✅；Phase 4A/4B/4C/4D ✅；Phase 5（现代 UI 基础框架）✅；Phase 6（逐页面迁移）进行中——M1（Bridge 事件推送基础设施）✅、M2（媒体解析页）✅ 完成于 dev；M3（下载+历史页）/M4（浏览器页）/M5（设置+首页）未开始
 
 ## 一、项目概述
 
@@ -77,7 +77,8 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 - **版本**：0.15.0（csproj `<Version>`，唯一来源）
 - **更新体系**：检查走 update-policy.json（GitHub raw `Release` 分支）；下载/安装/重启走 Velopack（GithubSource，Beta 通道读预发布）；`vpk pack -c stable|beta` 已实测通过
 - **浏览器（Phase 3/4A/4B/4C）**：WebView2 1.0.4129.50，独立 Profile `Browser\UserData`；浏览器页 + 隐藏宿主共用登录态；解析/下载兜底 WebView2BrowserSessionAccessor；4B 网络捕获 + MediaSniffer 白名单嗅探；4C CDP 详情接口响应体
-- **新界面（Phase 5）**：托盘「新界面（预览）」入口；AppShellForm（独立 Profile `Browser\AppUi` + 外部导航拦截 + WebMessageReceived 桥接）；webui/index.html 嵌入资源（Design System 组件 + 侧边栏 + 三态主题 + Bridge JS）；AppBridge 已接 getAppInfo/getSettings/saveSettings/checkUpdate
+- **新界面（Phase 5/6）**：托盘「新界面（预览）」入口；AppShellForm（独立 Profile `Browser\AppUi` + 外部导航拦截 + WebMessageReceived 桥接）；webui/index.html 嵌入资源（Design System 组件 + 侧边栏 + 三态主题 + Bridge JS）；AppBridge 已接 getAppInfo/getSettings/saveSettings/checkUpdate + resolveMedia/downloadSelected/getPreview/getClipboardText（M2）；下载事件推送（AppBridgeEvents：downloadProgress/taskCompleted/batchCompleted，取消路径恰好一次完成事件）
+- **下载快照（M2 审查修复）**：MediaDownloadCoordinator.GetSnapshot（DownloadSnapshot：等待/下载中/已落定 + 进度 + 终态），CancelTask 支持排队批次（出队落定不写历史）；TaskRuntime 保留 SourceShareLink/AssetIndex 供进程内重试；DownloadFileNameBuilder.BuildFileName（自 MediaDownloadPage 迁移，Bridge 与 WinForms 页共用同一命名规则）
 - **诊断目录**：`%TEMP%\Transfor\diagnostics\`（解析完成 capture-*.json + 下载失败 failed-media-*；临时诊断代码在 CaptureDiagnostics / MediaFileFinalizer.SaveFailureSample，定位后移除）
 - **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新包未做代码签名；WebView2 媒体预取未实现；Edge CDP 保留未删除；新界面为预览（业务页 Phase 6 迁移）；webui 单文件嵌入（改 UI 需重新编译）
 

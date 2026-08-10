@@ -34,14 +34,14 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - 初始化失败（如 WebView2 Runtime 缺失）时页面显示明确提示，不影响应用其他功能
 - 依赖系统 Edge WebView2 Runtime（Windows 11 内置；Windows 10 随 Edge 浏览器更新）
 
-### 新界面（Phase 5 预览）
+### 新界面（Phase 5/6 渐进迁移）
 
 - 托盘菜单「新界面（预览）」打开现代化界面宿主：WinForms Host + WebView2 + 本地 HTML/CSS/JS
-- 左侧边栏导航（首页/媒体下载/浏览器/历史/设置）+ 页面容器；Design System 基础组件（按钮/输入/卡片/对话框/Toast/进度条/侧边栏）
-- 主题：跟随系统/浅色/深色（统一 CSS 变量，`prefers-color-scheme` 跟随）
-- App Bridge：JSON 消息协议（`getAppInfo`/`getSettings`/`saveSettings`/`checkUpdate` 已接入真实服务）
+- 左侧边栏导航（首页/媒体下载/浏览器/历史/设置）+ 页面容器；Design System 基础组件（按钮/输入/卡片/对话框/Toast/进度条/侧边栏）；主题：跟随系统/浅色/深色
+- **媒体下载页已迁移**：粘贴/输入分享链接（支持完整分享文本）→ 解析 → 媒体卡片（图片/视频/实况 LIVE、分辨率/大小、点击预览、勾选/全选）→ 下载选中；下载进度/完成经 Bridge 事件实时推送；解析失败不保留旧作品
+- App Bridge：JSON 消息协议（`getAppInfo`/`getSettings`/`saveSettings`/`checkUpdate`/`resolveMedia`/`downloadSelected`/`getPreview`/`getClipboardText`）+ 事件推送（`downloadProgress`/`taskCompleted`/`batchCompleted`）
 - **安全隔离**：AppWebView 使用独立 Profile（`Browser\AppUi`，与互联网浏览器 `Browser\UserData` 严格分离）、禁止外部导航与新窗口，仅经 Bridge 协议访问应用服务
-- 现有 WinForms 主界面完整保留；业务页面逐页迁移为 Phase 6
+- 现有 WinForms 主界面完整保留；下载/历史/浏览器/设置页为后续迁移（Phase 6 M3–M5）
 
 ### 应用更新
 

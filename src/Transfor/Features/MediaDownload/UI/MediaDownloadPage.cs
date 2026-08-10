@@ -459,23 +459,10 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         }
     }
 
+    // 文件名构造已迁移到 DownloadFileNameBuilder（Bridge 与页面共用同一规则）；
+    // 此处保留转发，兼容测试引用
     internal static string BuildFileName(ResolvedMediaPost post, MediaAsset asset, MediaVariant variant)
-    {
-        var baseName = string.IsNullOrWhiteSpace(post.Title)
-            ? "media"
-            : DownloadFileNameBuilder.SanitizeFileName(DownloadFileNameBuilder.StripHashtags(post.Title));
-        var ext = DownloadFileNameBuilder.ResolveExtension(variant.ContentType, asset.Kind, variant.Uri.AbsolutePath);
-        var number = asset.SourceIndex + 1;
-
-        return asset.Role switch
-        {
-            // 实况图配对：同一序号输出 _still 静态照片与 _motion 动态视频
-            MediaAssetRole.LivePhotoStill => $"{baseName}_{number:D2}_still{ext}",
-            MediaAssetRole.LivePhotoMotion => $"{baseName}_{number:D2}_motion{ext}",
-            MediaAssetRole.AlbumPreview => $"{baseName}_album_preview{ext}",
-            _ => asset.Index == 0 ? $"{baseName}{ext}" : $"{baseName}_{number:D2}{ext}",
-        };
-    }
+        => DownloadFileNameBuilder.BuildFileName(post, asset, variant);
 
     private void BrowseDirectory()
     {

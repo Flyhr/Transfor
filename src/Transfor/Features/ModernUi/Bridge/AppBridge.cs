@@ -17,6 +17,9 @@ internal sealed class AppBridge
     private ResolvedMediaPost? lastPost;
     private string? lastShareLink;
 
+    // 解析会话令牌：新解析使旧结果失效（防并发解析覆盖）
+    private long resolveVersion;
+
     public AppBridge(
         TextStateStore stateStore,
         IUpdateService updateService,
@@ -144,19 +147,32 @@ internal sealed class AppBridge
             : string.Empty,
     };
 
-    // 解析分享链接（Automatic）：成功返回作品与资产列表（每资产含首选变体），
-    // 需要交互/失败返回状态与提示
+    // 解析分享链接（Automatic）：支持分享文本（经 ShareLinkParser 提取链接）；
+    // 解析开始时清空旧作品状态（失败/交互不保留旧作品，防止误下载）；
+    // 会话令牌防止并发解析结果互相覆盖
     private async Task<string> ResolveMediaAsync(BridgeRequest request)
     {
         var link = request.GetString("link");
-        if (string.IsNullOrWhiteSpace(link) || !Uri.TryCreate(link, UriKind.Absolute, out var uri))
+        var uri = ShareLinkParser.TryExtractFirstLink(link, out var linkError);
+        if (uri is null)
         {
-            throw new ArgumentException("无效的链接。");
+            throw new ArgumentException(linkError ?? "未在文本中找到链接。");
         }
+
+        // 新解析使旧结果立即失效（失败/交互也不保留旧作品）
+        var version = ++resolveVersion;
+        lastPost = null;
+        lastShareLink = null;
 
         var result = await resolveCoordinator.ResolveAsync(
             new MediaResolveRequest(uri, MediaResolveMode.Automatic, new MediaRequestContext(null, null)),
             CancellationToken.None).ConfigureAwait(false);
+
+        // 过期结果：期间发生了更新的解析，丢弃本次结果
+        if (version != resolveVersion)
+        {
+            return AppBridgeProtocol.CreateSuccessResponse(request.Id, new { status = "stale", message = "解析结果已过期，请重试。" });
+        }
 
         switch (result.Status)
         {
@@ -204,6 +220,12 @@ internal sealed class AppBridge
         }
 
         var asset = lastPost.Assets[index];
+        if (asset.Kind != MediaKind.Image)
+        {
+            // 预览链路（MediaPreviewService）只接受图片内容；视频卡片展示元数据
+            throw new InvalidOperationException("仅图片支持预览。");
+        }
+
         var selection = MediaQualitySelector.SelectBest(asset, mediaStateStore.Settings.QualityPreference);
         if (selection.Status != MediaSelectionStatus.Selected || selection.Variant is null)
         {
@@ -211,6 +233,7 @@ internal sealed class AppBridge
         }
 
         var path = await previewService.DownloadPreviewAsync(selection.Variant, CancellationToken.None).ConfigureAwait(false);
+        // 限制原始文件 ≤ 4MB（base64 data URL 膨胀约 1.33x，最终 Bridge 响应约 ≤5.3MB）
         var info = new FileInfo(path);
         if (info.Length > 4 * 1024 * 1024)
         {
@@ -266,7 +289,7 @@ internal sealed class AppBridge
                 throw new InvalidOperationException($"媒体 {index + 1} 没有可下载的版本。");
             }
 
-            var fileName = MediaDownloadPage.BuildFileName(lastPost, asset, selection.Variant);
+            var fileName = DownloadFileNameBuilder.BuildFileName(lastPost, asset, selection.Variant);
             var target = DownloadFileNameBuilder.BuildUniquePath(directory, fileName);
             tasks.Add(new MediaDownloadTask(Guid.NewGuid(), asset, selection.Variant, target));
         }

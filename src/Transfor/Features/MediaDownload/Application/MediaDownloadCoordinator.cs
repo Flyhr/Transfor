@@ -12,6 +12,7 @@ internal sealed class MediaDownloadCoordinator : IDisposable
     private readonly Queue<PendingBatch> pendingBatches = new();
     private readonly List<TaskCompletionSource<bool>> batchCompletions = new();
     private readonly Dictionary<Guid, CancellationTokenSource> taskCancellations = new();
+    private readonly Dictionary<Guid, TaskRuntime> taskRuntimes = new();
     private MediaDownloadBatch? activeBatch;
     private bool disposed;
 
@@ -64,11 +65,26 @@ internal sealed class MediaDownloadCoordinator : IDisposable
             var batchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             pendingBatches.Enqueue(new PendingBatch(batch, batchCts, completion));
             batchCompletions.Add(completion);
+            // 注册任务运行时状态（快照数据源；等待中 → 下载中 → 已落定）
+            for (var i = 0; i < batch.Tasks.Count; i++)
+            {
+                var task = batch.Tasks[i];
+                taskRuntimes[task.Id] = new TaskRuntime
+                {
+                    BatchId = batch.Id,
+                    Task = task,
+                    SourceShareLink = batch.SourceShareLink,
+                    AssetIndex = i,
+                };
+            }
+
             ProcessNextIfIdle();
             return completion.Task;
         }
     }
 
+    // 取消单个任务：活动任务取消其取消源（落定为 Cancelled 并触发完成事件）；
+    // 排队批次中的任务取消整个排队批次（任务未开始：直接出队落定，不写历史）
     public void CancelTask(Guid taskId)
     {
         lock (sync)
@@ -76,7 +92,61 @@ internal sealed class MediaDownloadCoordinator : IDisposable
             if (taskCancellations.TryGetValue(taskId, out var cts))
             {
                 cts.Cancel();
+                return;
             }
+
+            var pending = pendingBatches.FirstOrDefault(batch => batch.Batch.Tasks.Any(task => task.Id == taskId));
+            if (pending is not null)
+            {
+                // 出队并完成批次信号（排队批次未启动：无任务事件/历史）
+                var remaining = pendingBatches.Where(batch => !ReferenceEquals(batch, pending)).ToArray();
+                pendingBatches.Clear();
+                foreach (var batch in remaining)
+                {
+                    pendingBatches.Enqueue(batch);
+                }
+
+                batchCompletions.Remove(pending.Completion);
+                foreach (var task in pending.Batch.Tasks)
+                {
+                    taskRuntimes.Remove(task.Id);
+                }
+
+                pending.BatchCts.Cancel();
+                pending.BatchCts.Dispose();
+                pending.Completion.TrySetResult(true);
+            }
+        }
+    }
+
+    // 当前全部任务快照（活动 + 排队批次；含进度与终态；批次落定后清理）
+    public IReadOnlyList<DownloadSnapshot> GetSnapshot()
+    {
+        lock (sync)
+        {
+            return taskRuntimes.Values
+                .OrderBy(runtime => runtime.BatchId)
+                .Select(runtime =>
+                {
+                    var task = runtime.Task;
+                    var result = runtime.Result;
+                    return new DownloadSnapshot(
+                        runtime.BatchId,
+                        task.Id,
+                        runtime.Phase,
+                        result?.Status,
+                        runtime.AssetIndex,
+                        task.Asset.Kind,
+                        task.TargetPath,
+                        runtime.BytesDownloaded,
+                        runtime.TotalBytes,
+                        runtime.TotalBytes is > 0
+                            ? Math.Min(100d, runtime.BytesDownloaded * 100d / runtime.TotalBytes.Value)
+                            : null,
+                        result?.Error,
+                        result?.SavedPath);
+                })
+                .ToArray();
         }
     }
 
@@ -204,6 +274,12 @@ internal sealed class MediaDownloadCoordinator : IDisposable
                     pair.Value.Dispose();
                 }
 
+                // 批次落定：清理该批次的任务运行时状态（快照不再包含）
+                foreach (var task in batch.Tasks)
+                {
+                    taskRuntimes.Remove(task.Id);
+                }
+
                 batchCompletions.Remove(pending.Completion);
                 activeBatch = null;
                 pending.Completion.TrySetResult(true);
@@ -220,33 +296,85 @@ internal sealed class MediaDownloadCoordinator : IDisposable
         CancellationTokenSource taskCts,
         CancellationToken batchToken)
     {
+        SetRuntimePhase(task.Id, DownloadPhase.Downloading);
+        MediaDownloadResult result;
         try
         {
-            await semaphore.WaitAsync(batchToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (batchToken.IsCancellationRequested)
-        {
-            return MediaDownloadResult.Cancelled(task.Id);
-        }
+            try
+            {
+                await semaphore.WaitAsync(batchToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (batchToken.IsCancellationRequested)
+            {
+                result = MediaDownloadResult.Cancelled(task.Id);
+                return NotifyCompleted(batch, task, result);
+            }
 
-        try
-        {
-            var result = await downloadService.DownloadAsync(
-                task,
-                taskCts.Token,
-                new Progress<MediaDownloadProgress>(p => TaskProgressChanged?.Invoke(this, p))).ConfigureAwait(false);
-
-            TaskCompleted?.Invoke(this, new MediaDownloadTaskCompleted(batch.Id, task.Id, result));
-            return result;
-        }
-        catch (OperationCanceledException) when (taskCts.IsCancellationRequested || batchToken.IsCancellationRequested)
-        {
-            return MediaDownloadResult.Cancelled(task.Id);
+            try
+            {
+                result = await downloadService.DownloadAsync(
+                    task,
+                    taskCts.Token,
+                    new Progress<MediaDownloadProgress>(p => OnTaskProgress(task.Id, p))).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (taskCts.IsCancellationRequested || batchToken.IsCancellationRequested)
+            {
+                result = MediaDownloadResult.Cancelled(task.Id);
+            }
         }
         finally
         {
             semaphore.Release();
         }
+
+        // 所有路径恰好一次完成事件（含取消：前端依赖 taskCompleted 更新任务状态）
+        return NotifyCompleted(batch, task, result);
+    }
+
+    // 任务进度（后台线程）：更新运行时快照 + 触发进度事件
+    private void OnTaskProgress(Guid taskId, MediaDownloadProgress progress)
+    {
+        lock (sync)
+        {
+            if (taskRuntimes.TryGetValue(taskId, out var runtime))
+            {
+                runtime.BytesDownloaded = progress.BytesDownloaded;
+                runtime.TotalBytes = progress.TotalBytes;
+            }
+        }
+
+        TaskProgressChanged?.Invoke(this, progress);
+    }
+
+    private void SetRuntimePhase(Guid taskId, DownloadPhase phase)
+    {
+        lock (sync)
+        {
+            if (taskRuntimes.TryGetValue(taskId, out var runtime))
+            {
+                runtime.Phase = phase;
+            }
+        }
+    }
+
+    // 触发任务完成事件并返回结果（统一出口，所有路径恰好一次）；
+    // 同时把终态写入运行时快照（批次落定前保留，供快照/重试读取）
+    private MediaDownloadResult NotifyCompleted(
+        MediaDownloadBatch batch,
+        MediaDownloadTask task,
+        MediaDownloadResult result)
+    {
+        lock (sync)
+        {
+            if (taskRuntimes.TryGetValue(task.Id, out var runtime))
+            {
+                runtime.Phase = DownloadPhase.Completed;
+                runtime.Result = result;
+            }
+        }
+
+        TaskCompleted?.Invoke(this, new MediaDownloadTaskCompleted(batch.Id, task.Id, result));
+        return result;
     }
 
     // 排队批次条目：批次 + 可取消的批次取消源 + 完成信号
@@ -254,4 +382,18 @@ internal sealed class MediaDownloadCoordinator : IDisposable
         MediaDownloadBatch Batch,
         CancellationTokenSource BatchCts,
         TaskCompletionSource<bool> Completion);
+
+    // 任务运行时状态（快照/重试数据源）：阶段、进度与终态；
+    // SourceShareLink 与 AssetIndex 供进程内重试（重新解析后按原资产构造新任务）
+    private sealed class TaskRuntime
+    {
+        public required Guid BatchId { get; init; }
+        public required MediaDownloadTask Task { get; init; }
+        public required string SourceShareLink { get; init; }
+        public required int AssetIndex { get; init; }
+        public DownloadPhase Phase;
+        public long BytesDownloaded;
+        public long? TotalBytes;
+        public MediaDownloadResult? Result;
+    }
 }

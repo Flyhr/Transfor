@@ -35,21 +35,41 @@ internal sealed class AppBridgeEvents : IDisposable
     private void OnBatchCompleted(object? sender, Guid batchId)
         => Post(() => post(AppBridgeProtocol.CreateEvent("batchCompleted", new { batchId })));
 
-    // 后台线程事件 → UI 线程执行（回调内访问 CoreWebView2 成员）
+    // 后台线程事件 → UI 线程执行（回调内访问 CoreWebView2 成员）；
+    // 防关闭竞态：排队前与回调内都检查窗体/句柄状态，发送失败不影响下载批次
     private void Post(Action action)
     {
-        if (uiAnchor.IsDisposed)
+        if (uiAnchor.IsDisposed || !uiAnchor.IsHandleCreated)
         {
             return;
         }
 
-        if (uiAnchor.InvokeRequired)
+        try
         {
-            uiAnchor.BeginInvoke(action);
+            if (uiAnchor.InvokeRequired)
+            {
+                uiAnchor.BeginInvoke(() => SafeInvoke(action));
+            }
+            else
+            {
+                SafeInvoke(action);
+            }
         }
-        else
+        catch
+        {
+            // BeginInvoke 排队失败（窗体销毁竞态）忽略
+        }
+    }
+
+    private static void SafeInvoke(Action action)
+    {
+        try
         {
             action();
+        }
+        catch
+        {
+            // 发送失败（WebView 已销毁等）忽略，绝不反向影响下载批次
         }
     }
 
