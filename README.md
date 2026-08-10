@@ -45,7 +45,7 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 
 ### 应用更新
 
-- 版本号统一来源于项目配置（SemVer，当前 `0.9.0` 开发版），启动后与托盘菜单均可检查更新
+- 版本号统一来源于项目配置（SemVer，当前 `0.15.0` 开发版），启动后与托盘菜单均可检查更新
 - 远程 `update-policy.json` 策略：可选更新（稍后/立即）与强制更新（重新检查/立即/退出，不允许跳过）
 - 更新下载基于 **Velopack**（GitHub Releases 为更新源）：下载进度/取消，「立即重启并更新」自动安装并重启；可选更新可「稍后重启」，下次启动自动应用
 - 更新通道（设置中切换）：**Stable** 只接收正式版；**Beta** 额外接收预发布
@@ -181,10 +181,10 @@ dotnet run --project tests/Transfor.Tests
 发布在 `Release` 分支完成，由 GitHub Actions 自动打包：
 
 1. 在 `Release` 分支更新 `update-policy.json`（`latestVersion` / `minimumVersion` / 更新说明），推送该分支；
-2. 打版本标签并推送（稳定版 `v0.9.0`；测试版 `v0.9.0-beta.1` 自动走 Beta 通道与 GitHub 预发布）：
+2. 打版本标签并推送（稳定版 `v0.15.0`；测试版 `v0.15.0-beta.1` 自动走 Beta 通道与 GitHub 预发布）：
 
    ```bash
-   git tag v0.9.0 && git push origin v0.9.0
+   git tag v0.15.0 && git push origin v0.15.0
    ```
 
 3. 工作流 `release.yml` 自动执行：测试 → 发布（自包含 win-x64）→ `vpk` 打包（Setup.exe / nupkg / RELEASES）→ 创建 GitHub Release 并上传；

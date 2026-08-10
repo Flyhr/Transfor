@@ -263,7 +263,7 @@ internal sealed class SettingsForm : Form
             switch (scope)
             {
                 case BrowserDataScope.Cookies:
-                    browserService.Cookies.ClearCookies();
+                    await browserService.Cookies.ClearCookiesAsync();
                     break;
 
                 case BrowserDataScope.Cache:

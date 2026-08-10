@@ -56,23 +56,44 @@ internal sealed class AppBridge
 
     private object SaveSettings(BridgeRequest request)
     {
-        // Phase 5 仅开放更新通道与历史上限（逐字段校验，非法值拒绝）
+        // 统一解析并校验全部参数：任一非法 → 抛错（响应 error），不落盘；
+        // 全部合法 → 一次性 UpdateSettings（原子写入，任一写失败整体回滚）
+        var next = stateStore.Settings;
+
         var channelText = request.GetString("updateChannel");
-        if (!string.IsNullOrWhiteSpace(channelText)
-            && Enum.TryParse<UpdateChannel>(channelText, true, out var channel)
-            && Enum.IsDefined(channel))
+        if (!string.IsNullOrWhiteSpace(channelText))
         {
-            stateStore.UpdateSettings(stateStore.Settings with { UpdateChannel = channel });
+            if (!Enum.TryParse<UpdateChannel>(channelText, true, out var channel) || !Enum.IsDefined(channel))
+            {
+                throw new ArgumentException($"非法更新通道：{channelText}");
+            }
+
+            next = next with { UpdateChannel = channel };
         }
 
-        var quoteLimit = request.Parameters.HasValue && int.TryParse(request.GetString("quoteHistoryLimit"), out var quote) && quote is >= 1 and <= 500
-            ? quote
-            : (int?)null;
-        if (quoteLimit is not null)
+        var quoteText = request.GetString("quoteHistoryLimit");
+        if (!string.IsNullOrWhiteSpace(quoteText))
         {
-            stateStore.UpdateSettings(stateStore.Settings with { QuoteHistoryLimit = quoteLimit.Value });
+            if (!int.TryParse(quoteText, out var quote) || quote is < 1 or > 500)
+            {
+                throw new ArgumentException($"非法引号转换历史上限：{quoteText}");
+            }
+
+            next = next with { QuoteHistoryLimit = quote };
         }
 
+        var spaceText = request.GetString("spaceHistoryLimit");
+        if (!string.IsNullOrWhiteSpace(spaceText))
+        {
+            if (!int.TryParse(spaceText, out var space) || space is < 1 or > 500)
+            {
+                throw new ArgumentException($"非法去除空格历史上限：{spaceText}");
+            }
+
+            next = next with { SpaceHistoryLimit = space };
+        }
+
+        stateStore.UpdateSettings(next);
         return GetSettings();
     }
 

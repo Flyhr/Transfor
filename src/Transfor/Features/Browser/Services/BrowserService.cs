@@ -64,7 +64,7 @@ internal sealed class BrowserService : IBrowserService, IDisposable
             await webView2.EnsureCoreWebView2Async(env).ConfigureAwait(true);
             control = webView2;
             navigation = new BrowserNavigationService(webView2.CoreWebView2);
-            cookies = new BrowserCookieService(webView2.CoreWebView2);
+            cookies = new BrowserCookieService(webView2, webView2.CoreWebView2);
             initializationError = null;
         }
         catch (Exception ex)

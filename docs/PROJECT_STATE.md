@@ -48,7 +48,7 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 - **作品类型判断**：结构化数据存在 `images`（图文/实况）→ 图片；仅 `video` → 视频；**顶层 video 仅在无 images 时解析**（图集预览视频不产出）
 - **实况图配对**：逐个解析 `images[i].url_list`（静态）+ `images[i].video`（play_addr_h264→play_addr→play_addr_265→download_addr + bit_rate[]）；`Role=LivePhotoStill/Motion`、`SourceIndex`、`PairId` 配对；**isLivePhoto 以存在可播放视频地址为最终依据**（live_photo_type/clip_type 仅辅助）
 - **文件名配对**：`标题_01_still.jpg` + `标题_01_motion.mp4`（BuildFileName 按 Role）
-- **浏览器兜底**：HttpClient 被 TLS 指纹拦截时自动切 Edge CDP 网络栈（`loadNetworkResource` + IO.read，带登录 Cookie）；Edge 独立 profile `%LOCALAPPDATA%\Transfor\Edge\Douyin`
+- **浏览器兜底**：HttpClient 被 TLS 指纹拦截时自动切 WebView2 隐藏宿主（CDP `loadNetworkResource` + `IO.read` 流式下载，带浏览器 Cookie）；浏览器 profile `%LOCALAPPDATA%\Transfor\Browser\UserData`
 - **解析兜底链**：详情接口 Network 捕获 → NEXT_DATA/INITIAL_STATE 提取 → 作品 ID 提取+浏览器网络栈直取详情接口 → DOM 候选（滚动懒加载 + data-src 回退）
 - **质量选择**：`MediaQualitySelector` 按像素面积选最高清（含 video.bit_rate 高清档）；视频排除封面/Thumbnail
 - **持久化**：媒体状态独立 `media-settings.json` / `download-history.json`；Cookie 只存 Edge profile
@@ -58,7 +58,7 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 
 | 问题 | 解决方案 |
 |---|---|
-| HttpClient 被抖音 TLS 指纹拦截 | 真实 Edge + CDP 网络栈兜底（loadNetworkResource） |
+| HttpClient 被抖音 TLS 指纹拦截 | WebView2 隐藏宿主 CDP 网络栈兜底（loadNetworkResource + IO.read 流式） |
 | 视频解析不出（页面脚本无作品数据） | 详情接口 Network 捕获 + 作品 ID 提取直取接口 |
 | 视频下载到 JPEG 封面 | Parser 不把 cover 当视频变体；选择器排除 Thumbnail；终化按魔数区分报错 |
 | 实况下载到 MP3 音乐 | 音乐 URL（ies-music/.mp3）过滤；按 images[i].video 配对解析 |
