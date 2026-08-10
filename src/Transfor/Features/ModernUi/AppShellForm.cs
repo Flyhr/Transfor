@@ -51,12 +51,20 @@ internal sealed class AppShellForm : Form
             await webView.EnsureCoreWebView2Async(environment);
 
             var core = webView.CoreWebView2!;
-            // 安全：禁止外部导航与新窗口（本地 UI 只加载嵌入 HTML）；
-            // NavigateToString 产生 data: URI——必须放行 data:/about:blank，
-            // 其余（http/https/file 等外部导航）一律拦截
+            // 本地 UI 以虚拟主机映射加载（https 上下文）：data: URI 页面下
+            // C# → JS 的 postMessage 响应会丢失（实测）；嵌入资源先落盘到临时目录
+            var webRoot = Path.Combine(Path.GetTempPath(), "Transfor", "WebUi");
+            Directory.CreateDirectory(webRoot);
+            File.WriteAllText(Path.Combine(webRoot, "index.html"), html);
+            core.SetVirtualHostNameToFolderMapping(
+                "appassets.transfor",
+                webRoot,
+                CoreWebView2HostResourceAccessKind.Allow);
+
+            // 安全：只放行本地虚拟主机与 about:blank，其余（外部导航/新窗口）一律拦截
             core.NavigationStarting += (_, e) =>
             {
-                var isLocalContent = e.Uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                var isLocalContent = e.Uri.StartsWith("https://appassets.transfor/", StringComparison.OrdinalIgnoreCase)
                     || string.Equals(e.Uri, "about:blank", StringComparison.OrdinalIgnoreCase);
                 if (!isLocalContent)
                 {
@@ -66,7 +74,7 @@ internal sealed class AppShellForm : Form
             core.NewWindowRequested += (_, e) => e.Handled = true;
             // App Bridge：JSON 消息协议
             core.WebMessageReceived += OnWebMessageReceived;
-            core.NavigateToString(html);
+            core.Navigate("https://appassets.transfor/index.html");
 
             // 事件推送：下载协调器事件 → UI 线程 → PostWebMessageAsJson；
             // 随窗体生命周期挂接/摘除
@@ -94,7 +102,7 @@ internal sealed class AppShellForm : Form
         base.Dispose(disposing);
     }
 
-    // 消息桥接：请求分发到 AppBridge，响应回发 Web UI（异步不阻塞 UI 线程）
+    // 消息桥接：请求分发到 AppBridge，响应经 ExecuteScriptAsync 注入回发 Web UI
     private void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
         var requestJson = e.TryGetWebMessageAsString();
@@ -111,9 +119,12 @@ internal sealed class AppShellForm : Form
         try
         {
             var reply = await bridge.HandleAsync(requestJson);
-            if (reply is not null && !webView.IsDisposed)
+            if (reply is not null && !webView.IsDisposed && webView.CoreWebView2 is { } core)
             {
-                webView.CoreWebView2?.PostWebMessageAsJson(reply);
+                // 响应经 ExecuteScriptAsync 注入 window.__bridgeDeliver：
+                // postMessage 事件在本地 UI 页面实测不可达（JS 侧统一走 deliver 分发）
+                var script = $"window.__bridgeDeliver({System.Text.Json.JsonSerializer.Serialize(reply)})";
+                await core.ExecuteScriptAsync(script);
             }
         }
         catch

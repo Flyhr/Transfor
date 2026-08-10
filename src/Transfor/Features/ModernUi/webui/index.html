@@ -260,12 +260,12 @@ const Bridge = (() => {
   const listeners = new Map();
   const webview = window.chrome.webview;
 
-  function invoke(method, params = {}) {
+  function invoke(method, params = {}, timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
       const id = nextId++;
       pending.set(id, { resolve, reject });
       webview.postMessage(JSON.stringify({ id, method, params }));
-      setTimeout(() => { if (pending.delete(id)) reject(new Error("调用超时")); }, 15000);
+      setTimeout(() => { if (pending.delete(id)) reject(new Error("调用超时")); }, timeoutMs);
     });
   }
 
@@ -275,9 +275,10 @@ const Bridge = (() => {
     listeners.get(eventName).push(callback);
   }
 
-  webview.addEventListener("message", (e) => {
-    let msg;
-    try { msg = JSON.parse(e.data); } catch { return; }
+  // 统一消息分发：事件推送 / 请求-响应匹配
+  // （C# 响应经 ExecuteScriptAsync 注入 window.__bridgeDeliver——postMessage
+  //  事件在本地 UI 页面实测不可达；postMessage 事件监听保留作兼容）
+  function deliver(msg) {
     if (msg.event) {
       const cbs = listeners.get(msg.event);
       if (cbs) cbs.forEach((cb) => { try { cb(msg.data); } catch (err) { console.error(err); } });
@@ -290,6 +291,18 @@ const Bridge = (() => {
       if (msg.error !== undefined && msg.error !== null) entry.reject(new Error(msg.error));
       else entry.resolve(msg.result);
     }
+  }
+
+  window.__bridgeDeliver = (json) => {
+    let msg;
+    try { msg = JSON.parse(json); } catch { return; }
+    deliver(msg);
+  };
+
+  webview.addEventListener("message", (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+    deliver(msg);
   });
 
   return { invoke, on };
@@ -362,7 +375,8 @@ function assetTypeLabel(asset) {
 
 document.getElementById("media-paste").addEventListener("click", async () => {
   try {
-    const { text } = await Bridge.invoke("getClipboardText");
+    const { text, error } = await Bridge.invoke("getClipboardText");
+    if (error) { mediaStatus.textContent = error; return; }
     if (text) { mediaLink.value = text.trim(); mediaStatus.textContent = "已粘贴剪贴板内容。"; }
     else mediaStatus.textContent = "剪贴板为空。";
   } catch (e) { mediaStatus.textContent = "读取剪贴板失败：" + e.message; }
@@ -379,9 +393,9 @@ document.getElementById("media-resolve").addEventListener("click", async () => {
   // 解析开始时清空旧作品（失败/交互也不保留，防止误下载旧作品）
   resetMediaView();
   resolveButton.disabled = true;
-  mediaStatus.textContent = "解析中…";
+  mediaStatus.textContent = "解析中…（可能需要 30–60 秒，含浏览器兜底）";
   try {
-    const result = await Bridge.invoke("resolveMedia", { link });
+    const result = await Bridge.invoke("resolveMedia", { link }, 120000);
     if (result.status === "succeeded") {
       renderPost(result.post);
       mediaStatus.textContent = `解析成功：${result.post.assets.length} 个媒体。`;
@@ -429,7 +443,7 @@ function renderPost(post) {
       thumb.addEventListener("click", async () => {
         thumb.textContent = "加载中…";
         try {
-          const { dataUrl } = await Bridge.invoke("getPreview", { assetIndex: asset.index });
+          const { dataUrl } = await Bridge.invoke("getPreview", { assetIndex: asset.index }, 120000);
           thumb.innerHTML = `<img src="${dataUrl}" style="width:100%;height:100%;object-fit:contain">`;
         } catch (e) { thumb.textContent = "预览失败"; }
       });
@@ -779,7 +793,7 @@ document.getElementById("setting-save").addEventListener("click", async () => {
 document.getElementById("setting-check-update").addEventListener("click", async () => {
   settingResult.textContent = "检查中…";
   try {
-    const info = await Bridge.invoke("checkUpdate");
+    const info = await Bridge.invoke("checkUpdate", {}, 120000);
     const labels = { upToDate: "已是最新版本", optionalUpdate: "发现新版本", requiredUpdate: "需要强制更新", checkFailed: "检查失败", disabled: "更新已禁用" };
     settingResult.textContent = labels[info.status] || info.status;
   } catch (e) { settingResult.textContent = "检查失败：" + e.message; }

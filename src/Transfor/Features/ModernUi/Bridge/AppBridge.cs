@@ -56,7 +56,7 @@ internal sealed class AppBridge
                 "getSettings" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetSettings()),
                 "saveSettings" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SaveSettings(request)),
                 "checkUpdate" => await CheckUpdateAsync(request).ConfigureAwait(false),
-                "getClipboardText" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetClipboardText()),
+                "getClipboardText" => await GetClipboardTextAsync(request).ConfigureAwait(false),
                 "resolveMedia" => await ResolveMediaAsync(request).ConfigureAwait(false),
                 "getPreview" => await GetPreviewAsync(request).ConfigureAwait(false),
                 "downloadSelected" => AppBridgeProtocol.CreateSuccessResponse(request.Id, DownloadSelected(request)),
@@ -150,13 +150,25 @@ internal sealed class AppBridge
         return AppBridgeProtocol.CreateSuccessResponse(request.Id, new { status, version = AppVersion.Current });
     }
 
-    // 读取剪贴板文本（要求 UI 线程；消息处理起始线程满足）
-    private static object GetClipboardText() => new
+    // 读取剪贴板文本：后台线程 Win32 直读（OLE 剪贴板被占用时可能挂起 UI 线程），
+    // 总超时 5 秒；失败返回错误说明而非抛出（不阻塞 UI 线程、不引发调用超时）
+    private static async Task<string> GetClipboardTextAsync(BridgeRequest request)
     {
-        text = System.Windows.Forms.Clipboard.ContainsText()
-            ? System.Windows.Forms.Clipboard.GetText()
-            : string.Empty,
-    };
+        const int timeoutSeconds = 5;
+        object result;
+        try
+        {
+            var text = await Task.Run(() => ClipboardTextReader.ReadText(TimeSpan.FromSeconds(timeoutSeconds)))
+                .ConfigureAwait(false);
+            result = new { text = text ?? string.Empty, error = (string?)null };
+        }
+        catch (Exception ex)
+        {
+            result = new { text = string.Empty, error = $"读取剪贴板失败：{ex.Message}" };
+        }
+
+        return AppBridgeProtocol.CreateSuccessResponse(request.Id, result);
+    }
 
     // 解析分享链接（Automatic）：支持分享文本（经 ShareLinkParser 提取链接）；
     // 解析开始时清空旧作品状态（失败/交互不保留旧作品，防止误下载）；
