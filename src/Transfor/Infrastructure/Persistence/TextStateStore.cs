@@ -30,23 +30,65 @@ internal sealed class TextStateStore : ITextHistoryRepository
     public AppSettings Settings { get; private set; }
     public TextUiState UiState { get; private set; }
 
-    // 从磁盘加载状态；文件缺失/损坏时回退到默认设置与空历史
+    // 从磁盘加载状态；文件缺失/损坏时回退到默认设置与空历史；
+    // 语义非法（Tool 枚举非法/输入输出为 null）的历史条目逐条丢弃，不让配置文件导致启动异常
     public static TextStateStore Load(AppPaths paths)
     {
         var persistedSettings = Read(paths.SettingsFile, PersistedSettings.Default, static value => value.Validate());
         var settings = persistedSettings.ToSettings();
         var ui = Read(paths.UiStateFile, TextUiState.Default, static value => value.Validate());
-        var history = Read(paths.TextHistoryFile, Array.Empty<HistoryEntry>(), static _ => { });
+        var history = Read(paths.TextHistoryFile, Array.Empty<HistoryEntry>(), static _ => { })
+            .Where(IsValidEntry)
+            .ToArray();
         return new TextStateStore(paths, settings, ui, history);
     }
 
+    // 历史条目语义校验：Tool 枚举合法、输入/输出非 null（允许空字符串）
+    private static bool IsValidEntry(HistoryEntry entry) =>
+        Enum.IsDefined(entry.Tool)
+        && entry.OriginalInput is not null
+        && entry.ConvertedOutput is not null;
+
     public IReadOnlyList<HistoryEntry> GetHistory(TextToolId tool) => GetList(tool).AsReadOnly();
 
-    // 追加一条历史并立即落盘（同时按上限裁剪）
-    public void Add(HistoryEntry entry) { ArgumentNullException.ThrowIfNull(entry); GetList(entry.Tool).Add(entry); Trim(); SaveHistory(); }
+    // 追加一条历史并立即落盘（同时按上限裁剪）；
+    // 写入失败时恢复写入前状态（含被裁剪的旧条目）并向调用方抛出原异常
+    public void Add(HistoryEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        var list = GetList(entry.Tool);
+        var snapshot = list.ToArray();
+        list.Add(entry);
+        Trim();
+        try
+        {
+            SaveHistory();
+        }
+        catch
+        {
+            list.Clear();
+            list.AddRange(snapshot);
+            throw;
+        }
+    }
 
-    // 清空指定工具的历史并立即落盘
-    public void ClearHistory(TextToolId tool) { GetList(tool).Clear(); SaveHistory(); }
+    // 清空指定工具的历史并立即落盘；写入失败时恢复原历史
+    public void ClearHistory(TextToolId tool)
+    {
+        var list = GetList(tool);
+        var snapshot = list.ToArray();
+        list.Clear();
+        try
+        {
+            SaveHistory();
+        }
+        catch
+        {
+            list.Clear();
+            list.AddRange(snapshot);
+            throw;
+        }
+    }
 
     // 更新设置并立即落盘（同时按新上限重新裁剪历史）；
     // 任一写入失败时恢复原内存设置与裁剪结果，并向调用方抛出原异常
@@ -74,8 +116,23 @@ internal sealed class TextStateStore : ITextHistoryRepository
         }
     }
 
-    // 记录最近查看的工具并立即落盘界面状态
-    public void SetLastViewedTool(TextToolId tool) { var state = new TextUiState(tool); state.Validate(); UiState = state; SaveUiState(); }
+    // 记录最近查看的工具并立即落盘界面状态；写入失败时恢复原界面状态
+    public void SetLastViewedTool(TextToolId tool)
+    {
+        var state = new TextUiState(tool);
+        state.Validate();
+        var previous = UiState;
+        UiState = state;
+        try
+        {
+            SaveUiState();
+        }
+        catch
+        {
+            UiState = previous;
+            throw;
+        }
+    }
 
     // 全量落盘：设置 + 界面状态 + 历史
     public void Save() { SaveSettings(); SaveUiState(); SaveHistory(); }

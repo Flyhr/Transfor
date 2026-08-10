@@ -33,10 +33,22 @@ internal sealed class MediaStateStore : IMediaDownloadHistoryRepository
             settings = settings with { DownloadDirectory = Path.GetFullPath(settings.DownloadDirectory) };
         }
 
-        // 历史：缺失/损坏时为空列表，超出上限裁剪最旧批次
-        var history = JsonFileStore.TryRead<List<MediaDownloadHistoryEntry>>(paths.MediaDownloadHistoryFile) ?? new();
+        // 历史：缺失/损坏时为空列表；语义非法（Provider 枚举非法/链接为空/计数为负）条目逐条丢弃；
+        // 超出上限裁剪最旧批次
+        var history = (JsonFileStore.TryRead<List<MediaDownloadHistoryEntry>>(paths.MediaDownloadHistoryFile) ?? new())
+            .Where(IsValidEntry)
+            .ToList();
         return new MediaStateStore(paths, settings, history);
     }
+
+    // 下载历史条目语义校验：Provider 枚举合法、分享链接非空、文件列表非空、计数非负
+    private static bool IsValidEntry(MediaDownloadHistoryEntry entry) =>
+        Enum.IsDefined(entry.Provider)
+        && !string.IsNullOrWhiteSpace(entry.SourceShareLink)
+        && entry.SavedFiles is not null
+        && entry.SuccessCount >= 0
+        && entry.FailureCount >= 0
+        && entry.CancelledCount >= 0;
 
     public MediaDownloadSettings Settings
     {
@@ -49,16 +61,28 @@ internal sealed class MediaStateStore : IMediaDownloadHistoryRepository
         }
     }
 
-    // 更新设置并立即落盘（校验失败时不落盘）
+    // 更新设置并立即落盘（校验失败时不落盘）；任一写入失败时恢复原设置与裁剪前历史
     public void UpdateSettings(MediaDownloadSettings settings)
     {
         settings.Validate();
         lock (sync)
         {
+            var previousSettings = this.settings;
+            var previousHistory = history.ToArray();
             this.settings = settings with { DownloadDirectory = Path.GetFullPath(settings.DownloadDirectory) };
             TrimHistory();
-            JsonFileStore.Write(paths.MediaSettingsFile, this.settings);
-            SaveHistoryCore();
+            try
+            {
+                JsonFileStore.Write(paths.MediaSettingsFile, this.settings);
+                SaveHistoryCore();
+            }
+            catch
+            {
+                this.settings = previousSettings;
+                history.Clear();
+                history.AddRange(previousHistory);
+                throw;
+            }
         }
     }
 
@@ -70,15 +94,25 @@ internal sealed class MediaStateStore : IMediaDownloadHistoryRepository
         }
     }
 
-    // 追加一条批次历史并立即落盘（超出上限裁剪最旧批次）
+    // 追加一条批次历史并立即落盘（超出上限裁剪最旧批次）；写入失败时恢复写入前状态
     public void Add(MediaDownloadHistoryEntry entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
         lock (sync)
         {
+            var snapshot = history.ToArray();
             history.Add(entry);
             TrimHistory();
-            SaveHistoryCore();
+            try
+            {
+                SaveHistoryCore();
+            }
+            catch
+            {
+                history.Clear();
+                history.AddRange(snapshot);
+                throw;
+            }
         }
     }
 
