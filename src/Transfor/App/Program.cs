@@ -24,7 +24,7 @@ static class Program
         {
             CrashDiagnostics.Write(e.Exception);
             MessageBox.Show(
-                $"程序遇到未处理异常：{ErrorChainFormatter.Format(e.Exception)}",
+                $"程序遇到未处理异常：{ErrorChainFormatter.Format(e.Exception)}{Environment.NewLine}{Environment.NewLine}{e.Exception}",
                 "Transfor 异常",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);

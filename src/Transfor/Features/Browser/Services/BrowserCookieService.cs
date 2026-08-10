@@ -79,12 +79,19 @@ internal sealed class BrowserCookieService
     });
 
     // 统一调度到所属控件的 UI 线程（已在 UI 线程则直接执行）；
-    // CoreWebView2 成员跨线程访问会抛 COM 异常
+    // CoreWebView2 成员跨线程访问会抛 COM 异常；
+    // 句柄未创建时 BeginInvoke 会抛 InvalidOperationException——先检查再调度
     private async Task<T> RunOnUiAsync<T>(Func<Task<T>> action)
     {
         if (!owner.InvokeRequired)
         {
             return await action().ConfigureAwait(true);
+        }
+
+        if (!owner.IsHandleCreated || owner.IsDisposed)
+        {
+            // 控件句柄不可用：Cookie 操作无法安全调度，返回空结果
+            return await Task.FromResult(default(T)!).ConfigureAwait(true);
         }
 
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -107,6 +114,11 @@ internal sealed class BrowserCookieService
         if (!owner.InvokeRequired)
         {
             return action();
+        }
+
+        if (!owner.IsHandleCreated || owner.IsDisposed)
+        {
+            return Task.CompletedTask;
         }
 
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
