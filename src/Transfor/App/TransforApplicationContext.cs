@@ -117,7 +117,8 @@ internal sealed class TransforApplicationContext : ApplicationContext
             return;
         }
 
-        mainForm.Show();
+        // 旧界面（预览）不再自动显示：新界面为当前主界面，启动自动打开；
+        // 旧界面经托盘「旧界面（预览）」手动打开（显示时触发 Shown 提示快捷键问题）
 
         if (result is not null && !timedOut)
         {
@@ -152,12 +153,12 @@ internal sealed class TransforApplicationContext : ApplicationContext
         }
     }
 
-    // 构建托盘右键菜单：打开主窗口 / 新界面（预览）/ 设置 / 检查更新 / 退出
+    // 构建托盘右键菜单：新界面（主界面）/ 旧界面（预览）/ 设置 / 检查更新 / 退出
     private ContextMenuStrip CreateTrayMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("打开主窗口", null, (_, _) => ShowMainWindow());
-        menu.Items.Add("新界面（预览）", null, (_, _) => ShowAppShell());
+        menu.Items.Add("旧界面（预览）", null, (_, _) => ShowMainWindow());
+        menu.Items.Add("新界面", null, (_, _) => ShowAppShell());
         menu.Items.Add("设置", null, (_, _) => ShowSettings());
         menu.Items.Add("检查更新", null, (_, _) => _ = CheckAndPromptAsync(manual: true));
         menu.Items.Add(new ToolStripSeparator());

@@ -143,17 +143,29 @@ body {
 <div class="content">
   <section class="page active" id="page-home">
     <h1>首页</h1>
-    <p class="placeholder">快捷操作、最近记录、版本与更新状态（Phase 6 迁移）。</p>
+    <p class="placeholder">文本工具与快捷操作。</p>
     <div class="card">
-      <h3>设计系统组件预览（Phase 5 验收）</h3>
-      <div class="row"><span class="label">按钮</span>
-        <button class="btn" id="demo-toast">普通按钮</button>
-        <button class="btn btn-primary" id="demo-dialog">主按钮</button>
-        <button class="btn" id="demo-progress">进度演示</button>
+      <div style="display:flex;gap:6px;margin-bottom:12px">
+        <button class="btn btn-primary" id="tab-quote" data-panel="panel-quote">引号转换</button>
+        <button class="btn" id="tab-space" data-panel="panel-space">去除空格</button>
       </div>
-      <div class="row"><span class="label">输入框</span><input class="input" placeholder="输入框演示" style="flex:1"></div>
-      <div class="row"><span class="label">进度条</span>
-        <div class="progress" style="flex:1"><div id="demo-progress-bar" style="width:35%"></div></div>
+      <div id="panel-quote">
+        <textarea id="quote-input" class="input" style="width:100%;min-height:90px;resize:vertical" placeholder="输入包含英文或中文双引号的文本…"></textarea>
+        <div style="margin:8px 0;color:var(--text-secondary)">转换结果</div>
+        <div id="quote-output" style="white-space:pre-wrap;background:var(--hover);border-radius:6px;padding:10px;min-height:40px"></div>
+        <div style="margin-top:10px">
+          <button class="btn btn-primary" id="quote-copy">复制结果</button>
+          <span id="quote-status" style="color:var(--text-secondary);margin-left:8px"></span>
+        </div>
+      </div>
+      <div id="panel-space" style="display:none">
+        <textarea id="space-input" class="input" style="width:100%;min-height:90px;resize:vertical" placeholder="输入包含半角/全角空格的文本…"></textarea>
+        <div style="margin:8px 0;color:var(--text-secondary)">转换结果</div>
+        <div id="space-output" style="white-space:pre-wrap;background:var(--hover);border-radius:6px;padding:10px;min-height:40px"></div>
+        <div style="margin-top:10px">
+          <button class="btn btn-primary" id="space-copy">复制结果</button>
+          <span id="space-status" style="color:var(--text-secondary);margin-left:8px"></span>
+        </div>
       </div>
     </div>
   </section>
@@ -244,16 +256,6 @@ body {
 </div>
 
 <div class="toast-container" id="toast-container"></div>
-<div class="dialog-backdrop" id="dialog-backdrop">
-  <div class="dialog">
-    <h3>演示对话框</h3>
-    <p>对话框组件（Design System 之一）。</p>
-    <div class="dialog-actions">
-      <button class="btn" id="dialog-cancel">取消</button>
-      <button class="btn btn-primary" id="dialog-ok">确定</button>
-    </div>
-  </div>
-</div>
 
 <script>
 "use strict";
@@ -348,20 +350,47 @@ function toast(message, type = "") {
   setTimeout(() => el.remove(), 3000);
 }
 
-/* ===== 对话框 ===== */
-const backdrop = document.getElementById("dialog-backdrop");
-document.getElementById("demo-dialog").addEventListener("click", () => backdrop.classList.add("open"));
-document.getElementById("dialog-cancel").addEventListener("click", () => backdrop.classList.remove("open"));
-document.getElementById("dialog-ok").addEventListener("click", () => { backdrop.classList.remove("open"); toast("已确定"); });
-
-/* ===== 演示 ===== */
-document.getElementById("demo-toast").addEventListener("click", () => toast("Toast 组件演示"));
-let progressValue = 35;
-document.getElementById("demo-progress").addEventListener("click", () => {
-  progressValue = progressValue >= 100 ? 0 : progressValue + 15;
-  document.getElementById("demo-progress-bar").style.width = progressValue + "%";
-  if (progressValue >= 100) toast("进度完成");
+/* ===== 文本工具（引号转换/去除空格，点击切换） ===== */
+document.querySelectorAll("#page-home [data-panel]").forEach((tab) => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll("#page-home [data-panel]").forEach((t) => {
+      t.classList.toggle("btn-primary", t === tab);
+      t.classList.toggle("btn", t !== tab);
+    });
+    document.getElementById("panel-quote").style.display = tab.dataset.panel === "panel-quote" ? "block" : "none";
+    document.getElementById("panel-space").style.display = tab.dataset.panel === "panel-space" ? "block" : "none";
+  });
 });
+
+function setupTextTool(prefix, tool) {
+  const input = document.getElementById(prefix + "-input");
+  const output = document.getElementById(prefix + "-output");
+  const status = document.getElementById(prefix + "-status");
+  let timer = null;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      try {
+        const { output: text } = await Bridge.invoke("convertText", { tool, input: input.value }, 10000);
+        output.textContent = text;
+      } catch (e) {
+        output.textContent = "";
+        status.textContent = "转换失败：" + e.message;
+      }
+    }, 200);
+  });
+  document.getElementById(prefix + "-copy").addEventListener("click", async () => {
+    const text = output.textContent;
+    if (!text) { status.textContent = "没有可复制的内容。"; return; }
+    try {
+      await Bridge.invoke("copyTextWithHistory", { tool, input: input.value, output: text });
+      status.textContent = "已复制并记录历史。";
+      toast("已复制结果");
+    } catch (e) { status.textContent = e.message; }
+  });
+}
+setupTextTool("quote", "quote");
+setupTextTool("space", "space");
 
 /* ===== 媒体下载页（Phase 6.2） ===== */
 const mediaLink = document.getElementById("media-link");

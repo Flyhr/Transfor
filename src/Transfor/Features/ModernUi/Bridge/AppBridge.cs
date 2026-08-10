@@ -57,6 +57,8 @@ internal sealed class AppBridge
                 "saveSettings" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SaveSettings(request)),
                 "checkUpdate" => await CheckUpdateAsync(request).ConfigureAwait(false),
                 "getClipboardText" => await GetClipboardTextAsync(request).ConfigureAwait(false),
+                "convertText" => AppBridgeProtocol.CreateSuccessResponse(request.Id, ConvertText(request)),
+                "copyTextWithHistory" => AppBridgeProtocol.CreateSuccessResponse(request.Id, CopyTextWithHistory(request)),
                 "resolveMedia" => await ResolveMediaAsync(request).ConfigureAwait(false),
                 "getPreview" => await GetPreviewAsync(request).ConfigureAwait(false),
                 "downloadSelected" => AppBridgeProtocol.CreateSuccessResponse(request.Id, DownloadSelected(request)),
@@ -148,6 +150,58 @@ internal sealed class AppBridge
             _ => "unknown",
         };
         return AppBridgeProtocol.CreateSuccessResponse(request.Id, new { status, version = AppVersion.Current });
+    }
+
+    // 文本转换（纯转换，不记录历史）：tool=quote 引号转换 / space 去除空格
+    private static object ConvertText(BridgeRequest request)
+    {
+        var tool = request.GetString("tool");
+        var input = request.GetString("input") ?? string.Empty;
+        var output = tool switch
+        {
+            "quote" => QuoteConverter.Convert(input),
+            "space" => SpaceRemover.Remove(input),
+            var other => throw new ArgumentException($"非法文本工具：{other ?? "(空)"}"),
+        };
+        return new { output };
+    }
+
+    // 复制转换结果并记录转换历史（与旧界面行为一致：复制时记历史）；
+    // 先记历史（主数据），再写剪贴板（重试应对占用）
+    private object CopyTextWithHistory(BridgeRequest request)
+    {
+        var tool = request.GetString("tool");
+        var input = request.GetString("input") ?? string.Empty;
+        var output = request.GetString("output") ?? string.Empty;
+        var textTool = tool switch
+        {
+            "quote" => TextToolId.QuoteConversion,
+            "space" => TextToolId.SpaceRemoval,
+            var other => throw new ArgumentException($"非法文本工具：{other ?? "(空)"}"),
+        };
+
+        stateStore.Add(new HistoryEntry(textTool, input, output, DateTimeOffset.UtcNow));
+
+        // 剪贴板写入（要求 UI 线程；消息处理起始线程满足）
+        const int maxAttempts = 3;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                System.Windows.Forms.Clipboard.SetText(output);
+                break;
+            }
+            catch (Exception ex) when (attempt < maxAttempts)
+            {
+                System.Threading.Thread.Sleep(100);
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"复制失败：{ex.Message}");
+            }
+        }
+
+        return new { copied = true };
     }
 
     // 读取剪贴板文本：后台线程 Win32 直读（OLE 剪贴板被占用时可能挂起 UI 线程），
