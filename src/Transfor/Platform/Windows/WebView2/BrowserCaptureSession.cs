@@ -99,6 +99,29 @@ internal static class BrowserCaptureSession
     public static Task ResetAsync(CoreWebView2 core)
         => core.ExecuteScriptAsync("window.__transforDomResult = null; window.__transforDomPending = false; window.__transforFetchResult = null; window.__transforFetchPending = false;");
 
+    // 统计页面媒体候选数（触发 + 轮询，最长 10 秒）：
+    // 供新界面浏览器控件检测「当前页面检测到 X 个媒体」；必须在 UI 线程调用
+    public static async Task<int> CountPageMediaAsync(CoreWebView2 core, CancellationToken cancellationToken)
+    {
+        await ResetAsync(core).ConfigureAwait(true);
+        await TriggerDomCandidatesAsync(core).ConfigureAwait(true);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var candidates = await ReadDomCandidatesAsync(core, cancellationToken).ConfigureAwait(true);
+            if (candidates.Count > 0)
+            {
+                return candidates.Count;
+            }
+
+            await Task.Delay(500, cancellationToken).ConfigureAwait(true);
+        }
+
+        return 0;
+    }
+
     // 提取结构化数据（页面字符串）；ExecuteScriptAsync 结果按 JSON 编码反序列化；
     // ConfigureAwait(true)：本方法在 BrowserHostForm UI 线程上下文执行，
     // 统一保持线程亲和（后续若在 continuation 访问 core 不会再踩线程坑）

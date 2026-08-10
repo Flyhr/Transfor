@@ -208,7 +208,23 @@ body {
       <div id="downloads-history"></div>
     </div>
   </section>
-  <section class="page" id="page-browser"><h1>浏览器</h1><p class="placeholder">内置浏览器（Phase 6.5 迁移）。</p></section>
+  <section class="page" id="page-browser">
+    <div class="card" style="padding:10px;margin-bottom:8px">
+      <div class="row" style="margin-bottom:0">
+        <button class="btn" id="browser-back" title="后退" style="padding:4px 10px">←</button>
+        <button class="btn" id="browser-forward" title="前进" style="padding:4px 10px">→</button>
+        <button class="btn" id="browser-refresh" title="刷新" style="padding:4px 10px">⟳</button>
+        <button class="btn" id="browser-stop" title="停止" style="padding:4px 10px">×</button>
+        <input class="input" id="browser-address" placeholder="输入网址…" style="flex:1">
+        <button class="btn btn-primary" id="browser-go">前往</button>
+      </div>
+      <div id="browser-status" style="color:var(--text-secondary);font-size:12px;margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+      <div id="browser-media-hint" style="display:none;margin-top:6px">
+        <span id="browser-media-count" style="color:var(--accent);font-size:13px"></span>
+        <button class="btn" id="browser-view-media" style="padding:2px 10px;font-size:12px;margin-left:8px">查看媒体</button>
+      </div>
+    </div>
+  </section>
   <section class="page" id="page-history">
     <h1>历史</h1>
     <div class="card">
@@ -338,6 +354,8 @@ document.querySelectorAll(".nav-item").forEach((item) => {
     // 下载页激活时拉取最新任务快照；历史页激活时加载历史
     if (item.dataset.page === "downloads") refreshDownloads();
     if (item.dataset.page === "history") loadHistory();
+    // 浏览器页激活时显示浏览器控件（其余页面隐藏）
+    Bridge.invoke("setBrowserVisible", { visible: item.dataset.page === "browser" }).catch(() => {});
   });
 });
 
@@ -878,6 +896,48 @@ document.getElementById("history-clear-media").addEventListener("click", () => {
   Bridge.invoke("clearHistory", { type: "media" })
     .then(() => { toast("媒体历史已清空"); return loadHistory(); })
     .catch((e) => toast(e.message, "error"));
+});
+
+/* ===== 浏览器页（Phase 6.5） ===== */
+const browserAddress = document.getElementById("browser-address");
+const browserStatus = document.getElementById("browser-status");
+const browserMediaHint = document.getElementById("browser-media-hint");
+let browserCurrentUrl = null;
+
+function browserGo() {
+  const address = browserAddress.value.trim();
+  if (!address) { browserStatus.textContent = "请输入网址。"; return; }
+  Bridge.invoke("browserNavigate", { address }).catch((e) => { browserStatus.textContent = e.message; });
+}
+document.getElementById("browser-go").addEventListener("click", browserGo);
+browserAddress.addEventListener("keydown", (e) => { if (e.key === "Enter") { browserGo(); e.preventDefault(); } });
+document.getElementById("browser-back").addEventListener("click", () => Bridge.invoke("browserBack").catch((e) => browserStatus.textContent = e.message));
+document.getElementById("browser-forward").addEventListener("click", () => Bridge.invoke("browserForward").catch((e) => browserStatus.textContent = e.message));
+document.getElementById("browser-refresh").addEventListener("click", () => Bridge.invoke("browserRefresh").catch((e) => browserStatus.textContent = e.message));
+document.getElementById("browser-stop").addEventListener("click", () => Bridge.invoke("browserStop").catch((e) => browserStatus.textContent = e.message));
+
+Bridge.on("browserNavigated", (data) => {
+  browserCurrentUrl = data.url || browserCurrentUrl;
+  browserAddress.value = data.url || browserAddress.value;
+  document.getElementById("browser-back").disabled = !data.canGoBack;
+  document.getElementById("browser-forward").disabled = !data.canGoForward;
+  browserStatus.textContent = data.url || "";
+});
+
+Bridge.on("pageMediaDetected", (data) => {
+  if (data.count > 0) {
+    document.getElementById("browser-media-count").textContent = `当前页面检测到 ${data.count} 个媒体`;
+    browserMediaHint.style.display = "block";
+    browserMediaHint.dataset.url = data.url;
+  } else {
+    browserMediaHint.style.display = "none";
+  }
+});
+
+// 查看媒体：切到媒体页并解析当前页面地址
+document.getElementById("browser-view-media").addEventListener("click", () => {
+  const url = browserMediaHint.dataset.url || browserCurrentUrl;
+  if (url) reparseShareLink(url);
 });
 
 /* ===== 设置页（真实 Bridge 调用） ===== */

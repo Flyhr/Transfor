@@ -22,6 +22,12 @@ internal sealed class AppBridge
     // 解析会话令牌：新解析使旧结果失效（防并发解析覆盖）
     private long resolveVersion;
 
+    // 浏览器导航（AppShell 初始化互联网控件后设置）；未初始化时浏览器方法报错
+    public BrowserNavigationService? BrowserNavigation { get; set; }
+
+    // 浏览器控件显隐回调（AppShell 提供）：HTML 页面切换浏览器页时调用
+    public Action<bool>? SetBrowserVisible { get; set; }
+
     public AppBridge(
         TextStateStore stateStore,
         IUpdateService updateService,
@@ -71,6 +77,13 @@ internal sealed class AppBridge
                 "getHistory" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetHistory()),
                 "clearHistory" => AppBridgeProtocol.CreateSuccessResponse(request.Id, ClearHistory(request)),
                 "deleteHistoryEntry" => AppBridgeProtocol.CreateSuccessResponse(request.Id, DeleteHistoryEntry(request)),
+                "browserNavigate" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowserNavigate(request)),
+                "browserBack" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowserAction(() => BrowserNavigation?.Back())),
+                "browserForward" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowserAction(() => BrowserNavigation?.Forward())),
+                "browserRefresh" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowserAction(() => BrowserNavigation?.Refresh())),
+                "browserStop" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowserAction(() => BrowserNavigation?.Stop())),
+                "browserGetState" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowserGetState()),
+                "setBrowserVisible" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SetBrowserVisibleState(request)),
                 _ => AppBridgeProtocol.CreateErrorResponse(request.Id, $"未知方法：{request.Method}"),
             };
         }
@@ -191,7 +204,7 @@ internal sealed class AppBridge
                 System.Windows.Forms.Clipboard.SetText(output);
                 break;
             }
-            catch (Exception ex) when (attempt < maxAttempts)
+            catch (Exception) when (attempt < maxAttempts)
             {
                 System.Threading.Thread.Sleep(100);
             }
@@ -581,5 +594,51 @@ internal sealed class AppBridge
         }
 
         return guid;
+    }
+
+    // 浏览器导航（地址规范化在 BrowserNavigationService.Navigate 内执行并校验）
+    private object BrowserNavigate(BridgeRequest request)
+    {
+        var navigation = BrowserNavigation ?? throw new InvalidOperationException("浏览器尚未初始化。");
+        var address = request.GetString("address");
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            throw new ArgumentException("请输入网址。");
+        }
+
+        navigation.Navigate(address);
+        return new { ok = true };
+    }
+
+    // 浏览器动作（后退/前进/刷新/停止）
+    private object BrowserAction(Action action)
+    {
+        if (BrowserNavigation is null)
+        {
+            throw new InvalidOperationException("浏览器尚未初始化。");
+        }
+
+        action();
+        return new { ok = true };
+    }
+
+    // 浏览器状态（当前地址/能否后退/前进）
+    private object BrowserGetState()
+    {
+        var navigation = BrowserNavigation;
+        return new
+        {
+            url = navigation?.CurrentUrl,
+            canGoBack = navigation?.CanGoBack ?? false,
+            canGoForward = navigation?.CanGoForward ?? false,
+        };
+    }
+
+    // 浏览器控件显隐（HTML 页面切换浏览器页时调用）
+    private object SetBrowserVisibleState(BridgeRequest request)
+    {
+        var visible = request.GetBool("visible") ?? false;
+        SetBrowserVisible?.Invoke(visible);
+        return new { ok = true };
     }
 }

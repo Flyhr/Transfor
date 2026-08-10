@@ -242,6 +242,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
                     services.Media.DownloadCoordinator,
                     services.Media.State,
                     services.Media.Preview),
+                services.Browser,
                 AppPaths.Default.AppUiProfileDirectory,
                 services.Media.DownloadCoordinator);
         }

@@ -16,6 +16,9 @@ internal sealed class BrowserNavigationService
     public bool CanGoBack => core?.CanGoBack ?? false;
     public bool CanGoForward => core?.CanGoForward ?? false;
 
+    // 当前页面地址（未初始化/空白时为 null）
+    public string? CurrentUrl => core?.Source;
+
     public void Back()
     {
         if (core is { CanGoBack: true })

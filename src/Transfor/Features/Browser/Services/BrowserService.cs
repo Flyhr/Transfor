@@ -200,8 +200,8 @@ internal sealed class BrowserService : IBrowserService, IDisposable
         _ = uiOwner.Handle;
     }
 
-    // 共享环境（浏览器页与隐藏宿主共用同一 Profile）；首次创建后缓存
-    private async Task<CoreWebView2Environment> GetEnvironmentAsync()
+    // 创建/获取共享环境（浏览器页、隐藏宿主与新界面浏览器控件共用同一 Profile）；首次创建后缓存
+    internal async Task<CoreWebView2Environment> GetEnvironmentAsync()
     {
         lock (sync)
         {

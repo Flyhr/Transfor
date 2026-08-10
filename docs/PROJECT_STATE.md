@@ -6,7 +6,7 @@
 
 - **应用版本**：`0.15.0`（唯一来源：`src/Transfor/Transfor.csproj` 的 `<Version>`，SemVer）
 - **浏览器技术路线**：WebView2 已落地（浏览器页 + 隐藏宿主 + 新界面 AppWebView）；媒体解析/下载兜底为 WebView2（`WebView2BrowserSessionAccessor`，与浏览器页共享 Profile 登录态）；旧 Edge CDP 实现保留未删除、不再被实例化
-- **Phase 进度**：Phase 0（架构整理）✅ 标签 `architecture-baseline`；Phase 1（版本检查）✅；Phase 2（Velopack 自动更新）✅；Phase 3（WebView2 浏览器模块）✅；Phase 4A/4B/4C/4D ✅；Phase 5（现代 UI 基础框架）✅；Phase 6（逐页面迁移）进行中——M1（Bridge 事件推送）✅、M2（媒体解析页）✅、M3（下载管理页 + 历史页）✅ 完成于 dev；M4（浏览器页）/M5（设置+首页）未开始
+- **Phase 进度**：Phase 0（架构整理）✅ 标签 `architecture-baseline`；Phase 1（版本检查）✅；Phase 2（Velopack 自动更新）✅；Phase 3（WebView2 浏览器模块）✅；Phase 4A/4B/4C/4D ✅；Phase 5（现代 UI 基础框架）✅；Phase 6（逐页面迁移）进行中——M1（Bridge 事件推送）✅、M2（媒体解析页）✅、M3（下载管理页 + 历史页）✅、M4（浏览器页）✅ 完成于 dev；M5（设置页 + 首页收尾）未开始；Phase 7 未开始
 
 ## 一、项目概述
 

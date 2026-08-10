@@ -3,20 +3,33 @@ using Microsoft.Web.WebView2.WinForms;
 
 namespace Transfor;
 
-// 新 UI 宿主窗体（Phase 5A）：WinForms Host + AppWebView（加载本地 webui HTML）；
-// 安全隔离：AppWebView 使用独立 Profile（AppUiProfileDirectory，与互联网浏览器 Profile 严格分离）、
-// 禁止一切外部导航；Web UI 仅能经 App Bridge JSON 协议访问应用服务
+// 新 UI 宿主窗体（Phase 5A + 6.5）：WinForms Host + AppWebView（本地 webui）+ 互联网浏览器控件；
+// 安全隔离：AppWebView 使用独立 Profile（AppUiProfileDirectory）禁止外部导航，仅经 Bridge 访问服务；
+// 浏览器控件（互联网页面）使用 Browser\UserData（与隐藏宿主/媒体解析共享登录态），不挂 Bridge；
+// 浏览器控件覆盖 AppWebView 下部（顶部留 56px 给 HTML 地址栏）
 internal sealed class AppShellForm : Form
 {
+    // HTML 浏览器页顶部工具条高度（浏览器控件从此处以下覆盖）
+    private const int BrowserToolbarHeight = 56;
+
     private readonly AppBridge bridge;
+    private readonly BrowserService browserService;
     private readonly MediaDownloadCoordinator downloadCoordinator;
     private readonly string appUiProfileDirectory;
     private readonly WebView2 webView;
+    private readonly Panel browserPanel;
+    private readonly WebView2 browserWebView;
     private AppBridgeEvents? events;
+    private BrowserNavigationService? browserNavigation;
 
-    public AppShellForm(AppBridge bridge, string appUiProfileDirectory, MediaDownloadCoordinator downloadCoordinator)
+    public AppShellForm(
+        AppBridge bridge,
+        BrowserService browserService,
+        string appUiProfileDirectory,
+        MediaDownloadCoordinator downloadCoordinator)
     {
         this.bridge = bridge ?? throw new ArgumentNullException(nameof(bridge));
+        this.browserService = browserService ?? throw new ArgumentNullException(nameof(browserService));
         this.appUiProfileDirectory = appUiProfileDirectory ?? throw new ArgumentNullException(nameof(appUiProfileDirectory));
         this.downloadCoordinator = downloadCoordinator ?? throw new ArgumentNullException(nameof(downloadCoordinator));
 
@@ -26,10 +39,32 @@ internal sealed class AppShellForm : Form
         Size = new Size(1100, 720);
         Font = new Font("Microsoft YaHei UI", 10F);
 
+        // AppWebView 底层全屏；浏览器控件顶层覆盖（顶部留白给 HTML 地址栏）
+        var root = new Panel { Dock = DockStyle.Fill };
         webView = new WebView2 { Dock = DockStyle.Fill };
-        Controls.Add(webView);
+        browserPanel = new Panel { Visible = false, Location = new Point(0, BrowserToolbarHeight) };
+        browserWebView = new WebView2 { Dock = DockStyle.Fill };
+        browserPanel.Controls.Add(browserWebView);
+        root.Controls.Add(webView);
+        root.Controls.Add(browserPanel);
+        Controls.Add(root);
+        Resize += (_, _) => LayoutBrowserPanel();
+
+        // Bridge 浏览器能力：导航操作 + 页面切换显隐
+        bridge.SetBrowserVisible = visible =>
+        {
+            browserPanel.Visible = visible;
+            LayoutBrowserPanel();
+        };
 
         Load += (_, _) => InitializeAsync();
+    }
+
+    // 浏览器控件覆盖区域：窗体高度 - 顶部地址栏留白（随窗体尺寸变化）
+    private void LayoutBrowserPanel()
+    {
+        browserPanel.Width = Math.Max(0, ClientSize.Width);
+        browserPanel.Height = Math.Max(0, ClientSize.Height - BrowserToolbarHeight);
     }
 
     private async void InitializeAsync()
@@ -82,16 +117,35 @@ internal sealed class AppShellForm : Form
             events = new AppBridgeEvents(
                 downloadCoordinator,
                 webView,
-                json =>
+                json => PushEventJson(json));
+
+            // 互联网浏览器控件：共享 Browser\UserData（与隐藏宿主/媒体解析登录态互通），
+            // 不挂 Bridge；顶部 56px 留给 HTML 地址栏
+            var browserEnvironment = await browserService.GetEnvironmentAsync().ConfigureAwait(true);
+            await browserWebView.EnsureCoreWebView2Async(browserEnvironment).ConfigureAwait(true);
+            browserNavigation = new BrowserNavigationService(browserWebView.CoreWebView2);
+            bridge.BrowserNavigation = browserNavigation;
+            browserWebView.CoreWebView2.NavigationStarting += (_, e) =>
+            {
+                PushEvent("browserNavigated", new { url = e.Uri, canGoBack = browserNavigation.CanGoBack, canGoForward = browserNavigation.CanGoForward });
+            };
+            browserWebView.CoreWebView2.NavigationCompleted += async (_, e) =>
+            {
+                PushEvent("browserNavigated", new { url = browserNavigation.CurrentUrl, canGoBack = browserNavigation.CanGoBack, canGoForward = browserNavigation.CanGoForward });
+                if (e.IsSuccess && browserNavigation.CurrentUrl is { } url)
                 {
-                    if (webView.CoreWebView2 is { } eventCore)
+                    // 媒体检测：页面加载完成后统计媒体候选数并推送
+                    try
                     {
-                        var eventScript = $"window.__bridgeDeliver({System.Text.Json.JsonSerializer.Serialize(json)})";
-                        // 事件注入失败（页面销毁等）静默忽略，不影响下载批次
-                        _ = eventCore.ExecuteScriptAsync(eventScript)
-                            .ContinueWith(task => _ = task.Exception, TaskContinuationOptions.OnlyOnFaulted);
+                        var count = await BrowserCaptureSession.CountPageMediaAsync(browserWebView.CoreWebView2, CancellationToken.None).ConfigureAwait(true);
+                        PushEvent("pageMediaDetected", new { count, url });
                     }
-                });
+                    catch
+                    {
+                        // 检测失败不打扰浏览
+                    }
+                }
+            };
         }
         catch (Exception ex)
         {
@@ -99,6 +153,22 @@ internal sealed class AppShellForm : Form
             Close();
         }
     }
+
+    // 事件/响应统一推送通道：ExecuteScriptAsync 注入 window.__bridgeDeliver
+    private void PushEventJson(string json)
+    {
+        if (webView.IsDisposed || webView.CoreWebView2 is not { } core)
+        {
+            return;
+        }
+
+        var script = $"window.__bridgeDeliver({System.Text.Json.JsonSerializer.Serialize(json)})";
+        _ = core.ExecuteScriptAsync(script)
+            .ContinueWith(task => _ = task.Exception, TaskContinuationOptions.OnlyOnFaulted);
+    }
+
+    private void PushEvent(string eventName, object? data) =>
+        PushEventJson(AppBridgeProtocol.CreateEvent(eventName, data));
 
     // 窗体关闭时摘除事件推送（协调器事件不再转发）
     protected override void Dispose(bool disposing)
