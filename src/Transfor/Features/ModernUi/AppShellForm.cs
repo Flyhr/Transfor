@@ -51,10 +51,14 @@ internal sealed class AppShellForm : Form
             await webView.EnsureCoreWebView2Async(environment);
 
             var core = webView.CoreWebView2!;
-            // 安全：禁止外部导航与新窗口（本地 UI 只加载嵌入 HTML）
+            // 安全：禁止外部导航与新窗口（本地 UI 只加载嵌入 HTML）；
+            // NavigateToString 产生 data: URI——必须放行 data:/about:blank，
+            // 其余（http/https/file 等外部导航）一律拦截
             core.NavigationStarting += (_, e) =>
             {
-                if (!string.Equals(e.Uri, "about:blank", StringComparison.OrdinalIgnoreCase))
+                var isLocalContent = e.Uri.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(e.Uri, "about:blank", StringComparison.OrdinalIgnoreCase);
+                if (!isLocalContent)
                 {
                     e.Cancel = true;
                 }
