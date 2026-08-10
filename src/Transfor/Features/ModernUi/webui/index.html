@@ -157,7 +157,31 @@ body {
     </div>
   </section>
 
-  <section class="page" id="page-media"><h1>媒体下载</h1><p class="placeholder">粘贴链接解析与下载（Phase 6.2 迁移）。</p></section>
+  <section class="page" id="page-media">
+    <h1>媒体下载</h1>
+    <div class="card">
+      <div class="row" style="margin-bottom:0">
+        <input class="input" id="media-link" placeholder="粘贴抖音分享链接或直接图片/视频链接" style="flex:1">
+        <button class="btn" id="media-paste">粘贴</button>
+        <button class="btn btn-primary" id="media-resolve">解析</button>
+      </div>
+      <div id="media-status" style="color:var(--text-secondary);margin-top:8px"></div>
+    </div>
+    <div id="media-post" style="display:none">
+      <div class="card">
+        <h3 id="media-title">作品</h3>
+        <div id="media-author" style="color:var(--text-secondary);margin-bottom:8px"></div>
+        <div class="row" style="margin-bottom:0">
+          <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;cursor:pointer">
+            <input type="checkbox" id="media-select-all"> 全选
+          </label>
+          <button class="btn btn-primary" id="media-download">下载选中</button>
+          <span id="media-download-status" style="color:var(--text-secondary)"></span>
+        </div>
+      </div>
+      <div id="media-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px"></div>
+    </div>
+  </section>
   <section class="page" id="page-browser"><h1>浏览器</h1><p class="placeholder">内置浏览器（Phase 6.5 迁移）。</p></section>
   <section class="page" id="page-history"><h1>历史</h1><p class="placeholder">文本/媒体/下载历史（Phase 6.4 迁移）。</p></section>
 
@@ -284,6 +308,109 @@ document.getElementById("demo-progress").addEventListener("click", () => {
   progressValue = progressValue >= 100 ? 0 : progressValue + 15;
   document.getElementById("demo-progress-bar").style.width = progressValue + "%";
   if (progressValue >= 100) toast("进度完成");
+});
+
+/* ===== 媒体下载页（Phase 6.2） ===== */
+const mediaLink = document.getElementById("media-link");
+const mediaStatus = document.getElementById("media-status");
+const mediaPost = document.getElementById("media-post");
+const mediaGrid = document.getElementById("media-grid");
+let currentShareLink = null;
+let currentAssets = [];
+
+const roleLabels = { livephotostill: "图片 LIVE", livephotomotion: "视频 LIVE" };
+function assetTypeLabel(asset) {
+  if (asset.role === "livephotostill" || asset.role === "livephotomotion") return roleLabels[asset.role];
+  return asset.kind === "image" ? "图片" : "视频";
+}
+
+document.getElementById("media-paste").addEventListener("click", async () => {
+  try {
+    const { text } = await Bridge.invoke("getClipboardText");
+    if (text) { mediaLink.value = text.trim(); mediaStatus.textContent = "已粘贴剪贴板内容。"; }
+    else mediaStatus.textContent = "剪贴板为空。";
+  } catch (e) { mediaStatus.textContent = "读取剪贴板失败：" + e.message; }
+});
+
+const resolveButton = document.getElementById("media-resolve");
+document.getElementById("media-resolve").addEventListener("click", async () => {
+  const link = mediaLink.value.trim();
+  if (!link) { mediaStatus.textContent = "请输入链接。"; return; }
+  resolveButton.disabled = true;
+  mediaStatus.textContent = "解析中…";
+  try {
+    const result = await Bridge.invoke("resolveMedia", { link });
+    if (result.status === "succeeded") {
+      renderPost(result.post);
+      mediaStatus.textContent = `解析成功：${result.post.assets.length} 个媒体。`;
+    } else if (result.status === "requiresInteraction") {
+      mediaStatus.textContent = result.message || "需要浏览器登录后继续解析。";
+    } else {
+      mediaStatus.textContent = result.message || "解析失败。";
+    }
+  } catch (e) { mediaStatus.textContent = "解析失败：" + e.message; }
+  finally { resolveButton.disabled = false; }
+});
+
+function renderPost(post) {
+  currentShareLink = mediaLink.value.trim();
+  currentAssets = post.assets;
+  document.getElementById("media-title").textContent = post.title || "未命名作品";
+  document.getElementById("media-author").textContent = post.authorName ? "作者：" + post.authorName : "";
+  mediaGrid.innerHTML = "";
+  post.assets.forEach((asset) => {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.style.cssText = "padding:10px;margin:0;display:flex;flex-direction:column;gap:8px";
+    const thumb = document.createElement("div");
+    thumb.style.cssText = "height:110px;background:var(--hover);border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:12px;overflow:hidden";
+    thumb.textContent = asset.status === "Selected" ? "点击预览" : (asset.message || "不可下载");
+    if (asset.status === "Selected") {
+      thumb.style.cursor = "pointer";
+      thumb.addEventListener("click", async () => {
+        thumb.textContent = "加载中…";
+        try {
+          const { dataUrl } = await Bridge.invoke("getPreview", { assetIndex: asset.index });
+          thumb.innerHTML = `<img src="${dataUrl}" style="width:100%;height:100%;object-fit:contain">`;
+        } catch (e) { thumb.textContent = "预览失败"; }
+      });
+    }
+    const info = document.createElement("div");
+    info.style.cssText = "display:flex;flex-direction:column;gap:2px;font-size:12px";
+    info.innerHTML = `<div>${assetTypeLabel(asset)}${asset.width && asset.height ? ` · ${asset.width}×${asset.height}` : ""}</div>`;
+    const checkRow = document.createElement("label");
+    checkRow.style.cssText = "display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = asset.status === "Selected";
+    checkbox.disabled = asset.status !== "Selected";
+    checkRow.appendChild(checkbox);
+    checkRow.appendChild(document.createTextNode("下载"));
+    info.appendChild(checkRow);
+    card.appendChild(thumb);
+    card.appendChild(info);
+    mediaGrid.appendChild(card);
+  });
+  mediaPost.style.display = "block";
+}
+
+document.getElementById("media-select-all").addEventListener("change", (e) => {
+  mediaGrid.querySelectorAll("input[type=checkbox]").forEach((cb) => { cb.checked = e.target.checked && !cb.disabled; });
+});
+
+document.getElementById("media-download").addEventListener("click", async () => {
+  if (!currentShareLink) return;
+  const indexes = [];
+  mediaGrid.querySelectorAll(".card").forEach((card, i) => {
+    const cb = card.querySelector("input[type=checkbox]");
+    if (cb && cb.checked && !cb.disabled) indexes.push(i);
+  });
+  if (indexes.length === 0) { document.getElementById("media-download-status").textContent = "请先勾选要下载的媒体。"; return; }
+  try {
+    const { accepted } = await Bridge.invoke("downloadSelected", { shareLink: currentShareLink, assets: indexes });
+    document.getElementById("media-download-status").textContent = `已加入下载队列：${accepted} 个媒体。`;
+    toast(`已加入下载队列：${accepted} 个媒体`);
+  } catch (e) { document.getElementById("media-download-status").textContent = "下载失败：" + e.message; }
 });
 
 /* ===== 设置页（真实 Bridge 调用） ===== */

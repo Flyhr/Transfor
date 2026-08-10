@@ -232,7 +232,13 @@ internal sealed class TransforApplicationContext : ApplicationContext
         if (appShell is null || appShell.IsDisposed)
         {
             appShell = new AppShellForm(
-                new AppBridge(historyStore, updatesService),
+                new AppBridge(
+                    historyStore,
+                    updatesService,
+                    services.Media.ResolveCoordinator,
+                    services.Media.DownloadCoordinator,
+                    services.Media.State,
+                    services.Media.Preview),
                 AppPaths.Default.AppUiProfileDirectory,
                 services.Media.DownloadCoordinator);
         }
