@@ -196,10 +196,11 @@ body {
 
 <script>
 "use strict";
-/* ===== App Bridge（Phase 5B）：JSON 消息协议 ===== */
+/* ===== App Bridge（Phase 5B/6M1）：JSON 消息协议 + 事件订阅 ===== */
 const Bridge = (() => {
   let nextId = 1;
   const pending = new Map();
+  const listeners = new Map();
   const webview = window.chrome.webview;
 
   function invoke(method, params = {}) {
@@ -211,9 +212,20 @@ const Bridge = (() => {
     });
   }
 
+  // 订阅 C# 推送事件（如 downloadProgress / taskCompleted / batchCompleted）
+  function on(eventName, callback) {
+    if (!listeners.has(eventName)) listeners.set(eventName, []);
+    listeners.get(eventName).push(callback);
+  }
+
   webview.addEventListener("message", (e) => {
     let msg;
     try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.event) {
+      const cbs = listeners.get(msg.event);
+      if (cbs) cbs.forEach((cb) => { try { cb(msg.data); } catch (err) { console.error(err); } });
+      return;
+    }
     if (msg.id !== undefined && msg.id !== null) {
       const entry = pending.get(msg.id);
       if (!entry) return;
@@ -223,7 +235,7 @@ const Bridge = (() => {
     }
   });
 
-  return { invoke };
+  return { invoke, on };
 })();
 
 /* ===== 主题（Phase 5D）：跟随系统 + 手动切换 ===== */

@@ -9,13 +9,16 @@ namespace Transfor;
 internal sealed class AppShellForm : Form
 {
     private readonly AppBridge bridge;
+    private readonly MediaDownloadCoordinator downloadCoordinator;
     private readonly string appUiProfileDirectory;
     private readonly WebView2 webView;
+    private AppBridgeEvents? events;
 
-    public AppShellForm(AppBridge bridge, string appUiProfileDirectory)
+    public AppShellForm(AppBridge bridge, string appUiProfileDirectory, MediaDownloadCoordinator downloadCoordinator)
     {
         this.bridge = bridge ?? throw new ArgumentNullException(nameof(bridge));
         this.appUiProfileDirectory = appUiProfileDirectory ?? throw new ArgumentNullException(nameof(appUiProfileDirectory));
+        this.downloadCoordinator = downloadCoordinator ?? throw new ArgumentNullException(nameof(downloadCoordinator));
 
         Text = "Transfor";
         StartPosition = FormStartPosition.CenterScreen;
@@ -60,12 +63,31 @@ internal sealed class AppShellForm : Form
             // App Bridge：JSON 消息协议
             core.WebMessageReceived += OnWebMessageReceived;
             core.NavigateToString(html);
+
+            // 事件推送：下载协调器事件 → UI 线程 → PostWebMessageAsJson；
+            // 随窗体生命周期挂接/摘除
+            events = new AppBridgeEvents(
+                downloadCoordinator,
+                webView,
+                json => webView.CoreWebView2?.PostWebMessageAsJson(json));
         }
         catch (Exception ex)
         {
             MessageBox.Show(this, $"新界面初始化失败：{ex.Message}", "Transfor", MessageBoxButtons.OK, MessageBoxIcon.Error);
             Close();
         }
+    }
+
+    // 窗体关闭时摘除事件推送（协调器事件不再转发）
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            events?.Dispose();
+            events = null;
+        }
+
+        base.Dispose(disposing);
     }
 
     // 消息桥接：请求分发到 AppBridge，响应回发 Web UI（异步不阻塞 UI 线程）

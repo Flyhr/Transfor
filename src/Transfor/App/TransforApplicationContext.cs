@@ -225,14 +225,16 @@ internal sealed class TransforApplicationContext : ApplicationContext
         settings.ShowDialog(mainForm.Visible ? mainForm : null);
     }
 
-    // 打开新界面宿主（Phase 5 预览）：Web UI + App Bridge；独立 Profile 与互联网浏览器隔离
+    // 打开新界面宿主（Phase 5 预览）：Web UI + App Bridge；独立 Profile 与互联网浏览器隔离；
+    // 下载协调器事件经 Bridge 推送（随窗体生命周期挂接）
     private void ShowAppShell()
     {
         if (appShell is null || appShell.IsDisposed)
         {
             appShell = new AppShellForm(
                 new AppBridge(historyStore, updatesService),
-                AppPaths.Default.AppUiProfileDirectory);
+                AppPaths.Default.AppUiProfileDirectory,
+                services.Media.DownloadCoordinator);
         }
 
         appShell.Show();
