@@ -32,7 +32,8 @@ internal sealed class UpdateService : IUpdateService
         {
             // 保留完整异常链（HttpRequestException → IOException → SocketException），便于诊断
             var error = ErrorChainFormatter.Format(ex);
-            AppLog.Update.Warn($"更新检查失败：{error}");
+            var category = ErrorClassifier.Classify(ex, ErrorCategory.Update);
+            AppLog.Update.Warn($"[{category}] 更新检查失败：{error}");
             return new UpdateCheckResult(UpdateStatus.CheckFailed, current, null, null, null, error);
         }
 

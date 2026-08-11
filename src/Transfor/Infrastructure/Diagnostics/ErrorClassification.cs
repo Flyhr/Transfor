@@ -18,16 +18,22 @@ internal sealed record TransforError(ErrorCategory Category, string Message, str
 {
     public static TransforError From(Exception exception, ErrorCategory? category = null)
     {
-        var resolved = category ?? ErrorClassifier.Classify(exception);
+        var resolved = ErrorClassifier.Classify(exception, category);
         return new TransforError(resolved, exception.Message, ErrorChainFormatter.Format(exception));
     }
 }
 
-// 异常 → 分类（纯函数，可离线测试）
+// 异常 → 分类（纯函数，可离线测试）：
+// 优先使用调用方上下文分类（浏览器/更新边界按语义标注），其次按异常类型判定
 internal static class ErrorClassifier
 {
-    public static ErrorCategory Classify(Exception exception)
+    public static ErrorCategory Classify(Exception exception, ErrorCategory? context = null)
     {
+        if (context is not null)
+        {
+            return context.Value;
+        }
+
         return exception switch
         {
             HttpRequestException or System.Net.Sockets.SocketException or System.IO.IOException or TimeoutException

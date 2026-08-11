@@ -200,7 +200,7 @@ dotnet run --project tests/Transfor.Tests
    git tag v0.15.0 && git push origin v0.15.0
    ```
 
-3. 工作流 `release.yml` 自动执行：测试 → 发布（自包含 win-x64）→ `vpk` 打包（Setup.exe / nupkg / RELEASES）→ 创建 GitHub Release 并上传；
+3. 工作流 `release.yml` 自动执行：发布（自包含 win-x64）→ `vpk` 打包（Setup.exe / nupkg / RELEASES）→ 创建 GitHub Release 并上传；CI 不执行断言测试——**发布前必须在本地跑全量测试**（见下方检查清单）；
 4. 客户端从 GitHub Releases 拉取更新包完成升级（Velopack 负责下载/安装/重启，应用不覆盖运行中的 EXE；更新包完整性由 Velopack 校验）。
 
 ### 发布前检查清单

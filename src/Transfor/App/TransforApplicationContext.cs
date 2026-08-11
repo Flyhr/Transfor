@@ -61,15 +61,16 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
         // 启动预初始化隐藏宿主：统一线程锚点 = 主窗体，在构造器（STA 主线程 = UI 线程）
         // 同步创建，消灭首次解析的懒初始化竞态与跨线程风险；
-        // 失败不阻断启动（解析/下载时给出明确提示）
+        // 失败不阻断启动（记录脱敏日志；解析/下载时给出明确提示）
         try
         {
             services.Browser.UiAnchor = mainForm;
             services.Browser.EnsureHostCoreAsync(CancellationToken.None).GetAwaiter().GetResult();
         }
-        catch
+        catch (Exception hostEx)
         {
-            // 浏览器宿主不可用不阻断应用启动；相关功能在解析时给出明确提示
+            var category = ErrorClassifier.Classify(hostEx, ErrorCategory.Browser);
+            AppLog.Browser.Warn($"[{category}] 浏览器隐藏宿主初始化失败：{hostEx.Message}");
         }
 
         // 创建系统托盘图标：关闭主窗口后进程驻留托盘
@@ -92,8 +93,16 @@ internal sealed class TransforApplicationContext : ApplicationContext
         // 主窗体延迟显示：先完成启动更新检查——
         // 强制更新时不进入主业务界面，直接进入阻断更新循环；其余情况正常显示
         _ = ShowAfterStartupCheckAsync();
-        // 新界面为当前主界面：启动即打开（主窗体保留作托盘/热键载体与旧界面入口）
-        ShowAppShell();
+        // 新界面为当前主界面：启动即打开（主窗体保留作托盘/热键载体与旧界面入口）；
+        // WebView2 Runtime 缺失时降级为旧界面（不依赖 WebView2 的入口）
+        if (webView2Available)
+        {
+            ShowAppShell();
+        }
+        else
+        {
+            ShowMainWindow();
+        }
     }
 
     // 启动流程：后台检查更新（最多等待 timeout）；强制更新 → 不显示主窗体直接进入阻断循环；
@@ -225,8 +234,10 @@ internal sealed class TransforApplicationContext : ApplicationContext
         mainForm.Activate();
     }
 
-    // WebView2 Runtime 启动检查（Phase 7 Task 7.4）：缺失时托盘气泡提示一次，
-    // 不弹模态框、不阻断启动；浏览器页与解析兜底已有各自的降级提示
+    // WebView2 Runtime 启动检查（Phase 7 Task 7.4）：缺失时记录日志 + 托盘气泡提示一次，
+    // 并标记现代界面不可用（启动与 ShowAppShell 均降级为旧界面，不弹模态、不阻断启动）
+    private bool webView2Available = true;
+
     private void CheckWebView2Runtime()
     {
         try
@@ -241,11 +252,12 @@ internal sealed class TransforApplicationContext : ApplicationContext
             // Runtime 未安装时 GetAvailableBrowserVersionString 抛异常，视为缺失
         }
 
-        AppLog.Browser.Warn("未检测到 WebView2 Runtime");
+        webView2Available = false;
+        AppLog.Browser.Warn("未检测到 WebView2 Runtime：现代界面降级为旧界面");
         trayIcon.ShowBalloonTip(
             5000,
             "Transfor",
-            "未检测到 WebView2 Runtime：浏览器页与部分解析功能不可用（Windows 11 已内置）。",
+            "未检测到 WebView2 Runtime：现代界面不可用，已使用旧界面（浏览器与部分解析功能受限）。",
             ToolTipIcon.Warning);
     }
 
@@ -260,6 +272,13 @@ internal sealed class TransforApplicationContext : ApplicationContext
     // 下载协调器事件经 Bridge 推送（随窗体生命周期挂接）
     private void ShowAppShell()
     {
+        // Runtime 缺失时降级为旧界面（现代界面依赖 WebView2）
+        if (!webView2Available)
+        {
+            ShowMainWindow();
+            return;
+        }
+
         if (appShell is null || appShell.IsDisposed)
         {
             appShell = new AppShellForm(

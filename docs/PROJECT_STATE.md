@@ -1,6 +1,6 @@
 # Transfor 项目状态备忘（上下文压缩用）
 
-> 用途：供 AI 与开发者快速恢复项目记忆。更新日期：2026-08-07。
+> 用途：供 AI 与开发者快速恢复项目记忆。更新日期：2026-08-11。
 
 ## 〇、当前版本与路线
 
@@ -72,16 +72,16 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 
 ## 五、当前状态
 
-- **最新提交**：Phase 5 现代 UI 基础框架（dev 分支，未推送）
-- **测试**：774 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
+- **最新提交**：Phase 7 发布与稳定性（dev 分支，未推送；Phase 0–7 全部完成）
+- **测试**：946+ 断言全过（`dotnet run --project tests/Transfor.Tests`）；构建 0 警告 0 错误
 - **版本**：0.15.0（csproj `<Version>`，唯一来源）
 - **更新体系**：检查走 update-policy.json（GitHub raw `Release` 分支）；下载/安装/重启走 Velopack（GithubSource，Beta 通道读预发布）；`vpk pack -c stable|beta` 已实测通过
 - **浏览器（Phase 3/4A/4B/4C）**：WebView2 1.0.4129.50，独立 Profile `Browser\UserData`；浏览器页 + 隐藏宿主共用登录态；解析/下载兜底 WebView2BrowserSessionAccessor；4B 网络捕获 + MediaSniffer 白名单嗅探；4C CDP 详情接口响应体
-- **新界面（Phase 5/6）**：启动即主界面；宿主布局 = C# 侧边栏（200px：导航/主题/版本，双向高亮同步）+ 内容区（AppWebView 本地 UI + 浏览器控件叠放仅覆盖内容区，导航始终可达）；已迁移页面：首页文本工具（M2 后补）、媒体解析（M2）、下载管理+历史（M3）、浏览器（M4：内嵌互联网 WebView2 共享登录态 + 地址栏容错 + 媒体检测含尺寸/噪音过滤 + 初始化失败隔离）、历史（M3）、设置（部分）
+- **新界面（Phase 5/6）**：启动即主界面（Runtime 缺失降级旧界面）；宿主布局 = C# 侧边栏（200px：导航/主题/版本，双向高亮同步）+ 内容区（AppWebView 本地 UI + 浏览器控件叠放仅覆盖内容区）；已迁移页面：首页（文本工具/快捷操作/最近记录/版本状态）、媒体解析、下载管理+历史、浏览器（内嵌互联网 WebView2 + 地址栏容错 + 媒体检测过滤 + 初始化隔离）、历史、设置（常规/下载/网络/快捷键/浏览器数据/更新/外观，完整可编辑）
 - **下载快照（M2 审查修复）**：MediaDownloadCoordinator.GetSnapshot（DownloadSnapshot：等待/下载中/已落定 + 进度 + 终态），CancelTask 支持排队批次（出队落定不写历史）；CreateRetryTask（进程内重试候选：复用 Asset/Variant，仅活动批次内有效）；TaskRuntime 保留 SourceShareLink/AssetIndex/Post；DownloadFileNameBuilder.BuildFileName（自 MediaDownloadPage 迁移，Bridge 与 WinForms 页共用同一命名规则）
 - **诊断目录**：`%TEMP%\Transfor\diagnostics\`（解析完成 capture-*.json + 下载失败 failed-media-* + 崩溃 crash-*.txt）；**日志**：`%TEMP%\Transfor\logs\`（五类分类，1MB 轮转保留 5 个；敏感数据 Cookie/Token/认证头禁写）
 - **Phase 7**：AppLog 分类日志（关键路径接入）；ErrorCategory/TransforError/ErrorClassifier（Network/Parse/Browser/Download/Update/Permission）；WebView2 Runtime 启动检查（托盘气泡提示一次）；崩溃恢复确认（状态文件损坏回退/浏览器初始化隔离/退出取消下载）；下载安全（SafeHttpRequestSender）与更新完整性（Velopack 校验）验收确认；发布检查清单入 README
-- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新包未做代码签名；WebView2 媒体预取未实现；Edge CDP 保留未删除；新界面为预览（业务页 Phase 6 迁移）；webui 单文件嵌入（改 UI 需重新编译）
+- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新包未做代码签名；WebView2 媒体预取未实现；Edge CDP 保留未删除；webui 单文件嵌入（改 UI 需重新编译）
 
 ## 六、开发注意事项（坑）
 

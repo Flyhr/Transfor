@@ -101,7 +101,8 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
         catch (Exception ex)
         {
             var error = ErrorChainFormatter.Format(ex);
-            AppLog.MediaResolve.Error($"浏览器捕获失败：{error}", ex);
+            var category = ErrorClassifier.Classify(ex, ErrorCategory.Browser);
+            AppLog.MediaResolve.Error($"[{category}] 浏览器捕获失败：{error}", ex);
             return new BrowserCaptureResult(null, null, null, Array.Empty<BrowserCapturedCandidate>(), BrowserCaptureStatus.Failed, error);
         }
     }
@@ -177,7 +178,10 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
         }
         catch (Exception ex)
         {
-            return BrowserDownloadResult.Failed(ErrorChainFormatter.Format(ex));
+            var error = ErrorChainFormatter.Format(ex);
+            var category = ErrorClassifier.Classify(ex, ErrorCategory.Browser);
+            AppLog.Download.Error($"[{category}] 浏览器下载失败：{error}", ex);
+            return BrowserDownloadResult.Failed(error);
         }
         finally
         {
