@@ -1,3 +1,5 @@
+using Microsoft.Web.WebView2.Core;
+
 namespace Transfor;
 
 // 应用级上下文：持有主窗口、历史面板、托盘图标与全局热键，并协调它们之间的跳转
@@ -82,6 +84,8 @@ internal sealed class TransforApplicationContext : ApplicationContext
         trayIcon.DoubleClick += (_, _) => ShowMainWindow();
         // 按下全局快捷键时，在鼠标附近呼出历史面板
         hotKeyManager.HotKeyPressed += (_, _) => ShowHistoryPanel();
+
+        CheckWebView2Runtime();
 
         RegisterSavedHotKey();
         mainForm.Shown += MainForm_Shown;
@@ -219,6 +223,30 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
         mainForm.BringToFront();
         mainForm.Activate();
+    }
+
+    // WebView2 Runtime 启动检查（Phase 7 Task 7.4）：缺失时托盘气泡提示一次，
+    // 不弹模态框、不阻断启动；浏览器页与解析兜底已有各自的降级提示
+    private void CheckWebView2Runtime()
+    {
+        try
+        {
+            if (CoreWebView2Environment.GetAvailableBrowserVersionString() is not null)
+            {
+                return;
+            }
+        }
+        catch
+        {
+            // Runtime 未安装时 GetAvailableBrowserVersionString 抛异常，视为缺失
+        }
+
+        AppLog.Browser.Warn("未检测到 WebView2 Runtime");
+        trayIcon.ShowBalloonTip(
+            5000,
+            "Transfor",
+            "未检测到 WebView2 Runtime：浏览器页与部分解析功能不可用（Windows 11 已内置）。",
+            ToolTipIcon.Warning);
     }
 
     // 以模态对话框打开设置窗口（主窗口不可见时以无所有者方式弹出）

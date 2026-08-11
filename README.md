@@ -181,6 +181,14 @@ dotnet run --project src/Transfor
 dotnet run --project tests/Transfor.Tests
 ```
 
+## 日志与诊断（Phase 7）
+
+- 分类日志：`%TEMP%\Transfor\logs\`（application/update/browser/media-resolve/download，按天分文件 + 1MB 轮转保留近 5 个）
+- 诊断文件：`%TEMP%\Transfor\diagnostics\`（解析现场 capture-*.json、崩溃 crash-*.txt）
+- **敏感数据约定**：Cookie/Token/完整认证头禁止写入日志
+- WebView2 Runtime 缺失：启动时检测并托盘气泡提示一次（不阻断启动；浏览器页与解析兜底有各自降级提示）
+- 错误分类：Network/Parse/Browser/Download/Update/Permission/Unknown（关键路径标注，UI 显示用户可读信息，日志保存技术细节）
+
 ## 发布流程（Phase 2）
 
 发布在 `Release` 分支完成，由 GitHub Actions 自动打包：
@@ -193,7 +201,15 @@ dotnet run --project tests/Transfor.Tests
    ```
 
 3. 工作流 `release.yml` 自动执行：测试 → 发布（自包含 win-x64）→ `vpk` 打包（Setup.exe / nupkg / RELEASES）→ 创建 GitHub Release 并上传；
-4. 客户端从 GitHub Releases 拉取更新包完成升级（Velopack 负责下载/安装/重启，应用不覆盖运行中的 EXE）。
+4. 客户端从 GitHub Releases 拉取更新包完成升级（Velopack 负责下载/安装/重启，应用不覆盖运行中的 EXE；更新包完整性由 Velopack 校验）。
+
+### 发布前检查清单
+
+- [ ] `src/Transfor/Transfor.csproj` 的 `<Version>` 与 tag 版本一致
+- [ ] `update-policy.json` 的 `latestVersion`/`minimumVersion`/说明已更新（两个通道）
+- [ ] 全量测试通过（`dotnet run --project tests/Transfor.Tests`）
+- [ ] `dotnet build Transfor.slnx` 0 警告 0 错误
+- [ ] 浏览器相关改动真机验证（测试 fakes 无法覆盖真实 WebView2 行为）
 
 ## 使用说明
 

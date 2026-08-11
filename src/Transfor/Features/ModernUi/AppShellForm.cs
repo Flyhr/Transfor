@@ -357,11 +357,13 @@ internal sealed class AppShellForm : Form
             catch (Exception browserEx)
             {
                 // 浏览器不可用不影响新界面其他功能（文本工具/下载/历史照常）
+                AppLog.Browser.Warn($"浏览器初始化失败：{browserEx.Message}");
                 PushEvent("browserUnavailable", new { message = browserEx.Message });
             }
         }
         catch (Exception ex)
         {
+            AppLog.Browser.Error($"新界面初始化失败：{ex.Message}", ex);
             MessageBox.Show(this, $"新界面初始化失败：{ex.Message}", "Transfor", MessageBoxButtons.OK, MessageBoxIcon.Error);
             Close();
         }

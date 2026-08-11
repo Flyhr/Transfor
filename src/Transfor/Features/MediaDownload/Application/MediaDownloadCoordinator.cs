@@ -290,6 +290,7 @@ internal sealed class MediaDownloadCoordinator : IDisposable
                 results.Count(r => r.Status == MediaDownloadStatus.Cancelled),
                 DateTimeOffset.UtcNow);
             stateStore.Add(entry);
+            AppLog.Download.Info($"批次 {batch.Id:N} 落定：成功 {results.Count(r => r.Status == MediaDownloadStatus.Succeeded)} / 失败 {results.Count(r => r.Status == MediaDownloadStatus.Failed)} / 取消 {results.Count(r => r.Status == MediaDownloadStatus.Cancelled)}");
             BatchCompleted?.Invoke(this, batch.Id);
             // 下载后打开目录设置：批次有成功文件时打开对应目录一次（尽力而为）
             TryOpenFolderOnBatchComplete(results);

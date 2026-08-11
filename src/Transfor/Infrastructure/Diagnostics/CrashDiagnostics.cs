@@ -8,6 +8,7 @@ internal static class CrashDiagnostics
     {
         try
         {
+            AppLog.Application.Error("未处理异常", exception);
             var directory = Path.Combine(Path.GetTempPath(), "Transfor", "diagnostics");
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, $"crash-{DateTime.Now:yyyyMMdd-HHmmss-fff}.txt");
