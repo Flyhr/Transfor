@@ -170,6 +170,7 @@ const mediaPost = document.getElementById("media-post");
 const mediaGrid = document.getElementById("media-grid");
 let currentShareLink = null;
 let currentAssets = [];
+const previewCache = new Map();
 // 默认全选设置（媒体页解析后按此勾选；初始化时从 getSettings 加载）
 let defaultSelectAllSetting = true;
 
@@ -179,12 +180,18 @@ function assetTypeLabel(asset) {
   return asset.kind === "image" ? "图片" : "视频";
 }
 
+function extractShareUrl(text) {
+  const match = String(text || "").match(/https?:\/\/[^\s]+/i);
+  return match ? match[0].replace(/[，。、“”]+$/g, "") : "";
+}
+
 document.getElementById("media-paste").addEventListener("click", async () => {
   try {
     const { text, error } = await Bridge.invoke("getClipboardText");
     if (error) { mediaStatus.textContent = error; return; }
-    if (text) { mediaLink.value = text.trim(); mediaStatus.textContent = "已粘贴剪贴板内容。"; }
-    else mediaStatus.textContent = "剪贴板为空。";
+    const shareUrl = extractShareUrl(text);
+    if (shareUrl) { mediaLink.value = shareUrl; mediaStatus.textContent = "已粘贴链接。"; }
+    else { mediaLink.value = ""; mediaStatus.textContent = text ? "剪贴板中未找到链接。" : "剪贴板为空。"; }
   } catch (e) { mediaStatus.textContent = "读取剪贴板失败：" + e.message; }
 });
 
@@ -194,8 +201,9 @@ const downloadStatus = document.getElementById("media-download-status");
 let activeBatch = null; // { batchId, total, done }
 
 document.getElementById("media-resolve").addEventListener("click", async () => {
-  const link = mediaLink.value.trim();
-  if (!link) { mediaStatus.textContent = "请输入链接。"; return; }
+  const link = extractShareUrl(mediaLink.value);
+  mediaLink.value = link;
+  if (!link) { mediaStatus.textContent = "请输入有效链接。"; return; }
   // 解析开始时清空旧作品（失败/交互也不保留，防止误下载旧作品）
   resetMediaView();
   resolveButton.disabled = true;
@@ -204,7 +212,7 @@ document.getElementById("media-resolve").addEventListener("click", async () => {
     const result = await Bridge.invoke("resolveMedia", { link }, 120000);
     if (result.status === "succeeded") {
       renderPost(result.post);
-      mediaStatus.textContent = `解析成功：${result.post.assets.length} 个媒体。`;
+      mediaStatus.textContent = "";
     } else if (result.status === "requiresInteraction") {
       mediaStatus.textContent = result.message || "需要浏览器登录后继续解析。";
     } else {
@@ -217,9 +225,11 @@ document.getElementById("media-resolve").addEventListener("click", async () => {
 function resetMediaView() {
   currentShareLink = null;
   currentAssets = [];
+  previewCache.clear();
   mediaPost.style.display = "none";
   mediaGrid.innerHTML = "";
   document.getElementById("media-select-all").checked = false;
+  document.getElementById("media-selection-count").textContent = "已选择 0 / 0";
   downloadStatus.textContent = "";
   activeBatch = null;
 }
@@ -231,7 +241,7 @@ function formatBytes(bytes) {
 }
 
 function renderPost(post) {
-  currentShareLink = mediaLink.value.trim();
+  currentShareLink = extractShareUrl(mediaLink.value);
   currentAssets = post.assets;
   const mediaCount = document.getElementById("media-count");
   if (mediaCount) mediaCount.textContent = String(post.assets.length);
@@ -240,33 +250,57 @@ function renderPost(post) {
   mediaGrid.innerHTML = "";
   const previewLoaders = [];
   post.assets.forEach((asset) => {
-    const card = document.createElement("div");
+    const card = document.createElement("article");
     card.className = "media-card";
-    card.style.cssText = "padding:10px;margin:0;display:flex;flex-direction:column;gap:8px";
+    card.dataset.assetIndex = String(asset.index);
     const thumb = document.createElement("div");
     thumb.className = "media-thumbnail";
-    thumb.style.cssText = "height:120px;background:var(--hover);border-radius:8px 8px 0 0;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:12px;overflow:hidden";
+    const preview = document.createElement("div");
+    preview.className = "media-preview";
     const canPreview = asset.kind === "image" && asset.status === "Selected";
-    thumb.textContent = canPreview ? "加载预览…" : (asset.status !== "Selected" ? (asset.message || "不可下载") : (asset.kind === "video" ? "视频" : "图片"));
+    preview.textContent = canPreview ? "加载预览…" : (asset.status !== "Selected" ? (asset.message || "不可下载") : (asset.kind === "video" ? "视频" : "图片"));
+    thumb.appendChild(preview);
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "media-card-checkbox";
+    checkbox.checked = defaultSelectAllSetting && asset.status === "Selected";
+    checkbox.disabled = asset.status !== "Selected";
+    checkbox.setAttribute("aria-label", `选择第 ${asset.index + 1} 个媒体`);
+    checkbox.addEventListener("change", updateMediaSelectionCount);
+    thumb.appendChild(checkbox);
+    const badge = document.createElement("span");
+    badge.className = "media-badge";
+    badge.textContent = assetTypeLabel(asset);
+    thumb.appendChild(badge);
     if (canPreview) {
       thumb.style.cursor = "pointer";
-      thumb.addEventListener("click", () => loadPreview(thumb, asset.index));
-      previewLoaders.push({ thumb, assetIndex: asset.index });
+      thumb.addEventListener("click", (event) => {
+        if (event.target === checkbox) return;
+        loadPreview(preview, asset.index);
+      });
+      previewLoaders.push({ preview, assetIndex: asset.index });
     }
     const info = document.createElement("div");
     info.className = "media-card-info";
-    info.style.cssText = "display:flex;flex-direction:column;gap:4px;font-size:12px";
-    const sizeText = asset.contentLength ? ` · ${formatBytes(asset.contentLength)}` : "";
-    info.innerHTML = `<div>${assetTypeLabel(asset)}${asset.width && asset.height ? ` · ${asset.width}×${asset.height}` : ""}${sizeText}</div>`;
-    const checkRow = document.createElement("label");
-    checkRow.style.cssText = "display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = defaultSelectAllSetting && asset.status === "Selected";
-    checkbox.disabled = asset.status !== "Selected";
-    checkRow.appendChild(checkbox);
-    checkRow.appendChild(document.createTextNode("下载"));
-    info.appendChild(checkRow);
+    const title = document.createElement("strong");
+    title.className = "media-card-title";
+    title.textContent = asset.title || asset.name || `${assetTypeLabel(asset)} ${asset.index + 1}`;
+    const metadata = document.createElement("span");
+    metadata.className = "media-card-meta";
+    const details = [assetTypeLabel(asset)];
+    if (asset.width && asset.height) details.push(`${asset.width}×${asset.height}`);
+    if (asset.duration) details.push(formatDuration(asset.duration));
+    if (asset.contentLength) details.push(formatBytes(asset.contentLength));
+    metadata.textContent = details.join(" · ");
+    info.appendChild(title);
+    info.appendChild(metadata);
+    const cardDownload = document.createElement("button");
+    cardDownload.type = "button";
+    cardDownload.className = "btn media-card-download";
+    cardDownload.textContent = "下载";
+    cardDownload.disabled = asset.status !== "Selected";
+    cardDownload.addEventListener("click", () => downloadSingleAsset(asset, cardDownload));
+    info.appendChild(cardDownload);
     card.appendChild(thumb);
     card.appendChild(info);
     mediaGrid.appendChild(card);
@@ -274,9 +308,7 @@ function renderPost(post) {
   mediaPost.style.display = "block";
 
   // 全选控件与卡片勾选状态同步（可选媒体默认全勾选）
-  const selectAll = document.getElementById("media-select-all");
-  const boxes = mediaGrid.querySelectorAll("input[type=checkbox]");
-  selectAll.checked = boxes.length > 0 && [...boxes].every((cb) => cb.checked || cb.disabled);
+  updateMediaSelectionCount();
 
   // 图片预览默认自动加载（节流：每次并发 2 个，避免多图作品瞬间大 JSON 传输）
   loadPreviewsSequential(previewLoaders);
@@ -288,33 +320,77 @@ async function loadPreviewsSequential(loaders) {
   const workers = Array.from({ length: Math.min(concurrency, loaders.length) }, async () => {
     while (index < loaders.length) {
       const item = loaders[index++];
-      await loadPreview(item.thumb, item.assetIndex);
+      await loadPreview(item.preview, item.assetIndex);
     }
   });
   await Promise.all(workers);
 }
 
-async function loadPreview(thumb, assetIndex) {
-  if (thumb.dataset.loaded) return;
-  thumb.dataset.loaded = "1";
-  thumb.textContent = "加载中…";
+async function loadPreview(preview, assetIndex) {
+  if (preview.dataset.loaded) return;
+  preview.dataset.loaded = "1";
+  preview.textContent = "加载中…";
   try {
     const { dataUrl } = await Bridge.invoke("getPreview", { assetIndex }, 120000);
-    thumb.innerHTML = `<img src="${dataUrl}" style="width:100%;height:100%;object-fit:contain">`;
-    thumb.style.cursor = "default";
-  } catch (e) { thumb.textContent = "预览失败"; }
+    previewCache.set(assetIndex, dataUrl);
+    const image = document.createElement("img");
+    image.src = dataUrl;
+    image.alt = "媒体缩略图";
+    preview.replaceChildren(image);
+  } catch (e) { preview.textContent = "预览失败"; }
 }
 
 document.getElementById("media-select-all").addEventListener("change", (e) => {
-  mediaGrid.querySelectorAll("input[type=checkbox]").forEach((cb) => { cb.checked = e.target.checked && !cb.disabled; });
+  mediaGrid.querySelectorAll(".media-card-checkbox").forEach((cb) => { cb.checked = e.target.checked && !cb.disabled; });
+  updateMediaSelectionCount();
 });
+
+function updateMediaSelectionCount() {
+  const count = document.getElementById("media-selection-count");
+  if (!count) return;
+  const boxes = [...mediaGrid.querySelectorAll(".media-card-checkbox")];
+  const selected = boxes.filter((cb) => !cb.disabled && cb.checked).length;
+  const selectable = boxes.filter((cb) => !cb.disabled).length;
+  count.textContent = `已选择 ${selected} / ${boxes.length}`;
+  const selectAll = document.getElementById("media-select-all");
+  selectAll.checked = selectable > 0 && selected === selectable;
+  selectAll.indeterminate = selected > 0 && selected < selectable;
+}
+
+function formatDuration(seconds) {
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const minutes = Math.floor(value / 60);
+  const remainder = Math.floor(value % 60).toString().padStart(2, "0");
+  return `${minutes}:${remainder}`;
+}
+
+async function downloadSingleAsset(asset, button) {
+  if (!currentShareLink || asset.status !== "Selected") return;
+  button.disabled = true;
+  try {
+    const { accepted, batchId } = await Bridge.invoke("downloadSelected", {
+      shareLink: currentShareLink,
+      assets: [asset.index],
+    });
+    activeBatch = { batchId, total: accepted, done: 0 };
+    downloadStatus.textContent = `已加入下载队列：${accepted} 个媒体（下载中 0/${accepted}）。`;
+    toast(`已加入下载队列：${accepted || 1} 个媒体`);
+    refreshDownloads();
+  } catch (e) {
+    toast("下载失败：" + e.message, "error");
+  } finally {
+    button.disabled = false;
+    updateMediaSelectionCount();
+  }
+}
 
 document.getElementById("media-download").addEventListener("click", async () => {
   if (!currentShareLink) return;
   const indexes = [];
-  mediaGrid.querySelectorAll(".card").forEach((card, i) => {
-    const cb = card.querySelector("input[type=checkbox]");
-    if (cb && cb.checked && !cb.disabled) indexes.push(i);
+  mediaGrid.querySelectorAll(".media-card").forEach((card) => {
+    const cb = card.querySelector(".media-card-checkbox");
+    if (cb && cb.checked && !cb.disabled) indexes.push(Number(card.dataset.assetIndex));
   });
   if (indexes.length === 0) { downloadStatus.textContent = "请先勾选要下载的媒体。"; return; }
   downloadButton.disabled = true;
@@ -348,7 +424,7 @@ const downloadTasks = new Map();   // taskId -> 任务视图对象
 const taskTimestamps = new Map();  // taskId -> { bytes, time }（速度计算）
 
 const phaseLabels = { pending: "等待中", downloading: "下载中", completed: "已结束" };
-const statusLabels = { succeeded: "已完成", failed: "失败", cancelled: "已取消" };
+const statusLabels = { succeeded: "已完成", failed: "下载失败", cancelled: "已取消" };
 
 function refreshDownloads() {
   return Bridge.invoke("getDownloads").then((tasks) => {
@@ -408,38 +484,57 @@ function renderDownloads() {
 
 function buildTaskRow(t) {
   const row = document.createElement("div");
-  row.className = "card";
+  row.className = "download-task-row";
   row.dataset.taskId = t.taskId;
-  row.style.cssText = "padding:12px;margin:0;display:flex;flex-direction:column;gap:8px";
+  const thumbnail = document.createElement("div");
+  thumbnail.className = "queue-thumbnail";
+  const cachedPreview = previewCache.get(t.assetIndex);
+  if (cachedPreview) {
+    const image = document.createElement("img");
+    image.src = cachedPreview;
+    image.alt = "媒体缩略图";
+    thumbnail.appendChild(image);
+  } else {
+    thumbnail.textContent = t.kind === "video" ? "视频" : "图片";
+  }
+  row.appendChild(thumbnail);
 
+  const main = document.createElement("div");
+  main.className = "queue-task-main";
   const head = document.createElement("div");
-  head.style.cssText = "display:flex;align-items:center;gap:10px";
+  head.className = "queue-task-head";
   const name = document.createElement("span");
-  name.style.cssText = "flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+  name.className = "queue-file-name";
   name.textContent = decodePath(t.targetPath);
   const status = document.createElement("span");
   status.className = "task-status";
-  status.style.cssText = "font-size:12px;color:var(--text-secondary)";
   head.appendChild(name);
   head.appendChild(status);
-  row.appendChild(head);
+  main.appendChild(head);
 
   const progressWrap = document.createElement("div");
-  progressWrap.style.cssText = "display:flex;align-items:center;gap:8px";
+  progressWrap.className = "queue-task-progress";
   const bar = document.createElement("div");
   bar.className = "progress";
-  bar.style.cssText = "flex:1";
   const fill = document.createElement("div");
   fill.style.width = "0%";
   bar.appendChild(fill);
-  const meta = document.createElement("span");
-  meta.style.cssText = "font-size:12px;color:var(--text-secondary);min-width:150px;text-align:right";
+  const percent = document.createElement("span");
+  percent.className = "queue-percent";
+  const speed = document.createElement("span");
+  speed.className = "queue-speed";
   progressWrap.appendChild(bar);
-  progressWrap.appendChild(meta);
-  row.appendChild(progressWrap);
+  progressWrap.appendChild(percent);
+  progressWrap.appendChild(speed);
+  main.appendChild(progressWrap);
+
+  const error = document.createElement("span");
+  error.className = "queue-error";
+  main.appendChild(error);
+  row.appendChild(main);
 
   const actions = document.createElement("div");
-  actions.style.cssText = "display:flex;gap:6px;justify-content:flex-end";
+  actions.className = "queue-actions";
   row.appendChild(actions);
 
   updateTaskRow(row, t);
@@ -450,20 +545,27 @@ function updateTaskRow(row, t) {
   const taskId = row.dataset.taskId;
   const statusEl = row.querySelector(".task-status");
   const fill = row.querySelector(".progress > div");
-  const meta = row.querySelector("span:last-child");
-  const actions = row.lastChild;
-  if (!statusEl || !fill || !meta) return;
+  const percentEl = row.querySelector(".queue-percent");
+  const speedEl = row.querySelector(".queue-speed");
+  const errorEl = row.querySelector(".queue-error");
+  const actions = row.querySelector(".queue-actions");
+  if (!statusEl || !fill || !percentEl || !speedEl || !errorEl || !actions) return;
 
   if (t.phase === "completed") {
     statusEl.textContent = statusLabels[t.status] || t.status;
-    fill.style.width = "100%";
-    meta.textContent = t.status === "succeeded" ? "已完成" : (t.error ? "失败：" + t.error : "已取消");
+    statusEl.dataset.status = t.status || "completed";
+    fill.style.width = t.status === "succeeded" ? "100%" : "0%";
+    percentEl.textContent = t.status === "succeeded" ? "100%" : "—";
+    speedEl.textContent = t.status === "succeeded" ? "已完成" : "—";
+    errorEl.textContent = t.status === "failed" ? (t.error || "网络连接超时") : (t.status === "cancelled" ? "已取消" : "");
   } else {
     statusEl.textContent = phaseLabels[t.phase] || t.phase;
+    statusEl.dataset.status = t.phase || "pending";
     const percent = t.percent != null ? Math.min(100, t.percent) : 0;
     fill.style.width = percent + "%";
-    const speedText = t.speed != null ? " · " + formatSpeed(t.speed) : "";
-    meta.textContent = (t.totalBytes ? formatBytes(t.bytesDownloaded) + " / " + formatBytes(t.totalBytes) : formatBytes(t.bytesDownloaded)) + speedText;
+    percentEl.textContent = t.percent != null ? `${Math.round(percent)}%` : "—";
+    speedEl.textContent = t.speed != null ? formatSpeed(t.speed) : "—";
+    errorEl.textContent = "";
   }
 
   actions.innerHTML = "";
@@ -474,7 +576,7 @@ function updateTaskRow(row, t) {
   }
   if (t.status === "succeeded" && t.savedPath) {
     addAction(actions, "打开文件", () => Bridge.invoke("openFile", { path: t.savedPath }).catch((e) => toast(e.message, "error")));
-    addAction(actions, "打开文件夹", () => Bridge.invoke("openFolder", { path: t.savedPath }).catch((e) => toast(e.message, "error")));
+    addAction(actions, "打开目录", () => Bridge.invoke("openFolder", { path: t.savedPath }).catch((e) => toast(e.message, "error")));
   }
 }
 

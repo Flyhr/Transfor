@@ -1,27 +1,107 @@
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
+using System.Drawing.Drawing2D;
 
 namespace Transfor;
 
 // 新 UI 宿主窗体（Phase 5A + 6.5）：WinForms Host + C# 侧边栏 + AppWebView（本地 webui）+ 互联网浏览器控件；
-// 明确布局容器：左列 200px C# 侧边栏（导航/主题/版本），右列内容区（AppWebView + 浏览器控件叠放）；
+// 明确布局容器：左列 176px C# 侧边栏（导航/主题），右列内容区（AppWebView + 浏览器控件叠放）；
 // 安全隔离：AppWebView 使用独立 Profile（AppUiProfileDirectory）禁止外部导航，仅经 Bridge 访问服务；
 // 浏览器控件（互联网页面）使用 Browser\UserData（与隐藏宿主/媒体解析共享登录态），不挂 Bridge，
 // 只覆盖内容区（顶部留 56px 给 HTML 地址栏）——侧边栏/导航始终可达
 internal sealed class AppShellForm : Form
 {
+    private enum SidebarIcon
+    {
+        Home,
+        Media,
+        Browser,
+        History,
+        Settings,
+    }
+
+    private sealed class SidebarNavButton : Button
+    {
+        private readonly SidebarIcon icon;
+
+        public SidebarNavButton(SidebarIcon icon)
+        {
+            this.icon = icon;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using var pen = new Pen(ForeColor, 1.8F)
+            {
+                StartCap = LineCap.Round,
+                EndCap = LineCap.Round,
+                LineJoin = LineJoin.Round,
+            };
+            using var brush = new SolidBrush(ForeColor);
+            var x = 14;
+            var y = (Height - 22) / 2;
+            switch (icon)
+            {
+                case SidebarIcon.Home:
+                    e.Graphics.DrawLines(pen, new[]
+                    {
+                        new Point(x + 1, y + 10), new Point(x + 11, y + 2), new Point(x + 21, y + 10),
+                    });
+                    e.Graphics.DrawRectangle(pen, x + 4, y + 9, 14, 11);
+                    e.Graphics.DrawLine(pen, x + 11, y + 20, x + 11, y + 14);
+                    break;
+                case SidebarIcon.Media:
+                    e.Graphics.DrawRectangle(pen, x + 1, y + 3, 20, 16);
+                    e.Graphics.DrawLine(pen, x + 5, y + 3, x + 5, y + 19);
+                    e.Graphics.FillPolygon(brush, new[]
+                    {
+                        new Point(x + 10, y + 7), new Point(x + 10, y + 15), new Point(x + 16, y + 11),
+                    });
+                    break;
+                case SidebarIcon.Browser:
+                    e.Graphics.DrawEllipse(pen, x + 1, y + 1, 20, 20);
+                    e.Graphics.DrawEllipse(pen, x + 7, y + 1, 8, 20);
+                    e.Graphics.DrawLine(pen, x + 2, y + 11, x + 20, y + 11);
+                    break;
+                case SidebarIcon.History:
+                    e.Graphics.DrawArc(pen, x + 2, y + 2, 18, 18, 42, 292);
+                    e.Graphics.DrawLines(pen, new[]
+                    {
+                        new Point(x + 2, y + 4), new Point(x + 2, y + 10), new Point(x + 7, y + 8),
+                    });
+                    e.Graphics.DrawLine(pen, x + 11, y + 6, x + 11, y + 11);
+                    e.Graphics.DrawLine(pen, x + 11, y + 11, x + 15, y + 13);
+                    break;
+                case SidebarIcon.Settings:
+                    e.Graphics.DrawEllipse(pen, x + 5, y + 5, 12, 12);
+                    e.Graphics.DrawEllipse(pen, x + 9, y + 9, 4, 4);
+                    for (var angle = 0; angle < 360; angle += 45)
+                    {
+                        var radians = angle * Math.PI / 180;
+                        var inner = new PointF(x + 11 + (float)Math.Cos(radians) * 8, y + 11 + (float)Math.Sin(radians) * 8);
+                        var outer = new PointF(x + 11 + (float)Math.Cos(radians) * 10, y + 11 + (float)Math.Sin(radians) * 10);
+                        e.Graphics.DrawLine(pen, inner, outer);
+                    }
+                    break;
+            }
+        }
+    }
+
     // HTML 浏览器页顶部工具条高度（浏览器控件从此处以下覆盖内容区）
     private const int BrowserToolbarHeight = 64;
     // 宿主侧边栏宽度
     private const int SidebarWidth = 176;
 
-    private static readonly (string Page, string Label)[] NavItems =
+    private static readonly (string Page, string Label, SidebarIcon Icon)[] NavItems =
     {
-        ("home", "⌂  工作台"),
-        ("media", "▣  媒体"),
-        ("browser", "◎  浏览器"),
-        ("history", "◷  历史"),
-        ("settings", "⚙  设置"),
+        ("home", "工作台", SidebarIcon.Home),
+        ("media", "媒体", SidebarIcon.Media),
+        ("browser", "浏览器", SidebarIcon.Browser),
+        ("history", "历史", SidebarIcon.History),
+        ("settings", "设置", SidebarIcon.Settings),
     };
 
     private readonly AppBridge bridge;
@@ -32,12 +112,11 @@ internal sealed class AppShellForm : Form
     private readonly Panel contentArea;
     private readonly Panel browserPanel;
     private readonly WebView2 browserWebView;
-    private readonly Dictionary<string, Button> navButtons = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, SidebarNavButton> navButtons = new(StringComparer.Ordinal);
     private AppBridgeEvents? events;
     private BrowserNavigationService? browserNavigation;
     private long navigationVersion;
     private Panel? sidebar;
-    private Label? sidebarVersionLabel;
     private string? activeNavPage;
     private bool sidebarDark;
 
@@ -58,7 +137,7 @@ internal sealed class AppShellForm : Form
         Size = new Size(1100, 720);
         Font = new Font("Microsoft YaHei UI", 10F);
 
-        // 明确布局容器：左列 C# 侧边栏（200px） + 右列内容区
+        // 明确布局容器：左列 C# 侧边栏（176px） + 右列内容区
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, SidebarWidth));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -113,34 +192,40 @@ internal sealed class AppShellForm : Form
         Load += (_, _) => InitializeAsync();
     }
 
-    // C# 侧边栏：导航按钮 + 底部版本/主题（配色随 HTML 主题联动）
+    // C# 侧边栏：固定五项导航与轻量矢量图标（配色随 HTML 主题联动）
     private Control BuildSidebar()
     {
         sidebar = new Panel
         {
             Dock = DockStyle.Fill,
             BackColor = Color.White,
-            Padding = new Padding(8, 16, 8, 16),
+            Padding = new Padding(8, 16, 8, 8),
         };
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1 };
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-        var navPanel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true };
-        foreach (var (page, label) in NavItems)
+        var navPanel = new FlowLayoutPanel
         {
-            var button = new Button
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoScroll = true,
+            Padding = new Padding(0, 4, 0, 0),
+        };
+        foreach (var (page, label, icon) in NavItems)
+        {
+            var button = new SidebarNavButton(icon)
             {
                 Text = label,
                 AutoSize = false,
-                Height = 56,
+                Height = 48,
                 Width = SidebarWidth - 16,
                 FlatStyle = FlatStyle.Flat,
                 ForeColor = Color.FromArgb(71, 85, 105),
                 BackColor = Color.Transparent,
                 FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(240, 247, 250), MouseDownBackColor = Color.FromArgb(225, 242, 243) },
                 TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(12, 0, 8, 0),
+                Padding = new Padding(40, 0, 8, 0),
                 Font = new Font(Font.FontFamily, 10F),
                 Cursor = Cursors.Hand,
                 Tag = page,
@@ -150,12 +235,6 @@ internal sealed class AppShellForm : Form
             navPanel.Controls.Add(button);
         }
         layout.Controls.Add(navPanel, 0, 0);
-
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1 };
-        footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        sidebarVersionLabel = new Label { Text = "v" + AppVersion.Current, ForeColor = Color.FromArgb(71, 85, 105), AutoSize = true, Padding = new Padding(2, 6, 2, 2) };
-        footer.Controls.Add(sidebarVersionLabel, 0, 0);
-        layout.Controls.Add(footer, 0, 1);
 
         sidebar.Controls.Add(layout);
         return sidebar;
@@ -172,22 +251,17 @@ internal sealed class AppShellForm : Form
 
         var background = Color.White;
         var text = Color.FromArgb(71, 85, 105);
-        var secondary = Color.FromArgb(71, 85, 105);
         var hover = Color.FromArgb(240, 247, 250);
         var active = Color.FromArgb(240, 247, 250);
 
         sidebar.BackColor = background;
-        if (sidebarVersionLabel is not null)
-        {
-            sidebarVersionLabel.ForeColor = secondary;
-        }
 
         foreach (var (key, button) in navButtons)
         {
-            button.ForeColor = text;
             button.FlatAppearance.MouseOverBackColor = hover;
             button.FlatAppearance.MouseDownBackColor = active;
             var isActive = string.Equals(key, activeNavPage, StringComparison.Ordinal);
+            button.ForeColor = isActive ? Color.FromArgb(15, 118, 110) : text;
             button.BackColor = isActive ? active : Color.Transparent;
         }
     }
@@ -206,6 +280,7 @@ internal sealed class AppShellForm : Form
         {
             var active = string.Equals(key, page, StringComparison.Ordinal);
             button.Font = new Font(Font, active ? FontStyle.Bold : FontStyle.Regular);
+            button.ForeColor = active ? Color.FromArgb(15, 118, 110) : Color.FromArgb(71, 85, 105);
             button.BackColor = active ? Color.FromArgb(240, 247, 250) : Color.Transparent;
         }
     }
