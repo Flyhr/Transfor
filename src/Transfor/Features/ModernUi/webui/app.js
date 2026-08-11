@@ -170,6 +170,7 @@ const mediaPost = document.getElementById("media-post");
 const mediaGrid = document.getElementById("media-grid");
 let currentShareLink = null;
 let currentAssets = [];
+const mediaSelection = new Set(); // 跨页勾选的媒体索引（分页后 DOM 只含当前页卡片）
 const previewCache = new Map();
 // 默认全选设置（媒体页解析后按此勾选；初始化时从 getSettings 加载）
 let defaultSelectAllSetting = true;
@@ -178,6 +179,100 @@ const roleLabels = { livephotostill: "图片 LIVE", livephotomotion: "视频 LIV
 function assetTypeLabel(asset) {
   if (asset.role === "livephotostill" || asset.role === "livephotomotion") return roleLabels[asset.role];
   return asset.kind === "image" ? "图片" : "视频";
+}
+
+// ===== 分页（解析结果 + 下载队列）：每页条数可改、页码可跳转、条数持久化 =====
+function createPager(prefix, sizeKey, pageSizes, defaultSize, renderPage) {
+  let sizes = pageSizes;
+  let key = sizeKey;
+  const stored = Number(localStorage.getItem(key));
+  let pageSize = sizes.some((s) => s.value === stored) ? stored : defaultSize;
+  let page = 1;
+  let items = [];
+  const el = (id) => document.getElementById(prefix + "-page-" + id);
+  const els = {
+    bar: document.getElementById(prefix + "-pagination"),
+    total: el("total"), current: el("current"), count: el("count"),
+    prev: el("prev"), next: el("next"), input: el("input"), go: el("go"), size: el("size"),
+  };
+  function rebuildSizeOptions() {
+    els.size.innerHTML = "";
+    sizes.forEach((s) => {
+      const opt = document.createElement("option");
+      opt.value = String(s.value);
+      opt.textContent = s.label;
+      opt.selected = s.value === pageSize;
+      els.size.appendChild(opt);
+    });
+  }
+  function render() {
+    const total = items.length;
+    const pages = Math.max(1, Math.ceil(total / pageSize));
+    page = Math.min(Math.max(1, page), pages);
+    const start = (page - 1) * pageSize;
+    els.total.textContent = String(total);
+    els.current.textContent = String(page);
+    els.count.textContent = String(pages);
+    els.bar.hidden = total <= pageSize;
+    els.prev.disabled = page <= 1;
+    els.next.disabled = page >= pages;
+    renderPage(items.slice(start, start + pageSize));
+  }
+  els.prev.addEventListener("click", () => { page -= 1; render(); });
+  els.next.addEventListener("click", () => { page += 1; render(); });
+  const jump = () => {
+    const p = parseInt(els.input.value, 10);
+    if (Number.isFinite(p) && p > 0) { page = p; render(); }
+  };
+  els.go.addEventListener("click", jump);
+  els.input.addEventListener("keydown", (e) => { if (e.key === "Enter") { jump(); e.preventDefault(); } });
+  els.size.addEventListener("change", () => {
+    pageSize = Number(els.size.value);
+    page = 1;
+    try { localStorage.setItem(key, String(pageSize)); } catch { /* 存储不可用不影响 */ }
+    render();
+  });
+  rebuildSizeOptions();
+  return {
+    update(newItems, resetPage) { items = newItems; if (resetPage) page = 1; render(); },
+    setPageSizes(newSizes, newDefault, newKey) {
+      sizes = newSizes;
+      key = newKey;
+      const storedSize = Number(localStorage.getItem(key));
+      pageSize = sizes.some((s) => s.value === storedSize) ? storedSize : newDefault;
+      page = 1;
+      rebuildSizeOptions();
+      render();
+    },
+  };
+}
+
+// 解析结果分页：格子按行数（1/2/3 行 = 4/8/12 个），平铺按条数（10/20/50）
+const gridPageSizes = [{ value: 4, label: "1 行（4 个）" }, { value: 8, label: "2 行（8 个）" }, { value: 12, label: "3 行（12 个）" }];
+const listPageSizes = [{ value: 10, label: "10 条/页" }, { value: 20, label: "20 条/页" }, { value: 50, label: "50 条/页" }];
+
+const mediaPager = createPager("media", "transfor.gridPageSize", gridPageSizes, 8, renderMediaPage);
+const queuePager = createPager("queue", "transfor.queuePageSize", listPageSizes, 10, renderQueuePage);
+
+// 解析结果当前页渲染（卡片元素按页保留在 pager 内，切页仅换挂载）
+function renderMediaPage(cards) {
+  mediaGrid.innerHTML = "";
+  const loaders = [];
+  cards.forEach((card) => {
+    mediaGrid.appendChild(card);
+    if (card._previewLoader) loaders.push(card._previewLoader);
+  });
+  loadPreviewsSequential(loaders);
+}
+
+// 下载队列当前页渲染（pager 持有 taskId 列表，取值始终来自实时任务 Map）
+function renderQueuePage(taskIds) {
+  downloadsList.style.display = taskIds.length === 0 ? "none" : "flex";
+  downloadsList.innerHTML = "";
+  taskIds.forEach((id) => {
+    const t = downloadTasks.get(id);
+    if (t) downloadsList.appendChild(buildTaskRow(t));
+  });
 }
 
 // 解析结果展示方式：格子（每行最多 4 列）/ 平铺（单列，仅基础信息）；选择持久化
@@ -192,6 +287,9 @@ function applyMediaView(view) {
   viewGridBtn.setAttribute("aria-pressed", String(view === "grid"));
   viewListBtn.setAttribute("aria-pressed", String(view === "list"));
   try { localStorage.setItem("transfor.mediaView", view); } catch { /* 存储不可用不影响 */ }
+  // 分页条数与默认值随展示方式切换
+  if (view === "list") mediaPager.setPageSizes(listPageSizes, 10, "transfor.listPageSize");
+  else mediaPager.setPageSizes(gridPageSizes, 8, "transfor.gridPageSize");
 }
 viewGridBtn.addEventListener("click", () => applyMediaView("grid"));
 viewListBtn.addEventListener("click", () => applyMediaView("list"));
@@ -262,6 +360,7 @@ function resetMediaView() {
   currentShareLink = null;
   currentAssets = [];
   previewCache.clear();
+  mediaSelection.clear();
   mediaPost.style.display = "none";
   mediaGrid.innerHTML = "";
   document.getElementById("media-select-all").checked = false;
@@ -281,7 +380,12 @@ function renderPost(post) {
   const mediaCount = document.getElementById("media-count");
   if (mediaCount) mediaCount.textContent = String(post.assets.length);
   mediaGrid.innerHTML = "";
-  const previewLoaders = [];
+  // 跨页勾选状态：以媒体索引为键维护（分页后 DOM 只保留当前页卡片）
+  mediaSelection.clear();
+  post.assets.forEach((asset) => {
+    if (defaultSelectAllSetting && asset.status === "Selected") mediaSelection.add(asset.index);
+  });
+  const cards = [];
   post.assets.forEach((asset) => {
     const card = document.createElement("article");
     card.className = "media-card";
@@ -296,10 +400,14 @@ function renderPost(post) {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.className = "media-card-checkbox";
-    checkbox.checked = defaultSelectAllSetting && asset.status === "Selected";
+    checkbox.checked = mediaSelection.has(asset.index);
     checkbox.disabled = asset.status !== "Selected";
     checkbox.setAttribute("aria-label", `选择第 ${asset.index + 1} 个媒体`);
-    checkbox.addEventListener("change", updateMediaSelectionCount);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) mediaSelection.add(asset.index);
+      else mediaSelection.delete(asset.index);
+      updateMediaSelectionCount();
+    });
     thumb.appendChild(checkbox);
     const badge = document.createElement("span");
     badge.className = "media-badge";
@@ -311,7 +419,7 @@ function renderPost(post) {
         if (event.target === checkbox) return;
         loadPreview(preview, asset.index);
       });
-      previewLoaders.push({ preview, assetIndex: asset.index });
+      card._previewLoader = { preview, assetIndex: asset.index };
     }
     const info = document.createElement("div");
     info.className = "media-card-info";
@@ -323,7 +431,7 @@ function renderPost(post) {
     const details = [assetTypeLabel(asset)];
     if (asset.width && asset.height) details.push(`${asset.width}×${asset.height}`);
     if (asset.duration) details.push(formatDuration(asset.duration));
-    if (asset.contentLength) details.push(formatBytes(asset.contentLength));
+    details.push(asset.contentLength ? formatBytes(asset.contentLength) : "大小 —");
     metadata.textContent = details.join(" · ");
     info.appendChild(title);
     info.appendChild(metadata);
@@ -336,15 +444,13 @@ function renderPost(post) {
     info.appendChild(cardDownload);
     card.appendChild(thumb);
     card.appendChild(info);
-    mediaGrid.appendChild(card);
+    cards.push(card);
   });
   mediaPost.style.display = "block";
 
-  // 全选控件与卡片勾选状态同步（可选媒体默认全勾选）
+  // 全选控件与勾选状态同步（跨页），分页渲染（默认回到第 1 页）
   updateMediaSelectionCount();
-
-  // 图片预览默认自动加载（节流：每次并发 2 个，避免多图作品瞬间大 JSON 传输）
-  loadPreviewsSequential(previewLoaders);
+  mediaPager.update(cards, true);
 }
 
 async function loadPreviewsSequential(loaders) {
@@ -374,20 +480,28 @@ async function loadPreview(preview, assetIndex) {
 }
 
 document.getElementById("media-select-all").addEventListener("change", (e) => {
-  mediaGrid.querySelectorAll(".media-card-checkbox").forEach((cb) => { cb.checked = e.target.checked && !cb.disabled; });
+  // 跨页全选/取消（选择状态以媒体索引为键，不受分页影响）
+  currentAssets.forEach((asset) => {
+    if (asset.status !== "Selected") return;
+    if (e.target.checked) mediaSelection.add(asset.index);
+    else mediaSelection.delete(asset.index);
+  });
+  mediaGrid.querySelectorAll(".media-card-checkbox").forEach((cb) => {
+    const card = cb.closest(".media-card");
+    cb.checked = card ? mediaSelection.has(Number(card.dataset.assetIndex)) : false;
+  });
   updateMediaSelectionCount();
 });
 
 function updateMediaSelectionCount() {
   const count = document.getElementById("media-selection-count");
   if (!count) return;
-  const boxes = [...mediaGrid.querySelectorAll(".media-card-checkbox")];
-  const selected = boxes.filter((cb) => !cb.disabled && cb.checked).length;
-  const selectable = boxes.filter((cb) => !cb.disabled).length;
-  count.textContent = `已选择 ${selected} / ${boxes.length}`;
+  const selectable = currentAssets.filter((a) => a.status === "Selected");
+  const selected = selectable.filter((a) => mediaSelection.has(a.index));
+  count.textContent = `已选择 ${selected.length} / ${currentAssets.length}`;
   const selectAll = document.getElementById("media-select-all");
-  selectAll.checked = selectable > 0 && selected === selectable;
-  selectAll.indeterminate = selected > 0 && selected < selectable;
+  selectAll.checked = selectable.length > 0 && selected.length === selectable.length;
+  selectAll.indeterminate = selected.length > 0 && selected.length < selectable.length;
 }
 
 function formatDuration(seconds) {
@@ -419,11 +533,10 @@ async function downloadSingleAsset(asset, button) {
 
 document.getElementById("media-download").addEventListener("click", async () => {
   if (!currentShareLink) { toast("请先解析作品。", "error"); return; }
-  const indexes = [];
-  mediaGrid.querySelectorAll(".media-card").forEach((card) => {
-    const cb = card.querySelector(".media-card-checkbox");
-    if (cb && cb.checked && !cb.disabled) indexes.push(Number(card.dataset.assetIndex));
-  });
+  // 跨页收集选中媒体（以媒体索引为键，不受分页影响）
+  const indexes = currentAssets
+    .filter((a) => mediaSelection.has(a.index) && a.status === "Selected")
+    .map((a) => a.index);
   if (indexes.length === 0) { toast("请先勾选要下载的媒体。", "error"); return; }
   downloadButton.disabled = true;
   try {
@@ -470,10 +583,12 @@ function refreshDownloads() {
 }
 
 function renderDownloads(tasks) {
-  downloadsEmpty.style.display = tasks.length === 0 ? "block" : "none";
-  downloadsList.style.display = tasks.length === 0 ? "none" : "flex";
-  downloadsList.innerHTML = "";
-  tasks.forEach((t) => downloadsList.appendChild(buildTaskRow(t)));
+  // 最新在前：新下载/进行中任务始终在第 1 页，完成后位置不变（不“消失”）
+  const ordered = [...(tasks || [])].reverse();
+  const has = ordered.length > 0;
+  document.getElementById("queue-header").hidden = !has;
+  downloadsEmpty.style.display = has ? "none" : "block";
+  queuePager.update(ordered.map((t) => t.taskId), false);
 }
 
 // 横向任务行：缩略图｜文件名｜状态｜进度｜百分比｜速度｜错误｜操作（一个媒体一行）
@@ -523,16 +638,29 @@ function buildTaskRow(t) {
   speed.className = "queue-speed";
   row.appendChild(speed);
 
+  const size = document.createElement("span");
+  size.className = "queue-size";
+  size.textContent = taskSizeLabel(t);
+  row.appendChild(size);
+
+  const right = document.createElement("div");
+  right.className = "queue-right";
   const error = document.createElement("span");
   error.className = "queue-error";
-  row.appendChild(error);
-
+  right.appendChild(error);
   const actions = document.createElement("div");
   actions.className = "queue-actions";
-  row.appendChild(actions);
+  right.appendChild(actions);
+  row.appendChild(right);
 
   updateTaskRow(row, t);
   return row;
+}
+
+// 任务大小：优先总大小，未知时回退已下载量，都没有显示占位
+function taskSizeLabel(t) {
+  const bytes = t.totalBytes > 0 ? t.totalBytes : (t.bytesDownloaded > 0 ? t.bytesDownloaded : null);
+  return bytes ? formatBytes(bytes) : "—";
 }
 
 // 行状态渲染规则：
@@ -545,9 +673,11 @@ function updateTaskRow(row, t) {
   const fill = row.querySelector(".progress > div");
   const percentEl = row.querySelector(".queue-percent");
   const speedEl = row.querySelector(".queue-speed");
+  const sizeEl = row.querySelector(".queue-size");
   const errorEl = row.querySelector(".queue-error");
   const actions = row.querySelector(".queue-actions");
   if (!statusEl || !fill || !percentEl || !speedEl || !errorEl || !actions) return;
+  if (sizeEl) sizeEl.textContent = taskSizeLabel(t);
 
   if (t.phase === "completed") {
     statusEl.textContent = statusLabels[t.status] || t.status || "已结束";

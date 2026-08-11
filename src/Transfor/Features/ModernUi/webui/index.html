@@ -82,14 +82,41 @@
             </div>
           </div>
           <div id="media-grid" class="media-card-grid"></div>
+          <div class="pagination-bar" id="media-pagination" hidden>
+            <span class="page-info">共 <strong id="media-page-total">0</strong> 条 · 第 <span id="media-page-current">1</span> / <span id="media-page-count">1</span> 页</span>
+            <button type="button" class="btn page-btn" id="media-page-prev">上一页</button>
+            <input class="input page-jump" id="media-page-input" type="number" min="1" placeholder="页码">
+            <button type="button" class="btn page-btn" id="media-page-go">跳转</button>
+            <button type="button" class="btn page-btn" id="media-page-next">下一页</button>
+            <select class="input page-size" id="media-page-size">
+              <option value="10">10 条/页</option>
+              <option value="20">20 条/页</option>
+              <option value="50">50 条/页</option>
+            </select>
+          </div>
         </div>
       </div>
       <div class="media-flow-group media-flow-group-last">
         <div class="flow-step queue-step"><span>3</span><strong>下载队列</strong><button class="queue-toggle" id="queue-toggle" aria-expanded="true" aria-label="收起下载队列">⌃</button></div>
         <section class="media-download-queue queue-table" id="media-download-queue">
           <div id="queue-content">
+            <div class="queue-header" id="queue-header" hidden>
+              <span>名称</span><span>状态</span><span class="queue-header-progress">下载进度</span><span>大小</span><span class="queue-header-actions"></span>
+            </div>
             <p class="placeholder" id="downloads-empty">暂无下载任务。</p>
             <div id="downloads-list" class="download-list"></div>
+            <div class="pagination-bar" id="queue-pagination" hidden>
+              <span class="page-info">共 <strong id="queue-page-total">0</strong> 条 · 第 <span id="queue-page-current">1</span> / <span id="queue-page-count">1</span> 页</span>
+              <button type="button" class="btn page-btn" id="queue-page-prev">上一页</button>
+              <input class="input page-jump" id="queue-page-input" type="number" min="1" placeholder="页码">
+              <button type="button" class="btn page-btn" id="queue-page-go">跳转</button>
+              <button type="button" class="btn page-btn" id="queue-page-next">下一页</button>
+              <select class="input page-size" id="queue-page-size">
+                <option value="10">10 条/页</option>
+                <option value="20">20 条/页</option>
+                <option value="50">50 条/页</option>
+              </select>
+            </div>
           </div>
         </section>
       </div>
