@@ -13,7 +13,7 @@ internal sealed class AppShellForm : Form
     // HTML 浏览器页顶部工具条高度（浏览器控件从此处以下覆盖内容区）
     private const int BrowserToolbarHeight = 64;
     // 宿主侧边栏宽度
-    private const int SidebarWidth = 92;
+    private const int SidebarWidth = 80;
 
     private static readonly (string Page, string Label)[] NavItems =
     {
@@ -119,8 +119,8 @@ internal sealed class AppShellForm : Form
         sidebar = new Panel
         {
             Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(247, 251, 251),
-            Padding = new Padding(8),
+            BackColor = Color.White,
+            Padding = new Padding(8, 16, 8, 16),
         };
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -133,14 +133,14 @@ internal sealed class AppShellForm : Form
             {
                 Text = label,
                 AutoSize = false,
-                Height = 54,
+                Height = 81,
                 Width = SidebarWidth - 16,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.FromArgb(43, 71, 76),
+                ForeColor = Color.FromArgb(71, 85, 105),
                 BackColor = Color.Transparent,
-                FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(234, 248, 246), MouseDownBackColor = Color.FromArgb(220, 244, 240) },
+                FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(240, 247, 250), MouseDownBackColor = Color.FromArgb(225, 242, 243) },
                 TextAlign = ContentAlignment.MiddleCenter,
-                Font = new Font(Font.FontFamily, 8F),
+                Font = new Font(Font.FontFamily, 9F),
                 Cursor = Cursors.Hand,
                 Tag = page,
             };
@@ -152,7 +152,7 @@ internal sealed class AppShellForm : Form
 
         var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1 };
         footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        sidebarVersionLabel = new Label { Text = "v" + AppVersion.Current, ForeColor = Color.FromArgb(100, 123, 128), AutoSize = true, Padding = new Padding(2, 6, 2, 2) };
+        sidebarVersionLabel = new Label { Text = "v" + AppVersion.Current, ForeColor = Color.FromArgb(71, 85, 105), AutoSize = true, Padding = new Padding(2, 6, 2, 2) };
         footer.Controls.Add(sidebarVersionLabel, 0, 0);
         layout.Controls.Add(footer, 0, 1);
 
@@ -169,11 +169,11 @@ internal sealed class AppShellForm : Form
             return;
         }
 
-        var background = Color.FromArgb(247, 251, 251);
-        var text = Color.FromArgb(43, 71, 76);
-        var secondary = Color.FromArgb(100, 123, 128);
-        var hover = Color.FromArgb(234, 248, 246);
-        var active = Color.FromArgb(220, 244, 240);
+        var background = Color.White;
+        var text = Color.FromArgb(71, 85, 105);
+        var secondary = Color.FromArgb(71, 85, 105);
+        var hover = Color.FromArgb(240, 247, 250);
+        var active = Color.FromArgb(240, 247, 250);
 
         sidebar.BackColor = background;
         if (sidebarVersionLabel is not null)
@@ -205,7 +205,7 @@ internal sealed class AppShellForm : Form
         {
             var active = string.Equals(key, page, StringComparison.Ordinal);
             button.Font = new Font(Font, active ? FontStyle.Bold : FontStyle.Regular);
-            button.BackColor = active ? Color.FromArgb(220, 244, 240) : Color.Transparent;
+            button.BackColor = active ? Color.FromArgb(240, 247, 250) : Color.Transparent;
         }
     }
 
