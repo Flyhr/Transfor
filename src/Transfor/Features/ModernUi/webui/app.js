@@ -442,7 +442,8 @@ function renderPost(post) {
     title.textContent = asset.title || asset.name || `${assetTypeLabel(asset)} ${asset.index + 1}`;
     const metadata = document.createElement("span");
     metadata.className = "media-card-meta";
-    const details = [assetTypeLabel(asset)];
+    // 类型由缩略图角标展示，meta 只保留分辨率/时长/大小
+    const details = [];
     if (asset.width && asset.height) details.push(`${asset.width}×${asset.height}`);
     if (asset.duration) details.push(formatDuration(asset.duration));
     details.push(asset.contentLength ? formatBytes(asset.contentLength) : "大小 —");
