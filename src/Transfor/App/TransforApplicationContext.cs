@@ -61,7 +61,10 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
         // 启动预初始化隐藏宿主：统一线程锚点 = 主窗体，在构造器（STA 主线程 = UI 线程）
         // 同步创建，消灭首次解析的懒初始化竞态与跨线程风险；
+        // 主窗体不再自动显示（新界面为主界面）——必须先创建句柄，否则后台线程的
+        // 浏览器调度（EnsureUiAnchorReady）会报「主窗口句柄未创建」；
         // 失败不阻断启动（记录脱敏日志；解析/下载时给出明确提示）
+        _ = mainForm.Handle;
         try
         {
             services.Browser.UiAnchor = mainForm;
