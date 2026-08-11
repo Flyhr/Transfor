@@ -245,8 +245,6 @@ function renderPost(post) {
   currentAssets = post.assets;
   const mediaCount = document.getElementById("media-count");
   if (mediaCount) mediaCount.textContent = String(post.assets.length);
-  document.getElementById("media-title").textContent = post.title || "未命名作品";
-  document.getElementById("media-author").textContent = post.authorName ? "作者：" + post.authorName : "";
   mediaGrid.innerHTML = "";
   const previewLoaders = [];
   post.assets.forEach((asset) => {
@@ -399,6 +397,7 @@ document.getElementById("media-download").addEventListener("click", async () => 
     activeBatch = { batchId, total: accepted, done: 0 };
     downloadStatus.textContent = `已加入下载队列：${accepted} 个媒体（下载中 0/${accepted}）。`;
     toast(`已加入下载队列：${accepted} 个媒体`);
+    await refreshDownloads();
   } catch (e) { downloadStatus.textContent = "下载失败：" + e.message; }
   finally { downloadButton.disabled = false; }
 });
@@ -419,7 +418,6 @@ Bridge.on("batchCompleted", () => {
 /* ===== 下载管理页（Phase 6.3） ===== */
 const downloadsList = document.getElementById("downloads-list");
 const downloadsEmpty = document.getElementById("downloads-empty");
-const downloadsSummary = document.getElementById("downloads-summary");
 const downloadTasks = new Map();   // taskId -> 任务视图对象
 const taskTimestamps = new Map();  // taskId -> { bytes, time }（速度计算）
 
@@ -432,7 +430,7 @@ function refreshDownloads() {
     taskTimestamps.clear();
     tasks.forEach((t) => downloadTasks.set(t.taskId, { ...t, speed: null }));
     renderDownloads();
-  }).catch((e) => { downloadsSummary.textContent = "加载失败：" + e.message; });
+  }).catch(() => {});
 }
 
 // 下载历史记录（来自持久化下载历史；最近 50 条，倒序）
@@ -476,8 +474,6 @@ function renderDownloadHistory(mediaHistory) {
 function renderDownloads() {
   downloadsEmpty.style.display = downloadTasks.size === 0 ? "block" : "none";
   downloadsList.style.display = downloadTasks.size === 0 ? "none" : "flex";
-  const active = [...downloadTasks.values()].filter((t) => t.phase !== "completed").length;
-  downloadsSummary.textContent = downloadTasks.size === 0 ? "" : `任务 ${downloadTasks.size} 个，进行中 ${active} 个`;
   downloadsList.innerHTML = "";
   downloadTasks.forEach((t) => downloadsList.appendChild(buildTaskRow(t)));
 }
@@ -634,10 +630,6 @@ Bridge.on("taskCompleted", (data) => {
   }
 });
 Bridge.on("batchCompleted", () => refreshDownloads());
-
-document.getElementById("downloads-cancel-all").addEventListener("click", () => {
-  Bridge.invoke("cancelAllDownloads").then(() => toast("已请求取消全部任务")).catch((e) => toast(e.message, "error"));
-});
 
 /* ===== 历史页（Phase 6.4） ===== */
 let historyData = { text: { quote: [], space: [] }, media: [] };

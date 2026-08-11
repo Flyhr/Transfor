@@ -70,19 +70,13 @@
               <span id="media-download-status" class="muted"></span>
             </div>
           </div>
-          <div class="media-result-heading" hidden><h3 id="media-title">作品</h3><div id="media-author" class="muted"></div></div>
           <div id="media-grid" class="media-card-grid"></div>
         </div>
       </div>
       <div class="media-flow-group media-flow-group-last">
-        <div class="flow-step"><span>3</span><strong>下载队列</strong></div>
+        <div class="flow-step queue-step"><span>3</span><strong>下载队列</strong><button class="queue-toggle" id="queue-toggle" aria-expanded="true" aria-label="收起下载队列">⌃</button></div>
         <section class="media-download-queue queue-table" id="media-download-queue">
-          <button class="queue-title" id="queue-toggle" aria-expanded="true">下载队列 <span>⌃</span></button>
           <div id="queue-content">
-            <div class="queue-toolbar">
-              <span id="downloads-summary" class="muted"></span>
-              <button class="btn" id="downloads-cancel-all">全部取消</button>
-            </div>
             <p class="placeholder" id="downloads-empty">暂无下载任务。</p>
             <div id="downloads-list" class="download-list"></div>
           </div>
