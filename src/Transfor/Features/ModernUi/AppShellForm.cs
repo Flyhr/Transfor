@@ -134,7 +134,7 @@ internal sealed class AppShellForm : Form
         Text = "Transfor";
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(960, 640);
-        Size = new Size(1100, 720);
+        Size = new Size(1280, 780);
         Font = new Font("Microsoft YaHei UI", 10F);
 
         // 明确布局容器：左列 C# 侧边栏（176px） + 右列内容区

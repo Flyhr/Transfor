@@ -162,6 +162,23 @@ internal sealed class MediaDownloadCoordinator : IDisposable
         }
     }
 
+    // 清除保留的终态任务（解析新作品时清空旧队列数据，下载历史只在历史页查看）；
+    // 仅清理 Completed，活动/排队任务不受影响；HasActiveTasks 语义不变
+    public void ClearRetainedTasks()
+    {
+        lock (sync)
+        {
+            while (completedOrder.Count > 0)
+            {
+                var id = completedOrder.Dequeue();
+                if (taskRuntimes.TryGetValue(id, out var runtime) && runtime.Phase == DownloadPhase.Completed)
+                {
+                    taskRuntimes.Remove(id);
+                }
+            }
+        }
+    }
+
     // 取消全部活动任务与排队批次，并等待全部落定
     public async Task CancelAllAsync(CancellationToken cancellationToken = default)
     {

@@ -180,6 +180,23 @@ function assetTypeLabel(asset) {
   return asset.kind === "image" ? "图片" : "视频";
 }
 
+// 解析结果展示方式：格子（每行最多 4 列）/ 平铺（单列，仅基础信息）；选择持久化
+const viewGridBtn = document.getElementById("view-grid");
+const viewListBtn = document.getElementById("view-list");
+let mediaView = localStorage.getItem("transfor.mediaView") === "list" ? "list" : "grid";
+function applyMediaView(view) {
+  mediaView = view;
+  mediaGrid.classList.toggle("view-list", view === "list");
+  viewGridBtn.classList.toggle("active", view === "grid");
+  viewListBtn.classList.toggle("active", view === "list");
+  viewGridBtn.setAttribute("aria-pressed", String(view === "grid"));
+  viewListBtn.setAttribute("aria-pressed", String(view === "list"));
+  try { localStorage.setItem("transfor.mediaView", view); } catch { /* 存储不可用不影响 */ }
+}
+viewGridBtn.addEventListener("click", () => applyMediaView("grid"));
+viewListBtn.addEventListener("click", () => applyMediaView("list"));
+applyMediaView(mediaView);
+
 function extractShareUrl(text) {
   const match = String(text || "").match(/https?:\/\/[^\s]+/i);
   return match ? match[0].replace(/[，。、“”]+$/g, "") : "";
@@ -220,6 +237,11 @@ document.getElementById("media-resolve").addEventListener("click", async () => {
   if (!link) { mediaStatus.textContent = "请输入有效链接。"; return; }
   // 解析开始时清空旧作品（失败/交互也不保留，防止误下载旧作品）
   resetMediaView();
+  // 解析新作品：清空下载队列旧数据（含保留终态任务；下载历史只在历史页查看）
+  downloadTasks.clear();
+  taskTimestamps.clear();
+  renderDownloads([]);
+  Bridge.invoke("clearDownloads").then(() => refreshDownloads()).catch(() => {});
   resolveButton.disabled = true;
   mediaStatus.textContent = "解析中…";
   try {
@@ -596,8 +618,7 @@ function decodePath(path) {
 
 // 下载事件：增量更新（进度节流渲染；行缺失时刷新兜底，不静默丢失）
 let progressThrottle = 0;
-let refreshingQueue = false;
-function refreshQueueOnce() {
+let refreshingQueue = false;function refreshQueueOnce() {
   if (refreshingQueue) return;
   refreshingQueue = true;
   refreshDownloads().finally(() => { refreshingQueue = false; });
@@ -615,7 +636,7 @@ Bridge.on("downloadProgress", (data) => {
   t.bytesDownloaded = data.bytesDownloaded;
   t.totalBytes = data.totalBytes;
   t.percent = data.percent;
-  if (now - progressThrottle > 300) {
+  if (now - progressThrottle > 150) {
     progressThrottle = now;
     const row = downloadsList.querySelector(`[data-task-id="${data.taskId}"]`);
     if (row) updateTaskRow(row, t);

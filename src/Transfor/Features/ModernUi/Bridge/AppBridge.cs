@@ -86,6 +86,7 @@ internal sealed class AppBridge
                 "getDownloads" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetDownloads()),
                 "cancelTask" => AppBridgeProtocol.CreateSuccessResponse(request.Id, CancelTask(request)),
                 "cancelAllDownloads" => AppBridgeProtocol.CreateSuccessResponse(request.Id, CancelAllDownloads()),
+                "clearDownloads" => AppBridgeProtocol.CreateSuccessResponse(request.Id, ClearDownloads()),
                 "retryTask" => AppBridgeProtocol.CreateSuccessResponse(request.Id, RetryTask(request)),
                 "openFile" => AppBridgeProtocol.CreateSuccessResponse(request.Id, OpenExistingPath(request, folder: false)),
                 "openFolder" => AppBridgeProtocol.CreateSuccessResponse(request.Id, OpenExistingPath(request, folder: true)),
@@ -692,6 +693,13 @@ internal sealed class AppBridge
     {
         _ = downloadCoordinator.CancelAllAsync();
         return new { cancelled = true };
+    }
+
+    // 清除队列中的保留终态任务（解析新作品时调用；活动/排队任务不受影响）
+    private object ClearDownloads()
+    {
+        downloadCoordinator.ClearRetainedTasks();
+        return new { cleared = true };
     }
 
     // 进程内重试：复用原任务 Asset/Variant 构造新任务入队；仅活动批次内有效
