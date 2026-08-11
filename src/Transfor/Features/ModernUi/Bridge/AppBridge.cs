@@ -557,19 +557,34 @@ internal sealed class AppBridge
         }
 
         var asset = lastPost.Assets[index];
-        if (asset.Kind != MediaKind.Image)
+        MediaVariant previewVariant;
+        if (asset.Kind == MediaKind.Image)
         {
-            // 预览链路（MediaPreviewService）只接受图片内容；视频卡片展示元数据
+            var selection = MediaQualitySelector.SelectBest(asset, mediaStateStore.Settings.QualityPreference);
+            if (selection.Status != MediaSelectionStatus.Selected || selection.Variant is null)
+            {
+                throw new InvalidOperationException("该媒体没有可预览的版本。");
+            }
+
+            previewVariant = selection.Variant;
+        }
+        else if (asset.Kind == MediaKind.Video && !string.IsNullOrEmpty(asset.CoverUrl))
+        {
+            // 视频封面（首帧画面）预览：封面为图片，仅预览不参与下载
+            previewVariant = new MediaVariant(
+                new Uri(asset.CoverUrl),
+                null, null, null, null, null,
+                "image/jpeg", null,
+                MediaVariantSource.StructuredData,
+                new MediaRequestContext(lastPost.SourceUri, null));
+        }
+        else
+        {
+            // 预览链路（MediaPreviewService）只接受图片内容；视频卡片展示封面或元数据
             throw new InvalidOperationException("仅图片支持预览。");
         }
 
-        var selection = MediaQualitySelector.SelectBest(asset, mediaStateStore.Settings.QualityPreference);
-        if (selection.Status != MediaSelectionStatus.Selected || selection.Variant is null)
-        {
-            throw new InvalidOperationException("该媒体没有可预览的版本。");
-        }
-
-        var path = await previewService.DownloadPreviewAsync(selection.Variant, CancellationToken.None).ConfigureAwait(false);
+        var path = await previewService.DownloadPreviewAsync(previewVariant, CancellationToken.None).ConfigureAwait(false);
         // 限制原始文件 ≤ 4MB（base64 data URL 膨胀约 1.33x，最终 Bridge 响应约 ≤5.3MB）
         var info = new FileInfo(path);
         if (info.Length > 4 * 1024 * 1024)
@@ -578,7 +593,7 @@ internal sealed class AppBridge
         }
 
         var bytes = await File.ReadAllBytesAsync(path).ConfigureAwait(false);
-        var mime = selection.Variant.ContentType ?? (asset.Kind == MediaKind.Image ? "image/jpeg" : "video/mp4");
+        var mime = previewVariant.ContentType ?? "image/jpeg";
         return AppBridgeProtocol.CreateSuccessResponse(request.Id, new
         {
             dataUrl = $"data:{mime};base64,{Convert.ToBase64String(bytes)}",
@@ -694,6 +709,7 @@ internal sealed class AppBridge
                     width = variant?.Width,
                     height = variant?.Height,
                     contentLength = variant?.ContentLength,
+                    coverUrl = asset.CoverUrl,
                     status = selection.Status.ToString(),
                     message = selection.Message,
                 };

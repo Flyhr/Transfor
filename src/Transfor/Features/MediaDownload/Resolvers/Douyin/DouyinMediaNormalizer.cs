@@ -66,7 +66,8 @@ internal static class DouyinMediaNormalizer
                     variants,
                     candidate.SourceIndex,
                     candidate.Role,
-                    candidate.PairId));
+                    candidate.PairId,
+                    candidate.CoverUrl));
             }
         }
 

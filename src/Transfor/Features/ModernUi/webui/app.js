@@ -408,9 +408,9 @@ function renderPost(post) {
     thumb.className = "media-thumbnail";
     const preview = document.createElement("div");
     preview.className = "media-preview";
-    const canPreview = asset.kind === "image" && asset.status === "Selected";
-    if (asset.kind === "video" && asset.status === "Selected") {
-      // 视频卡片：清晰播放图标占位（不再是低对比度空白）
+    const canPreview = (asset.kind === "image" || (asset.kind === "video" && asset.coverUrl)) && asset.status === "Selected";
+    if (asset.kind === "video" && asset.status === "Selected" && !asset.coverUrl) {
+      // 视频卡片（无封面）：清晰播放图标占位（不再是低对比度空白）
       preview.classList.add("video-placeholder");
       preview.innerHTML = '<svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M10 8.5l6 3.5-6 3.5z"/></svg><span>视频</span>';
     } else {

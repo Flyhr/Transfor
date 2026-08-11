@@ -222,6 +222,21 @@ internal static class DouyinPageParser
         return true;
     }
 
+    // 视频封面（首帧画面）：video.cover.url_list[0]；仅作预览展示，不参与下载
+    private static string? GetCoverUrl(JsonElement video)
+    {
+        if (!video.TryGetProperty("cover", out var cover) || cover.ValueKind != JsonValueKind.Object
+            || !cover.TryGetProperty("url_list", out var urls)
+            || urls.ValueKind != JsonValueKind.Array
+            || urls.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        var text = urls[0].GetString();
+        return Uri.TryCreate(text, UriKind.Absolute, out var uri) && uri.Scheme is ("http" or "https") ? text : null;
+    }
+
     // 逐图解析：每张图产出静态照片（url_list）与动态视频（image.video）配对资产；
     // 是否为实况图以存在可播放视频地址为最终依据，live_photo_type/clip_type 仅作辅助
     private static void ParseImageItems(
@@ -237,6 +252,9 @@ internal static class DouyinPageParser
 
             var stillVariants = CollectImageVariants(image);
             var motionVariants = CollectImageMotionVariants(image);
+            var motionCover = image.TryGetProperty("video", out var motionVideo) && motionVideo.ValueKind == JsonValueKind.Object
+                ? GetCoverUrl(motionVideo)
+                : null;
 
             // 有真实可播放的动态视频地址才算实况图（音乐链接已被过滤）
             var isLivePhoto = motionVariants.Count > 0;
@@ -260,7 +278,8 @@ internal static class DouyinPageParser
                     motionVariants,
                     sourceIndex,
                     MediaAssetRole.LivePhotoMotion,
-                    pairId));
+                    pairId,
+                    motionCover));
             }
 
             sourceIndex++;
@@ -397,7 +416,7 @@ internal static class DouyinPageParser
 
         if (variants.Count > 0)
         {
-            assets.Add(new DouyinAssetCandidate(0, MediaKind.Video, variants));
+            assets.Add(new DouyinAssetCandidate(0, MediaKind.Video, variants, CoverUrl: GetCoverUrl(video)));
         }
     }
 
