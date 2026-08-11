@@ -291,6 +291,8 @@ internal sealed class MediaDownloadCoordinator : IDisposable
                 DateTimeOffset.UtcNow);
             stateStore.Add(entry);
             BatchCompleted?.Invoke(this, batch.Id);
+            // 下载后打开目录设置：批次有成功文件时打开对应目录一次（尽力而为）
+            TryOpenFolderOnBatchComplete(results);
         }
         finally
         {
@@ -373,6 +375,42 @@ internal sealed class MediaDownloadCoordinator : IDisposable
 
         TaskProgressChanged?.Invoke(this, progress);
     }
+
+    // 下载后打开目录设置：批次有成功文件时打开对应目录一次（尽力而为，失败不影响结果）
+    private void TryOpenFolderOnBatchComplete(List<MediaDownloadResult> results)
+    {
+        if (!ShouldOpenFolderAfterDownload(stateStore.Settings, results))
+        {
+            return;
+        }
+
+        var savedPath = results.FirstOrDefault(r => r.Status == MediaDownloadStatus.Succeeded)?.SavedPath;
+        if (savedPath is null)
+        {
+            return;
+        }
+
+        var directory = Path.GetDirectoryName(savedPath);
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+        {
+            return;
+        }
+
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", $"\"{directory}\"") { UseShellExecute = true });
+        }
+        catch
+        {
+            // 打开目录失败不影响下载结果
+        }
+    }
+
+    // 是否应在批次落定后打开下载目录（纯函数，可离线测试）：
+    // 设置开启且有成功文件时触发
+    internal static bool ShouldOpenFolderAfterDownload(MediaDownloadSettings settings, IReadOnlyList<MediaDownloadResult> results)
+        => settings.OpenFolderAfterDownload
+           && results.Any(r => r.Status == MediaDownloadStatus.Succeeded && r.SavedPath is not null);
 
     private void SetRuntimePhase(Guid taskId, DownloadPhase phase)
     {

@@ -75,7 +75,7 @@ internal sealed class AppBridge
             {
                 "getAppInfo" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetAppInfo()),
                 "getSettings" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetSettings()),
-                "saveSettings" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SaveSettings(request)),
+                "saveSettings" => SaveSettings(request),
                 "checkUpdate" => await CheckUpdateAsync(request).ConfigureAwait(false),
                 "getClipboardText" => await GetClipboardTextAsync(request).ConfigureAwait(false),
                 "convertText" => AppBridgeProtocol.CreateSuccessResponse(request.Id, ConvertText(request)),
@@ -141,11 +141,12 @@ internal sealed class AppBridge
         },
     };
 
-    private object SaveSettings(BridgeRequest request)
+    private string SaveSettings(BridgeRequest request)
     {
-        // 统一解析并校验全部参数：任一非法 → 抛错（响应 error），不落盘；
-        // 全部合法 → 一次性 UpdateSettings（原子写入，任一写失败整体回滚）
-        var next = stateStore.Settings;
+        // 两阶段原子化：第一阶段解析并校验全部候选（无副作用，任一非法整体拒绝）；
+        // 第二阶段执行副作用（热键注册 → 文本持久化 → 媒体持久化），任一失败补偿回滚
+        // ===== 第一阶段：解析与校验（无副作用） =====
+        var textNext = stateStore.Settings;
 
         var channelText = request.GetString("updateChannel");
         if (!string.IsNullOrWhiteSpace(channelText))
@@ -155,7 +156,7 @@ internal sealed class AppBridge
                 throw new ArgumentException($"非法更新通道：{channelText}");
             }
 
-            next = next with { UpdateChannel = channel };
+            textNext = textNext with { UpdateChannel = channel };
         }
 
         var quoteText = request.GetString("quoteHistoryLimit");
@@ -166,7 +167,7 @@ internal sealed class AppBridge
                 throw new ArgumentException($"非法引号转换历史上限：{quoteText}");
             }
 
-            next = next with { QuoteHistoryLimit = quote };
+            textNext = textNext with { QuoteHistoryLimit = quote };
         }
 
         var spaceText = request.GetString("spaceHistoryLimit");
@@ -177,44 +178,19 @@ internal sealed class AppBridge
                 throw new ArgumentException($"非法去除空格历史上限：{spaceText}");
             }
 
-            next = next with { SpaceHistoryLimit = space };
+            textNext = textNext with { SpaceHistoryLimit = space };
         }
 
-        // 快捷键（需热键服务）：先注册新热键（系统立即生效），再随文本设置持久化；
-        // 持久化失败回滚热键注册并抛出
+        HotKeyBinding? newHotKey = null;
         var keyText = request.GetString("hotKeyKey");
         var modifiersText = request.GetString("hotKeyModifiers");
         if (keyText is not null || modifiersText is not null)
         {
-            var newHotKey = ParseHotKey(keyText ?? string.Empty, modifiersText ?? string.Empty);
-            if (HotKeyManager is null)
-            {
-                throw new InvalidOperationException("热键服务未初始化。");
-            }
-
-            if (!HotKeyManager.TryReplace(newHotKey, out var hotKeyError))
-            {
-                throw new InvalidOperationException(hotKeyError);
-            }
-
-            var previousHotKey = stateStore.Settings.HistoryHotKey;
-            try
-            {
-                next = next with { HistoryHotKey = newHotKey };
-            }
-            catch
-            {
-                HotKeyManager.TryReplace(previousHotKey, out _);
-                throw;
-            }
+            newHotKey = ParseHotKey(keyText ?? string.Empty, modifiersText ?? string.Empty);
         }
 
-        // 文本设置一次性持久化（含热键；写失败时内存回滚且热键已注册的新值保留——
-        // 旧界面同语义：注册成功即生效，持久化失败提示）
-        stateStore.UpdateSettings(next);
-
-        // 媒体设置（下载目录/并发/默认全选/打开目录/质量/网络模式/代理）
         var mediaNext = mediaStateStore.Settings;
+        var networkChanged = false;
         var directoryText = request.GetString("downloadDirectory");
         if (!string.IsNullOrWhiteSpace(directoryText))
         {
@@ -257,11 +233,77 @@ internal sealed class AppBridge
             mediaNext = mediaNext with { ProxyAddress = proxyText };
         }
 
-        // 媒体设置校验（并发/枚举/CustomProxy 代理地址/目录）后一次性持久化
-        mediaNext.Validate();
-        mediaStateStore.UpdateSettings(mediaNext);
+        // 网络模式/代理变化：当前进程不生效（服务启动时构造），提示重启
+        if (mediaNext.NetworkMode != mediaStateStore.Settings.NetworkMode
+            || !string.Equals(mediaNext.ProxyAddress, mediaStateStore.Settings.ProxyAddress, StringComparison.Ordinal))
+        {
+            networkChanged = true;
+        }
 
-        return GetSettings();
+        // 媒体候选校验（并发/枚举/CustomProxy 代理地址/目录）
+        mediaNext.Validate();
+
+        // ===== 第二阶段：执行副作用（带补偿回滚） =====
+        var previousText = stateStore.Settings;
+        HotKeyBinding? previousHotKey = null;
+        if (newHotKey is not null)
+        {
+            if (HotKeyManager is null)
+            {
+                throw new InvalidOperationException("热键服务未初始化。");
+            }
+
+            if (!HotKeyManager.TryReplace(newHotKey, out var hotKeyError))
+            {
+                throw new InvalidOperationException(hotKeyError);
+            }
+
+            previousHotKey = previousText.HistoryHotKey;
+            textNext = textNext with { HistoryHotKey = newHotKey };
+        }
+
+        // 文本设置持久化（内部回滚内存）；失败时补偿回滚热键注册
+        try
+        {
+            stateStore.UpdateSettings(textNext);
+        }
+        catch
+        {
+            if (newHotKey is not null && previousHotKey is not null)
+            {
+                HotKeyManager?.TryReplace(previousHotKey, out _);
+            }
+
+            throw;
+        }
+
+        // 媒体设置持久化（内部回滚内存）；失败时补偿回滚文本设置与热键
+        try
+        {
+            mediaStateStore.UpdateSettings(mediaNext);
+        }
+        catch
+        {
+            try
+            {
+                stateStore.UpdateSettings(previousText);
+            }
+            catch
+            {
+                // 文本回滚失败（磁盘损坏）：保留内存回滚后的状态并继续抛出
+            }
+
+            if (newHotKey is not null && previousHotKey is not null)
+            {
+                HotKeyManager?.TryReplace(previousHotKey, out _);
+            }
+
+            throw;
+        }
+
+        return AppBridgeProtocol.CreateSuccessResponse(
+            request.Id,
+            new { saved = true, restartRequired = networkChanged });
     }
 
     // 解析快捷键（modifiers 逗号分隔如 "Control,Alt"）；纯解析不注册

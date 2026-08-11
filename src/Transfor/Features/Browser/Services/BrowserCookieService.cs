@@ -57,23 +57,23 @@ internal sealed class BrowserCookieService
         return Task.CompletedTask;
     });
 
-    // 仅清除缓存（Cookie/登录状态保留）
+    // 仅清除磁盘缓存（Cookie/登录状态保留；DiskCache 为 WebView2 实际磁盘 HTTP/资源缓存）
     public Task ClearCacheAsync() => RunOnUiAsync(async () =>
     {
         if (core?.Profile is not null)
         {
-            await core.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.CacheStorage).ConfigureAwait(true);
+            await core.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.DiskCache).ConfigureAwait(true);
         }
     });
 
-    // 清除全部浏览器数据：Cookie + 缓存 + DOM/本地存储（登录、缓存、LocalStorage 全部重置）
+    // 清除全部浏览器数据：Cookie + 磁盘缓存 + DOM/本地存储（登录、缓存、LocalStorage 全部重置）
     public Task ClearAllBrowserDataAsync() => RunOnUiAsync(async () =>
     {
         if (core?.Profile is not null)
         {
             await core.Profile.ClearBrowsingDataAsync(
                 CoreWebView2BrowsingDataKinds.Cookies
-                | CoreWebView2BrowsingDataKinds.CacheStorage
+                | CoreWebView2BrowsingDataKinds.DiskCache
                 | CoreWebView2BrowsingDataKinds.AllDomStorage).ConfigureAwait(true);
         }
     });

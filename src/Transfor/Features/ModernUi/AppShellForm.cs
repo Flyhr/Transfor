@@ -103,9 +103,10 @@ internal sealed class AppShellForm : Form
             var kinds = scope switch
             {
                 "cookies" => CoreWebView2BrowsingDataKinds.Cookies,
-                "cache" => CoreWebView2BrowsingDataKinds.CacheStorage,
+                // DiskCache 才是 WebView2 实际磁盘 HTTP/资源缓存（CacheStorage 是 DOM Cache API）
+                "cache" => CoreWebView2BrowsingDataKinds.DiskCache,
                 _ => CoreWebView2BrowsingDataKinds.Cookies
-                    | CoreWebView2BrowsingDataKinds.CacheStorage
+                    | CoreWebView2BrowsingDataKinds.DiskCache
                     | CoreWebView2BrowsingDataKinds.AllDomStorage,
             };
             await core.Profile.ClearBrowsingDataAsync(kinds);

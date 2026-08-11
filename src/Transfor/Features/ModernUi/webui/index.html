@@ -282,6 +282,7 @@ body {
           <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-ctrl"> Ctrl</label>
           <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-alt"> Alt</label>
           <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-shift"> Shift</label>
+          <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-win"> Win</label>
           <select class="input" id="setting-key" style="padding:5px"></select>
         </span>
       </div>
@@ -392,9 +393,10 @@ function navigateTo(page) {
   document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
   const target = document.getElementById("page-" + page);
   if (target) target.classList.add("active");
-  // 下载页激活时拉取最新任务快照；历史页激活时加载历史
+  // 下载页激活时拉取最新任务快照；历史页激活时加载历史；首页激活时刷新最近记录
   if (page === "downloads") refreshDownloads();
   if (page === "history") loadHistory();
+  if (page === "home") loadHomeSummary();
   // 浏览器页激活时显示浏览器控件（其余页面隐藏）；通知宿主同步侧边栏高亮
   Bridge.invoke("setBrowserVisible", { visible: page === "browser" }).catch(() => {});
   Bridge.invoke("setActiveNav", { page }).catch(() => {});
@@ -507,6 +509,8 @@ const mediaPost = document.getElementById("media-post");
 const mediaGrid = document.getElementById("media-grid");
 let currentShareLink = null;
 let currentAssets = [];
+// 默认全选设置（媒体页解析后按此勾选；初始化时从 getSettings 加载）
+let defaultSelectAllSetting = true;
 
 const roleLabels = { livephotostill: "图片 LIVE", livephotomotion: "视频 LIVE" };
 function assetTypeLabel(asset) {
@@ -593,7 +597,7 @@ function renderPost(post) {
     checkRow.style.cssText = "display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px";
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
-    checkbox.checked = asset.status === "Selected";
+    checkbox.checked = defaultSelectAllSetting && asset.status === "Selected";
     checkbox.disabled = asset.status !== "Selected";
     checkRow.appendChild(checkbox);
     checkRow.appendChild(document.createTextNode("下载"));
@@ -1055,11 +1059,12 @@ function buildKeyOptions() {
   });
 }
 
-// Keys 名称 → 修饰键勾选
+// Keys 名称 → 修饰键勾选（含 Win=LWin）
 function loadHotKey(modifiers, key) {
   document.getElementById("setting-mod-ctrl").checked = modifiers.includes("Control");
   document.getElementById("setting-mod-alt").checked = modifiers.includes("Alt");
   document.getElementById("setting-mod-shift").checked = modifiers.includes("Shift");
+  document.getElementById("setting-mod-win").checked = modifiers.includes("LWin");
   const keySelect = document.getElementById("setting-key");
   if (key) keySelect.value = key;
   if (keySelect.selectedIndex < 0) keySelect.value = "Q";
@@ -1070,6 +1075,7 @@ function collectHotKey() {
   if (document.getElementById("setting-mod-ctrl").checked) mods.push("Control");
   if (document.getElementById("setting-mod-alt").checked) mods.push("Alt");
   if (document.getElementById("setting-mod-shift").checked) mods.push("Shift");
+  if (document.getElementById("setting-mod-win").checked) mods.push("LWin");
   return { modifiers: mods.join(","), key: document.getElementById("setting-key").value };
 }
 
@@ -1080,6 +1086,7 @@ document.getElementById("setting-network").addEventListener("change", (e) => {
 
 function loadSettingsUi() {
   return Bridge.invoke("getSettings").then((settings) => {
+    defaultSelectAllSetting = settings.media.defaultSelectAll;
     document.getElementById("setting-channel").value = settings.updateChannel;
     document.getElementById("setting-quote-limit").value = settings.quoteHistoryLimit;
     document.getElementById("setting-space-limit").value = settings.spaceHistoryLimit;
@@ -1099,7 +1106,7 @@ function loadSettingsUi() {
 document.getElementById("setting-save").addEventListener("click", async () => {
   const hotKey = collectHotKey();
   try {
-    await Bridge.invoke("saveSettings", {
+    const result = await Bridge.invoke("saveSettings", {
       updateChannel: document.getElementById("setting-channel").value,
       quoteHistoryLimit: String(document.getElementById("setting-quote-limit").value),
       spaceHistoryLimit: String(document.getElementById("setting-space-limit").value),
@@ -1113,8 +1120,9 @@ document.getElementById("setting-save").addEventListener("click", async () => {
       networkMode: document.getElementById("setting-network").value,
       proxyAddress: document.getElementById("setting-proxy").value,
     }, 20000);
-    settingResult.textContent = "设置已保存。";
-    toast("设置已保存");
+    const notice = result.restartRequired ? "网络设置将在重启应用后生效。" : "设置已保存。";
+    settingResult.textContent = notice;
+    toast(notice);
     loadSettingsUi();
   } catch (e) { settingResult.textContent = e.message; toast(e.message, "error"); }
 });
