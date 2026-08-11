@@ -700,7 +700,7 @@ function updateTaskRow(row, t) {
     if (t.status === "succeeded") {
       fill.style.width = "100%";
       percentEl.textContent = "100%";
-      speedEl.textContent = "已完成";
+      speedEl.textContent = "—";
       errorEl.textContent = "";
     } else {
       fill.style.width = "0%";
@@ -735,8 +735,7 @@ function updateTaskRow(row, t) {
       .catch((e) => toast(e.message, "error")));
   }
   if (t.status === "succeeded" && t.savedPath) {
-    addAction(actions, "打开文件", () => Bridge.invoke("openFile", { path: t.savedPath }).catch((e) => toast(e.message, "error")));
-    addAction(actions, "打开目录", () => Bridge.invoke("openFolder", { path: t.savedPath }).catch((e) => toast(e.message, "error")));
+    addOpenMenu(actions, t.savedPath);
   }
 }
 
@@ -747,6 +746,45 @@ function addAction(container, label, handler) {
   btn.style.cssText = "padding:4px 10px;font-size:12px";
   btn.addEventListener("click", handler);
   container.appendChild(btn);
+}
+
+// 成功任务操作：单一图标按钮（文件夹），点击弹出 打开文件/打开目录 选择菜单
+let openMenu = null;
+document.addEventListener("click", () => { if (openMenu) { openMenu.hidden = true; openMenu = null; } });
+
+function addOpenMenu(container, savedPath) {
+  const wrap = document.createElement("div");
+  wrap.className = "queue-menu-wrap";
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn queue-open-btn";
+  btn.title = "打开";
+  btn.setAttribute("aria-haspopup", "menu");
+  btn.setAttribute("aria-label", "打开文件或目录");
+  btn.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M2 3.5h3.2l1.6 2H13a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5z"/><path d="M2 7.5h12"/></svg>';
+  const menu = document.createElement("div");
+  menu.className = "queue-open-menu";
+  menu.hidden = true;
+  menu.setAttribute("role", "menu");
+  const hide = () => { menu.hidden = true; if (openMenu === menu) openMenu = null; };
+  const item = (label, fn) => {
+    const el = document.createElement("button");
+    el.type = "button";
+    el.textContent = label;
+    el.addEventListener("click", () => { hide(); fn(); });
+    return el;
+  };
+  menu.appendChild(item("打开文件", () => Bridge.invoke("openFile", { path: savedPath }).catch((e) => toast(e.message, "error"))));
+  menu.appendChild(item("打开目录", () => Bridge.invoke("openFolder", { path: savedPath }).catch((e) => toast(e.message, "error"))));
+  wrap.appendChild(btn);
+  wrap.appendChild(menu);
+  container.appendChild(wrap);
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (openMenu && openMenu !== menu) openMenu.hidden = true;
+    openMenu = menu.hidden ? menu : null;
+    menu.hidden = !menu.hidden;
+  });
 }
 
 function formatSpeed(bytesPerSecond) {

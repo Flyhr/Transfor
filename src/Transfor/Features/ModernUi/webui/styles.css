@@ -211,6 +211,14 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
 .queue-error { min-width:0; max-width:100%; overflow:hidden; color:#C2413B; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
 .queue-actions { display:flex; justify-content:flex-end; gap:6px; flex-wrap:wrap; }
 .queue-actions .btn { min-height:30px; padding:4px 9px; font-size:12px; white-space:nowrap; }
+/* 成功任务单一打开操作：图标按钮 + 弹出菜单（打开文件/打开目录） */
+.queue-menu-wrap { position:relative; }
+.queue-open-btn { display:grid; place-items:center; width:30px; min-height:30px; padding:0; color:var(--ff-primary); background:#fff; }
+.queue-open-btn:hover { color:#fff; background:var(--ff-primary); }
+.queue-open-btn svg { fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
+.queue-open-menu { position:absolute; right:0; top:calc(100% + 4px); z-index:30; min-width:120px; padding:4px; border:1px solid var(--ff-border); border-radius:8px; background:#fff; box-shadow:0 4px 12px rgba(11,18,32,.12); }
+.queue-open-menu button { display:block; width:100%; min-height:32px; padding:6px 10px; border:0; border-radius:6px; color:var(--ff-text); background:transparent; text-align:left; font-size:12px; cursor:pointer; }
+.queue-open-menu button:hover { color:var(--ff-primary); background:var(--ff-soft); }
 #media-download-status { display:none !important; }
 @media (max-width: 960px) {
   .media-batch-actions { justify-content:flex-start; flex-wrap:wrap; gap:8px; }
