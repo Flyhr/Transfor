@@ -28,6 +28,9 @@ internal sealed class AppBridge
     // 浏览器控件显隐回调（AppShell 提供）：HTML 页面切换浏览器页时调用
     public Action<bool>? SetBrowserVisible { get; set; }
 
+    // 侧边栏高亮回调（AppShell 提供）：HTML 内部跳转（如「查看媒体」）时同步宿主高亮
+    public Action<string>? SetActiveNav { get; set; }
+
     public AppBridge(
         TextStateStore stateStore,
         IUpdateService updateService,
@@ -84,6 +87,7 @@ internal sealed class AppBridge
                 "browserStop" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowserAction(() => BrowserNavigation?.Stop())),
                 "browserGetState" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowserGetState()),
                 "setBrowserVisible" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SetBrowserVisibleState(request)),
+                "setActiveNav" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SetActiveNavState(request)),
                 _ => AppBridgeProtocol.CreateErrorResponse(request.Id, $"未知方法：{request.Method}"),
             };
         }
@@ -634,11 +638,25 @@ internal sealed class AppBridge
         };
     }
 
-    // 浏览器控件显隐（HTML 页面切换浏览器页时调用）
+    // 浏览器控件显隐（HTML 页面切换浏览器页时调用）；visible 缺失/非布尔 → 拒绝
     private object SetBrowserVisibleState(BridgeRequest request)
     {
-        var visible = request.GetBool("visible") ?? false;
+        var visible = request.GetBool("visible")
+            ?? throw new ArgumentException("参数 visible 必须为布尔值。");
         SetBrowserVisible?.Invoke(visible);
+        return new { ok = true };
+    }
+
+    // 侧边栏高亮同步（HTML 内部跳转时通知宿主）
+    private object SetActiveNavState(BridgeRequest request)
+    {
+        var page = request.GetString("page");
+        if (string.IsNullOrWhiteSpace(page))
+        {
+            throw new ArgumentException("参数 page 不能为空。");
+        }
+
+        SetActiveNav?.Invoke(page);
         return new { ok = true };
     }
 }

@@ -44,28 +44,11 @@ html, body { height: 100%; }
 body {
   font-family: var(--font-family); font-size: 14px;
   background: var(--bg); color: var(--text);
-  display: flex; overflow: hidden; transition: background var(--transition), color var(--transition);
+  overflow: hidden; transition: background var(--transition), color var(--transition);
 }
 
-/* ===== 侧边栏 ===== */
-.sidebar {
-  width: 200px; flex-shrink: 0; background: var(--bg-sidebar);
-  border-right: 1px solid var(--border);
-  display: flex; flex-direction: column; padding: var(--spacing-3);
-}
-.sidebar-brand { font-size: 16px; font-weight: 600; padding: var(--spacing-3) var(--spacing-2) var(--spacing-4); }
-.nav-item {
-  display: flex; align-items: center; gap: var(--spacing-2);
-  padding: var(--spacing-2) var(--spacing-3); border-radius: var(--radius-sm);
-  cursor: pointer; color: var(--text); border: none; background: transparent;
-  font-size: 14px; text-align: left; transition: background var(--transition);
-}
-.nav-item:hover { background: var(--hover); }
-.nav-item.active { background: var(--hover); font-weight: 600; }
-.sidebar-footer { margin-top: auto; padding: var(--spacing-3) var(--spacing-2); font-size: 12px; color: var(--text-secondary); }
-
-/* ===== 内容区 ===== */
-.content { flex: 1; overflow-y: auto; padding: var(--spacing-5); }
+/* ===== 内容区（侧边栏由宿主窗体承载） ===== */
+.content { height: 100%; overflow-y: auto; padding: var(--spacing-5); }
 .page { display: none; max-width: 860px; }
 .page.active { display: block; }
 .page h1 { font-size: 22px; font-weight: 600; margin-bottom: var(--spacing-2); }
@@ -123,22 +106,6 @@ body {
 </style>
 </head>
 <body>
-
-<div class="sidebar">
-  <div class="sidebar-brand">Transfor</div>
-  <button class="nav-item active" data-page="home">首页</button>
-  <button class="nav-item" data-page="media">媒体下载</button>
-  <button class="nav-item" data-page="downloads">下载</button>
-  <button class="nav-item" data-page="browser">浏览器</button>
-  <button class="nav-item" data-page="history">历史</button>
-  <button class="nav-item" data-page="settings">设置</button>
-  <div class="sidebar-footer">
-    <div id="app-version">版本 …</div>
-    <div style="margin-top:6px">
-      <button class="btn" id="theme-toggle" title="切换主题" style="font-size:12px;padding:3px 10px">主题：跟随系统</button>
-    </div>
-  </div>
-</div>
 
 <div class="content">
   <section class="page active" id="page-home">
@@ -330,34 +297,31 @@ const Bridge = (() => {
   return { invoke, on };
 })();
 
-/* ===== 主题（Phase 5D）：跟随系统 + 手动切换 ===== */
+/* ===== 主题（Phase 5D）：跟随系统 + 手动切换（宿主侧边栏按钮调用 __toggleTheme） ===== */
 const THEMES = ["system", "light", "dark"];
 const THEME_LABELS = { system: "跟随系统", light: "浅色", dark: "深色" };
 let currentTheme = "system";
-const themeToggle = document.getElementById("theme-toggle");
 function applyTheme(theme) {
   currentTheme = theme;
   document.documentElement.dataset.theme = theme;
-  themeToggle.textContent = "主题：" + THEME_LABELS[theme];
 }
-themeToggle.addEventListener("click", () => {
+window.__toggleTheme = () => {
   applyTheme(THEMES[(THEMES.indexOf(currentTheme) + 1) % THEMES.length]);
-});
+};
 
-/* ===== 导航 ===== */
-document.querySelectorAll(".nav-item").forEach((item) => {
-  item.addEventListener("click", () => {
-    document.querySelectorAll(".nav-item").forEach((n) => n.classList.remove("active"));
-    document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
-    item.classList.add("active");
-    document.getElementById("page-" + item.dataset.page).classList.add("active");
-    // 下载页激活时拉取最新任务快照；历史页激活时加载历史
-    if (item.dataset.page === "downloads") refreshDownloads();
-    if (item.dataset.page === "history") loadHistory();
-    // 浏览器页激活时显示浏览器控件（其余页面隐藏）
-    Bridge.invoke("setBrowserVisible", { visible: item.dataset.page === "browser" }).catch(() => {});
-  });
-});
+/* ===== 导航（宿主侧边栏与内部跳转共用） ===== */
+function navigateTo(page) {
+  document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
+  const target = document.getElementById("page-" + page);
+  if (target) target.classList.add("active");
+  // 下载页激活时拉取最新任务快照；历史页激活时加载历史
+  if (page === "downloads") refreshDownloads();
+  if (page === "history") loadHistory();
+  // 浏览器页激活时显示浏览器控件（其余页面隐藏）；通知宿主同步侧边栏高亮
+  Bridge.invoke("setBrowserVisible", { visible: page === "browser" }).catch(() => {});
+  Bridge.invoke("setActiveNav", { page }).catch(() => {});
+}
+window.__navigateTo = navigateTo;
 
 /* ===== Toast ===== */
 function toast(message, type = "") {
@@ -873,8 +837,7 @@ function deleteMediaEntry(index) {
 
 // 重新执行：切到媒体页并解析该链接
 function reparseShareLink(link) {
-  const mediaNav = document.querySelector('.nav-item[data-page="media"]');
-  if (mediaNav) mediaNav.click();
+  navigateTo("media");
   mediaLink.value = link;
   document.getElementById("media-resolve").click();
 }
@@ -921,12 +884,19 @@ Bridge.on("browserNavigated", (data) => {
   browserAddress.value = data.url || browserAddress.value;
   document.getElementById("browser-back").disabled = !data.canGoBack;
   document.getElementById("browser-forward").disabled = !data.canGoForward;
-  browserStatus.textContent = data.url || "";
+  browserStatus.textContent = data.success === false ? "导航失败：" + (data.error || "未知原因") : (data.url || "");
+});
+
+// 浏览器不可用（初始化失败）：显示提示并禁用导航
+Bridge.on("browserUnavailable", (data) => {
+  browserStatus.textContent = "浏览器不可用：" + (data.message || "初始化失败");
+  document.getElementById("browser-address").disabled = true;
+  document.getElementById("browser-go").disabled = true;
 });
 
 Bridge.on("pageMediaDetected", (data) => {
   if (data.count > 0) {
-    document.getElementById("browser-media-count").textContent = `当前页面检测到 ${data.count} 个媒体`;
+    document.getElementById("browser-media-count").textContent = `当前页面检测到 ${data.count} 个可能的媒体`;
     browserMediaHint.style.display = "block";
     browserMediaHint.dataset.url = data.url;
   } else {
@@ -961,15 +931,13 @@ document.getElementById("setting-check-update").addEventListener("click", async 
   } catch (e) { settingResult.textContent = "检查失败：" + e.message; }
 });
 
-/* ===== 初始化 ===== */
+/* ===== 初始化（版本/通道信息由宿主侧边栏显示；此处回填设置页） ===== */
 (async () => {
   try {
-    const info = await Bridge.invoke("getAppInfo");
-    document.getElementById("app-version").textContent = "Transfor v" + info.version + " · " + (info.channel === "beta" ? "Beta" : "Stable");
     const settings = await Bridge.invoke("getSettings");
     channelSelect.value = settings.updateChannel;
   } catch (e) {
-    document.getElementById("app-version").textContent = "Bridge 不可用：" + e.message;
+    settingResult.textContent = "Bridge 不可用：" + e.message;
   }
 })();
 </script>

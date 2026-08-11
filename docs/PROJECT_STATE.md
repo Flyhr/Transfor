@@ -77,7 +77,7 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 - **版本**：0.15.0（csproj `<Version>`，唯一来源）
 - **更新体系**：检查走 update-policy.json（GitHub raw `Release` 分支）；下载/安装/重启走 Velopack（GithubSource，Beta 通道读预发布）；`vpk pack -c stable|beta` 已实测通过
 - **浏览器（Phase 3/4A/4B/4C）**：WebView2 1.0.4129.50，独立 Profile `Browser\UserData`；浏览器页 + 隐藏宿主共用登录态；解析/下载兜底 WebView2BrowserSessionAccessor；4B 网络捕获 + MediaSniffer 白名单嗅探；4C CDP 详情接口响应体
-- **新界面（Phase 5/6）**：托盘「新界面（预览）」入口；AppShellForm（独立 Profile `Browser\AppUi` + 外部导航拦截 + WebMessageReceived 桥接）；webui/index.html 嵌入资源（Design System 组件 + 侧边栏 + 三态主题 + Bridge JS）；已迁移页面：媒体解析（M2）、下载管理（M3：任务列表/速度/取消/重试/打开文件，事件增量）、历史（M3：文本+媒体分组/搜索/删除/清空/重新执行）
+- **新界面（Phase 5/6）**：启动即主界面；宿主布局 = C# 侧边栏（200px：导航/主题/版本，双向高亮同步）+ 内容区（AppWebView 本地 UI + 浏览器控件叠放仅覆盖内容区，导航始终可达）；已迁移页面：首页文本工具（M2 后补）、媒体解析（M2）、下载管理+历史（M3）、浏览器（M4：内嵌互联网 WebView2 共享登录态 + 地址栏容错 + 媒体检测含尺寸/噪音过滤 + 初始化失败隔离）、历史（M3）、设置（部分）
 - **下载快照（M2 审查修复）**：MediaDownloadCoordinator.GetSnapshot（DownloadSnapshot：等待/下载中/已落定 + 进度 + 终态），CancelTask 支持排队批次（出队落定不写历史）；CreateRetryTask（进程内重试候选：复用 Asset/Variant，仅活动批次内有效）；TaskRuntime 保留 SourceShareLink/AssetIndex/Post；DownloadFileNameBuilder.BuildFileName（自 MediaDownloadPage 迁移，Bridge 与 WinForms 页共用同一命名规则）
 - **诊断目录**：`%TEMP%\Transfor\diagnostics\`（解析完成 capture-*.json + 下载失败 failed-media-*；临时诊断代码在 CaptureDiagnostics / MediaFileFinalizer.SaveFailureSample，定位后移除）
 - **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新包未做代码签名；WebView2 媒体预取未实现；Edge CDP 保留未删除；新界面为预览（业务页 Phase 6 迁移）；webui 单文件嵌入（改 UI 需重新编译）

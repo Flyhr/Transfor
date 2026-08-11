@@ -100,7 +100,8 @@ internal static class BrowserCaptureSession
         => core.ExecuteScriptAsync("window.__transforDomResult = null; window.__transforDomPending = false; window.__transforFetchResult = null; window.__transforFetchPending = false;");
 
     // 统计页面媒体候选数（触发 + 轮询，最长 10 秒）：
-    // 供新界面浏览器控件检测「当前页面检测到 X 个媒体」；必须在 UI 线程调用
+    // 供新界面浏览器控件检测「当前页面检测到 X 个媒体」；必须在 UI 线程调用；
+    // 基础过滤排除 Logo/头像/广告/表情等普通网页装饰资源（尺寸 + 噪音 URL 关键词）
     public static async Task<int> CountPageMediaAsync(CoreWebView2 core, CancellationToken cancellationToken)
     {
         await ResetAsync(core).ConfigureAwait(true);
@@ -111,9 +112,10 @@ internal static class BrowserCaptureSession
         {
             cancellationToken.ThrowIfCancellationRequested();
             var candidates = await ReadDomCandidatesAsync(core, cancellationToken).ConfigureAwait(true);
-            if (candidates.Count > 0)
+            var mediaCount = candidates.Count(IsPlausibleMedia);
+            if (mediaCount > 0)
             {
-                return candidates.Count;
+                return mediaCount;
             }
 
             await Task.Delay(500, cancellationToken).ConfigureAwait(true);
@@ -121,6 +123,20 @@ internal static class BrowserCaptureSession
 
         return 0;
     }
+
+    // 媒体候选合理性（纯函数，可离线测试）：小尺寸（头像/小图标/表情）与
+    // 噪音 URL（avatar/logo/emoji/ad 等装饰资源）不计入；无尺寸的 video source 保留
+    internal static bool IsPlausibleMedia(BrowserCapturedCandidate candidate)
+    {
+        if (candidate.Width is < MinimumPlausibleSize || candidate.Height is < MinimumPlausibleSize)
+        {
+            return false;
+        }
+
+        return !MediaSniffer.IsNoise(candidate.Uri);
+    }
+
+    private const int MinimumPlausibleSize = 200;
 
     // 提取结构化数据（页面字符串）；ExecuteScriptAsync 结果按 JSON 编码反序列化；
     // ConfigureAwait(true)：本方法在 BrowserHostForm UI 线程上下文执行，
