@@ -1,6 +1,6 @@
 # Transfor
 
-Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系统托盘，通过全局快捷键随时呼出历史记录面板；媒体下载支持解析抖音分享链接并下载图片/视频；内置 WebView2 浏览器（独立 Profile 持久化登录态）。
+Windows 桌面工具。基于 .NET 10 + WinForms 构建：内置现代化界面（Web UI：文本转换、媒体下载、浏览器、历史、设置）；媒体下载支持解析抖音分享链接并下载图片/视频；内置 WebView2 浏览器（独立 Profile 持久化登录态，兼作解析/下载的浏览器兜底）；应用常驻系统托盘。
 
 ## 功能
 
@@ -9,8 +9,8 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - **引号转换**：英文双引号 `"` → `'`，中文双引号 `“ ”` → `‘ ’`
 - **去除空格**：移除半角空格 ` ` 与全角空格 `　`，保留换行与制表符
 - **历史记录**：两种功能独立记录转换历史，自动裁剪，上限可在 1–500 之间配置（默认 100）
-- **全局快捷键**：默认 `Alt+Q` 呼出历史面板（可在设置中修改），选中历史项后自动粘贴到呼出前的目标窗口
-- **系统托盘**：关闭主窗口时最小化到托盘，双击托盘图标重新打开
+- **全局快捷键**：[待移除] 默认 `Alt+Q` 呼出历史面板（可在设置中修改），选中历史项后自动粘贴到呼出前的目标窗口
+- **系统托盘**：关闭主窗口时最小化到托盘，双击托盘图标重新打开（托盘菜单提供「打开主窗口 / 退出」）
 - **状态持久化**：设置、界面状态与文本历史分别保存到 `settings.json`、`ui-state.json` 与 `text-history.json`，文件损坏时自动回退到默认值
 
 ### 媒体下载
@@ -23,21 +23,21 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - 需要登录或验证码时，在「浏览器」页完成抖音登录（与解析/下载共享同一 Profile 登录态；登录一次持续复用，后续解析/下载自动携带）
 - 流式下载（`.part` 临时文件 + 原子落盘）、队列进度、单个/全部取消、失败重试；重名文件自动编号不覆盖
 - 图片预览走与正式下载相同的安全链路；媒体设置可配置默认下载目录、并发数（1–8）、默认全选、下载后打开目录与质量策略
-- 关闭主窗口到托盘时下载继续；真正退出且有任务时会先确认再取消任务
+- 最小化到托盘时下载继续；真正退出且有任务时会先确认再取消任务
 
 ### 内置浏览器（WebView2）
 
-- 主窗口「浏览器」页：地址栏 + 后退/前进/刷新/停止，支持访问任意网站（含 douyin.com 登录）
+- 新界面「浏览器」页：地址栏 + 后退/前进/刷新/停止，支持访问任意网站（含 douyin.com 登录）
 - 独立 Profile（`%LOCALAPPDATA%\Transfor\Browser\UserData`）：Cookie、LocalStorage、缓存与登录状态持久化，重启应用后保持登录
 - 媒体解析/下载的浏览器兜底（隐藏宿主）与「浏览器」页**共享同一 Profile**：在浏览器页登录抖音一次，解析与下载自动携带登录态
 - 设置中可清除浏览器数据：Cookie / 缓存 / 全部浏览器数据（登录态一并重置）
 - 初始化失败（如 WebView2 Runtime 缺失）时页面显示明确提示，不影响应用其他功能
 - 依赖系统 Edge WebView2 Runtime（Windows 11 内置；Windows 10 随 Edge 浏览器更新）
 
-### 新界面（Phase 5/6 渐进迁移）
+### 新界面（当前主界面）
 
-- 托盘菜单「新界面（预览）」打开现代化界面宿主：WinForms Host + WebView2 + 本地 HTML/CSS/JS
-- 左侧边栏导航（首页/媒体下载/浏览器/历史/设置）+ 页面容器；Design System 基础组件（按钮/输入/卡片/对话框/Toast/进度条/侧边栏）；主题：跟随系统/浅色/深色
+- 启动即进入新界面宿主：WinForms Host + WebView2 + 本地 HTML/CSS/JS（嵌入程序集，三文件）；WebView2 Runtime 缺失时降级为旧界面
+- 左侧边栏导航（工作台/媒体下载/浏览器/历史/设置）+ 内容区；Design System 基础组件（按钮/输入/卡片/对话框/Toast/进度条/侧边栏）；主题：跟随系统/浅色/深色
 - **媒体下载页已迁移**：粘贴/输入分享链接（支持完整分享文本）→ 解析 → 媒体卡片（图片/视频/实况 LIVE、分辨率/大小、点击预览、勾选/全选）→ 下载选中；下载进度/完成经 Bridge 事件实时推送；解析失败不保留旧作品
 - **下载管理页已迁移**：任务列表（等待中/下载中/已完成/失败/已取消 + 进度条 + 速度 + 已下载/总量），取消/重试（进程内）/打开文件/打开文件夹（仅限下载目录内），事件增量更新；下方历史记录（最近 50 条，重新执行/打开文件夹）
 - **历史页已迁移**：文本转换（引号/空格）+ 媒体下载分组，搜索过滤、单条删除、整组清空、媒体记录「重新执行」
@@ -46,7 +46,7 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - **首页已迁移**：文本工具（引号/空格 Tab 切换）+ 快捷操作（跳转各页）+ 最近记录（文本/媒体，媒体可重新执行）+ 版本与更新状态
 - App Bridge：JSON 消息协议（`getAppInfo`/`getSettings`/`saveSettings`/`checkUpdate`/`resolveMedia`/`downloadSelected`/`getPreview`/`getClipboardText`/`getDownloads`/`cancelTask`/`cancelAllDownloads`/`retryTask`/`openFile`/`openFolder`/`getHistory`/`clearHistory`/`deleteHistoryEntry`）+ 事件推送（`downloadProgress`/`taskCompleted`/`batchCompleted`）
 - **安全隔离**：AppWebView 使用独立 Profile（`Browser\AppUi`，与互联网浏览器 `Browser\UserData` 严格分离）、禁止外部导航与新窗口，仅经 Bridge 协议访问应用服务
-- 现有 WinForms 主界面完整保留；下载/历史/浏览器/设置页为后续迁移（Phase 6 M3–M5）
+- **旧界面清理计划**：旧 WinForms 界面（Shell/、各页旧 UI）、全局热键（Alt+Q 悬浮面板）与 Edge CDP 实现已标注 [待移除]（见项目结构）；新界面真机验收通过后分阶段删除
 
 ### 应用更新
 
@@ -63,95 +63,85 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 ```text
 src/Transfor/
 ├── App/                                     # 入口、组合根、应用生命周期与路径
-│   ├── Program.cs                           # 入口：初始化 WinForms 并启动消息循环
-│   ├── AppBootstrapper.cs                   # 组合根：组装文本与媒体服务依赖图
-│   ├── AppServices.cs                       # 应用服务容器（文本 + 媒体 + 更新），随应用释放
+│   ├── Program.cs                           # 入口：初始化 WinForms 并启动消息循环（全局异常兜底）
+│   ├── AppBootstrapper.cs                   # 组合根：组装文本/媒体/更新/浏览器服务依赖图
+│   ├── AppServices.cs                       # 应用服务容器，随应用释放
 │   ├── MediaServices.cs                     # 媒体服务组合：协调器/浏览器代理/预览/HttpClient
 │   ├── AppPaths.cs                          # 状态文件路径集合（%LOCALAPPDATA%\Transfor）
 │   ├── AppVersion.cs                        # 当前版本（读取 csproj <Version>）
-│   └── TransforApplicationContext.cs        # 应用上下文：主窗口/历史面板/托盘/热键/更新检查/退出流程
-├── Shell/                                   # 主窗口外壳与页面接口
-│   ├── IFeaturePage.cs                      # 功能页契约（Id、名称、视图、激活回调）
-│   └── MainForm.cs                          # 主窗口：由页面集合动态生成导航，关闭时隐藏到托盘
+│   └── TransforApplicationContext.cs        # 应用上下文：新界面宿主/托盘/更新检查/退出流程
+├── Shell/                                   # [待移除] 旧界面主窗口外壳（新 UI 验收后删除）
+│   ├── IFeaturePage.cs                      # 功能页契约
+│   └── MainForm.cs                          # 旧主窗口（导航 + 隐藏到托盘）
 ├── Features/
-│   ├── TextTools/                           # 文本转换：页面、工具定义与转换器
-│   │   ├── Models/
-│   │   │   ├── TextToolId.cs                # 工具唯一标识（引号转换 / 去除空格）
-│   │   │   └── TextToolDefinition.cs        # 工具静态定义（ID、名称、转换函数）
-│   │   ├── Services/
-│   │   │   ├── QuoteConverter.cs            # 引号转换：英文/中文双引号 → 单引号
-│   │   │   └── SpaceRemover.cs              # 空格移除：半角/全角空格（保留换行制表符）
-│   │   └── UI/
-│   │       └── TextToolsPage.cs             # 转换页面：实时转换、复制结果并记入历史
-│   ├── History/                             # 历史记录：模型、粘贴协调器与历史面板
-│   │   ├── Models/
-│   │   │   └── HistoryEntry.cs              # 历史条目（工具、原文、结果、时间）
-│   │   ├── Services/
-│   │   │   ├── ITextHistoryRepository.cs    # 历史仓库抽象（读取/追加/清空）
-│   │   │   └── PasteCoordinator.cs          # 粘贴三步流程：剪贴板→恢复窗口→Ctrl+V
-│   │   └── UI/
-│   │       └── HistoryPanelForm.cs          # 全局快捷键呼出的历史面板（单击/回车粘贴）
-│   ├── Settings/                            # 设置：模型与设置窗口
-│   │   ├── Models/
-│   │   │   ├── AppSettings.cs               # 文本设置（快捷键、历史上限 1–500，默认 100）
-│   │   │   ├── HotKeyBinding.cs             # 快捷键绑定（校验、显示、Win32 注册格式）
-│   │   │   └── TextUiState.cs               # 界面状态（最近查看的工具）
-│   │   └── UI/
-│   │       └── SettingsForm.cs              # 设置窗口（热键、上限、清空历史）
-│   └── Updates/                             # 应用更新：检查（Phase 1）+ 自动下载安装（Phase 2）
-│       ├── Models/                          # UpdateStatus / UpdateChannel / UpdatePolicy / UpdateCheckResult
-│       ├── Services/                        # UpdateVersion(SemVer) / VersionComparer / UpdateService / IUpdatePolicySource / HttpUpdatePolicySource / IUpdateInstaller / VelopackUpdateInstaller
-│       └── UI/                              # UpdateNoticeForm（可选/强制更新提示）/ UpdateDownloadForm（下载进度+重启）
-│   └── Browser/                             # 内置浏览器（Phase 3/4A）：WebView2 独立 Profile
-│       ├── Contracts/                       # IBrowserService（环境/Profile 生命周期门面）
-│       ├── Services/                        # BrowserService（共享环境 + UI 线程调度）/ BrowserProfileService / BrowserNavigationService / BrowserCookieService
-│       └── UI/                              # BrowserView（浏览器功能页）/ BrowserHostForm（解析+下载隐藏宿主）
-│   └── ModernUi/                            # 新界面（Phase 5 预览）：Web UI + App Bridge
-│       ├── AppShellForm.cs                  # WinForms 宿主窗体（AppWebView，独立 Profile + 导航拦截）
-│       ├── WebUiResources.cs                # 嵌入资源读取（index.html / styles.css / app.js）
-│       ├── Bridge/                          # AppBridge（方法分发）/ AppBridgeProtocol（JSON 消息协议）
-│       └── webui/                           # 多文件 UI：index.html + styles.css + app.js（嵌入程序集，改后需重新构建）
-│   └── MediaDownload/                       # 媒体下载：契约、模型、协调器、服务、解析器与 UI
-│       ├── Contracts/                       # IMediaResolver / IMediaDownloadService / IBrowserSessionAccessor / 浏览器捕获模型
-│       ├── Models/                          # MediaAsset / MediaVariant / ResolvedMediaPost / 下载批次/设置/历史等
-│       ├── Application/                     # MediaResolveCoordinator / MediaDownloadCoordinator / 解析注册中心 / 浏览器会话代理
-│       ├── Services/                        # ShareLinkParser / 质量选择 / 内容校验 / 流式下载 / 预览 / 文件名与哈希 / Cookie 匹配 / 网络嗅探（MediaSniffer/MediaUrlExtractor）
+│   ├── TextTools/                           # 文本转换
+│   │   ├── Models/                          # TextToolId / TextToolDefinition（共用，保留）
+│   │   ├── Services/                        # QuoteConverter / SpaceRemover（核心，保留）
+│   │   └── UI/                              # [待移除] TextToolsPage（旧界面页面）
+│   ├── History/                             # 历史记录
+│   │   ├── Models/HistoryEntry.cs           # 历史条目（共用，保留）
+│   │   ├── Services/                        # [待移除] ITextHistoryRepository / PasteCoordinator（悬浮面板粘贴）
+│   │   └── UI/                              # [待移除] HistoryPanelForm（全局热键悬浮面板）
+│   ├── Settings/                            # 设置
+│   │   ├── Models/                          # AppSettings / HotKeyBinding / TextUiState（共用，保留）
+│   │   └── UI/                              # [待移除] SettingsForm（旧界面设置窗口）
+│   ├── Updates/                             # 应用更新（Phase 1 检查 + Phase 2 Velopack）
+│   │   ├── Models/                          # UpdateStatus / UpdateChannel / UpdatePolicy / UpdateCheckResult
+│   │   ├── Services/                        # UpdateVersion(SemVer) / VersionComparer / UpdateService / IUpdatePolicySource / HttpUpdatePolicySource / IUpdateInstaller / VelopackUpdateInstaller
+│   │   └── UI/                              # UpdateNoticeForm（可选/强制更新提示）/ UpdateDownloadForm（下载进度+重启）
+│   ├── Browser/                             # WebView2 浏览器服务（新界面/解析兜底共用，保留）
+│   │   ├── Contracts/IBrowserService.cs     # 浏览器门面
+│   │   ├── Services/                        # BrowserService(共享环境+UI调度) / BrowserProfileService / BrowserNavigationService / BrowserCookieService
+│   │   └── UI/                              # BrowserHostForm（解析/下载隐藏宿主）；[待移除] BrowserView（旧界面浏览器页）
+│   ├── ModernUi/                            # 新界面（当前主界面）
+│   │   ├── AppShellForm.cs                  # 宿主窗体：C# 侧边栏 + AppWebView + 互联网浏览器控件
+│   │   ├── WebUiResources.cs                # 嵌入资源读取（index.html / styles.css / app.js）
+│   │   ├── Bridge/                          # AppBridge（方法分发）/ AppBridgeEvents（事件推送）/ AppBridgeProtocol（JSON 协议）
+│   │   └── webui/                           # 多文件 UI：index.html + styles.css + app.js（嵌入程序集，改后需重新构建）
+│   └── MediaDownload/                       # 媒体下载（核心保留）
+│       ├── Contracts/                       # IMediaResolver / IMediaDownloadService / IBrowserSessionAccessor / 浏览器捕获与网络记录模型
+│       ├── Models/                          # MediaAsset / MediaVariant / ResolvedMediaPost / 下载批次/任务/设置/历史/快照等
+│       ├── Application/                     # MediaResolveCoordinator / MediaDownloadCoordinator / MediaResolverRegistry / BrowserSessionAccessorProxy
+│       ├── Services/                        # ShareLinkParser / MediaQualitySelector / MediaContentValidator / MediaDownloadService / MediaPreviewService / MediaFileFinalizer / DownloadFileNameBuilder / MediaHashService / MediaSniffer / MediaUrlExtractor / MediaCache / MediaSizeProbe / BrowserCookieMatcher 等
 │       ├── Resolvers/
 │       │   ├── DirectMediaResolver.cs       # 直接图片/视频 URL 兜底解析
 │       │   └── Douyin/                      # 抖音静态解析（RENDER_DATA/JSON-LD/DOM）与浏览器兜底
-│       └── UI/                              # MediaDownloadPage / 资产表 / 队列表 / 设置窗体 / 预览控件
+│       └── UI/                              # [待移除] MediaDownloadPage / MediaAssetGrid / DownloadQueueGrid / MediaPreviewControl / MediaSettingsForm（旧界面媒体页）
 ├── Infrastructure/                          # 基础设施
 │   ├── Networking/                          # 安全网络：DNS 抽象 / URI 校验 / 逐跳重定向 / HttpClient 工厂
 │   │   ├── IDnsResolver.cs / SystemDnsResolver.cs
-│   │   ├── SafeUriValidator.cs              # 拒绝私网/回环/链路本地等危险地址
+│   │   ├── SafeUriValidator.cs / UriValidationException.cs / UriValidationResult.cs
 │   │   ├── SafeHttpRequestSender.cs         # 每跳校验 + 敏感头清除 + 重定向上限
 │   │   ├── HttpClientProvider.cs            # 共享 HttpClient（禁用自动重定向与 Cookie 容器）
-│   │   └── HttpResponseMetadataReader.cs
-│   └── Persistence/                         # JSON 状态存储与旧状态迁移
-│       ├── TextStateStore.cs                # 文本状态存储：原子写入、损坏回退、写失败回滚
-│       ├── MediaStateStore.cs               # 媒体设置与下载历史存储（独立文件、串行写入）
-│       ├── JsonFileStore.cs                 # 通用原子 JSON 文件读写（schemaVersion 外壳）
-│       └── StateMigrationService.cs         # 旧 state.json 拆分迁移与中断恢复
+│   │   ├── HttpResponseMetadataReader.cs
+│   │   └── ErrorChainFormatter.cs           # 异常链格式化（诊断/日志用）
+│   ├── Persistence/                         # JSON 状态存储与旧状态迁移
+│   │   ├── TextStateStore.cs / MediaStateStore.cs / JsonFileStore.cs / StateMigrationService.cs
+│   └── Diagnostics/                         # 日志与诊断（Phase 7）
+│       ├── AppLog.cs                        # 分类日志（五类，1MB 轮转，敏感数据脱敏）
+│       ├── ErrorClassification.cs           # ErrorCategory / TransforError / ErrorClassifier
+│       └── CrashDiagnostics.cs              # 崩溃现场记录（%TEMP%\Transfor\diagnostics\）
 └── Platform/Windows/                        # Windows 平台适配层
     ├── Clipboard/
-    │   └── WindowsClipboardService.cs       # 剪贴板写入（失败返回可读错误）
+    │   ├── ClipboardTextReader.cs           # Win32 剪贴板读取（新界面用，后台线程安全）
+    │   └── WindowsClipboardService.cs       # [待移除] 剪贴板写入（旧界面粘贴用）
     ├── HotKeys/
-    │   └── GlobalHotKeyManager.cs           # 全局热键注册/替换/释放（WM_HOTKEY 转发）
+    │   └── GlobalHotKeyManager.cs           # [待移除] 全局热键（Alt+Q 悬浮面板一并移除）
     ├── Input/
-    │   └── WindowsWindowInputService.cs     # 前台窗口恢复 + SendInput 模拟 Ctrl+V
+    │   └── WindowsWindowInputService.cs     # [待移除] 前台窗口恢复 + SendInput 模拟 Ctrl+V（旧粘贴用）
     ├── Native/
-    │   └── WindowsNative.cs                 # user32.dll 互操作声明与输入结构
+    │   └── WindowsNative.cs                 # user32.dll 互操作声明（热键移除后同步精简）
     ├── WebView2/                            # WebView2 媒体解析兜底（Phase 4A/4B/4C，当前生效）
     │   ├── WebView2BrowserSessionAccessor.cs # IBrowserSessionAccessor 实现（捕获/下载/取 Cookie）
     │   ├── BrowserCaptureSession.cs         # 页面数据提取（RENDER_DATA/NEXT_DATA/DOM/详情接口直取）
-    │   ├── BrowserDownloadController.cs     # 浏览器网络栈下载（页面 fetch + 分块流式写入 .part）
+    │   ├── BrowserDownloadController.cs     # 浏览器网络栈下载（CDP 流式写入 .part）
     │   ├── NetworkCaptureService.cs         # 网络捕获（Phase 4B：URL/Method/Content-Type/Status 记录）
     │   └── CdpNetworkCaptureService.cs      # CDP 捕获（Phase 4C：详情接口响应体读取）
-    └── EdgeCdp/                             # 旧 Edge CDP 实现（已由 WebView2 替代，保留未删除）
+    └── EdgeCdp/                             # [待移除] 旧 Edge CDP 实现（已由 WebView2 替代，生产零引用）
 
 tests/
 └── Transfor.Tests/                          # 控制台式测试运行器（无框架依赖，全部离线）
-    ├── Program.cs                           # 400+ 断言：转换器/迁移/存储/热键/粘贴/网络/解析/下载/队列/UI/CDP
+    ├── Program.cs                           # 969 断言：转换器/迁移/存储/网络/解析/下载/队列/UI/日志/错误分类
     ├── Fixtures/MediaDownload/              # 脱敏的抖音页面与结构化数据样本（不含真实凭据）
     └── Transfor.Tests.csproj                # 引用主项目，目标框架 net10.0-windows
 ```
@@ -213,26 +203,28 @@ dotnet run --project tests/Transfor.Tests
 
 ## 使用说明
 
+### 新界面
+
+1. 启动进入新界面：左侧边栏「工作台 / 媒体下载 / 浏览器 / 历史 / 设置」五页，右上角可切换主题（跟随系统/浅色/深色）。
+2. 关闭窗口不会退出程序，进程驻留系统托盘；托盘菜单提供「打开主窗口 / 退出」。
+
 ### 文本转换
 
-1. 首次启动显示主窗口，输入文本后自动实时转换，点击「复制结果」写入剪贴板并记入历史。
-2. 关闭主窗口不会退出程序，进程驻留系统托盘。
-3. 在任意程序中按下 `Alt+Q`，历史面板会出现在鼠标附近；单击或回车即可把选中结果粘贴回原窗口。
-4. 托盘菜单提供「打开主窗口 / 设置 / 退出」。
+3. 「工作台」页输入文本，自动实时转换（引号/空格 Tab 切换），点击「复制」写入剪贴板并记入历史。
 
 ### 媒体下载
 
-5. 切换到「媒体下载」页：粘贴抖音分享文本或直接图片/视频链接 → 「解析」；页面需要登录或验证码时切换到「浏览器」页完成抖音登录，再返回重试。
-6. 解析后勾选要下载的媒体（可全选），选择保存目录并点击「下载所选」；队列中可取消单个任务，失败行可重试；图片行可点击「预览」。
-7. 「媒体设置」可修改默认下载目录、最大并发（1–8）、默认全选、下载后打开目录与质量策略，设置对下一个新批次生效。
-8. 关闭主窗口到托盘时下载继续；真正退出且有任务时会先确认再取消任务。
-9. 合法使用提示：仅下载你有权访问的公开内容，不绕过登录、验证码或访问控制。
+4. 切到「媒体下载」页：粘贴抖音分享文本或直接图片/视频链接 → 「解析」；页面需要登录或验证码时切到「浏览器」页完成抖音登录，再返回重试。
+5. 解析后勾选要下载的媒体（可全选），选择保存目录并点击「下载所选」；队列中可取消单个任务，失败行可重试；图片行可点击「预览」。
+6. 「设置 → 下载」可修改默认下载目录、最大并发（1–8）、默认全选、下载后打开目录与质量策略，设置对下一个新批次生效。
+7. 最小化到托盘时下载继续；真正退出且有任务时会先确认再取消任务。
+8. 合法使用提示：仅下载你有权访问的公开内容，不绕过登录、验证码或访问控制。
 
 ### 内置浏览器
 
-10. 切换到「浏览器」页：输入网址（可省略协议，自动补全 https://）或粘贴完整链接，回车或点击「前往」。
-11. 工具栏支持后退/前进/刷新/停止；浏览器登录状态（如抖音）独立持久化，重启应用后保持。
-12. 「设置 → 浏览器数据」可清除 Cookie、缓存或全部浏览器数据（清除后需重新登录）。
+9. 切到「浏览器」页：输入网址（可省略协议，自动补全 https://）或粘贴完整链接，回车或点击「前往」。
+10. 工具栏支持后退/前进/刷新/停止；页面加载后自动检测媒体，「当前页面检测到 X 个可能的媒体 [查看媒体]」直达解析；浏览器登录状态（如抖音）独立持久化，重启应用后保持。
+11. 「设置 → 浏览器数据」可清除 Cookie、缓存或全部浏览器数据（清除后需重新登录）。
 
 ## Rider 调试提示
 
