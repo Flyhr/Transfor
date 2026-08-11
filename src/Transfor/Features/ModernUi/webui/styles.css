@@ -113,7 +113,7 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
 .flow-step span { display:grid; place-items:center; flex:0 0 28px; width:28px; height:28px; border-radius:50%; color:#fff; background:var(--ff-primary); box-shadow:0 0 0 4px #DFF8F4; }
 .flow-step strong { font-size:16px; font-weight:700; }
 .media-flow-content { position:relative; z-index:2; margin-left:42px; }
-.media-input-card { padding:10px 12px; margin-bottom:24px; }
+.media-input-card { padding:10px 12px; margin-bottom:24px; border-color:transparent; background:transparent; box-shadow:none; }
 .media-input-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:12px; align-items:center; }
 .media-input-field { position:relative; display:flex; align-items:center; min-width:0; }
 .media-input-row .input { width:100%; }
@@ -147,33 +147,35 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
   overflow-y: auto;
 }
 /* 格子展示高度随内容自适应、按所选行数封顶（1/2/3 行），超出时内滚 */
-.media-card-grid.rows-1 { max-height: 270px; }
-.media-card-grid.rows-2 { max-height: 525px; }
-.media-card-grid.rows-3 { max-height: 800px; }
+.media-card-grid.rows-1 { max-height: 340px; }
+.media-card-grid.rows-2 { max-height: 680px; }
+.media-card-grid.rows-3 { max-height: 1020px; }
 /* 滚动条常显（细条），避免叠加滚动条隐藏导致误以为不可滚动 */
 .media-card-grid, .download-list { scrollbar-width: thin; scrollbar-color: var(--ff-border) transparent; }
 .media-card-grid::-webkit-scrollbar, .download-list::-webkit-scrollbar { width: 8px; }
 .media-card-grid::-webkit-scrollbar-thumb, .download-list::-webkit-scrollbar-thumb { background: var(--ff-border); border-radius: 4px; }
 .media-card-grid::-webkit-scrollbar-thumb:hover, .download-list::-webkit-scrollbar-thumb:hover { background: var(--ff-muted); }
 .media-card { min-width:0; overflow:hidden; border:1px solid var(--ff-border); border-radius:var(--ff-radius); background:#fff; box-shadow:0 1px 3px rgba(11,18,32,.06); }
-.media-thumbnail { position:relative; height:155px; overflow:hidden; background:var(--ff-soft); }
+.media-thumbnail { position:relative; height:207px; overflow:hidden; background:var(--ff-soft); }
 .media-preview { display:grid; place-items:center; width:100%; height:100%; color:var(--ff-muted); font-size:12px; }
 .media-preview img { display:block; width:100%; height:100%; object-fit:cover; }
 .media-card-checkbox { position:absolute; z-index:2; top:10px; left:10px; width:18px; height:18px; accent-color:var(--ff-primary); }
 .media-badge { position:absolute; z-index:2; right:8px; bottom:8px; padding:3px 7px; border-radius:6px; color:#fff; background:rgba(11,18,32,.72); font-size:11px; }
-.media-card-info { display:grid; gap:5px; padding:10px 12px 12px; }
+.media-card-info { display:flex; flex-direction:column; gap:5px; padding:10px 12px 12px; }
 .media-card-title { overflow:hidden; color:var(--ff-text); font-size:13px; line-height:18px; text-overflow:ellipsis; white-space:nowrap; }
-.media-card-meta { min-height:16px; overflow:hidden; color:var(--ff-muted); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+/* 分辨率/时长一行、文件大小一行 */
+.media-card-meta-stack { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.media-card-meta { overflow:hidden; color:var(--ff-muted); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
 .media-card-download { width:100%; min-height:32px; padding:4px 10px; color:var(--ff-primary); background:#fff; }
 .media-card-download:hover { color:#fff; background:var(--ff-primary); }
 /* 平铺展示：从上到下一列，仅基础信息，每行高度限定；高度随内容自适应、按每页条数封顶 */
 .media-card-grid.view-list { display:flex; flex-direction:column; gap:8px; max-height:600px; }
 .media-card-grid.view-list .media-card { display:grid; grid-template-columns:76px minmax(0,1fr) auto; align-items:center; gap:12px; }
-.media-card-grid.view-list .media-thumbnail { height:75px; }
+.media-card-grid.view-list .media-thumbnail { height:100px; }
 .media-card-grid.view-list .media-preview { font-size:11px; }
 .media-card-grid.view-list .media-card-info { display:flex; align-items:center; gap:12px; padding:8px 12px; }
 .media-card-grid.view-list .media-card-title { flex:0 1 42%; }
-.media-card-grid.view-list .media-card-meta { flex:1; min-height:0; }
+.media-card-grid.view-list .media-card-meta-stack { flex:1; min-width:0; }
 .media-card-grid.view-list .media-card-download { width:auto; min-height:30px; padding:4px 14px; margin-right:8px; }
 /* 分页条（解析结果 + 下载队列共用样式） */
 .pagination-bar { display:flex; align-items:center; justify-content:flex-end; gap:10px; margin-top:12px; flex-wrap:wrap; }

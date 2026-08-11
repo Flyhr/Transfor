@@ -437,19 +437,30 @@ function renderPost(post) {
     }
     const info = document.createElement("div");
     info.className = "media-card-info";
-    const title = document.createElement("strong");
-    title.className = "media-card-title";
-    title.textContent = asset.title || asset.name || `${assetTypeLabel(asset)} ${asset.index + 1}`;
-    const metadata = document.createElement("span");
-    metadata.className = "media-card-meta";
-    // 类型由缩略图角标展示，meta 只保留分辨率/时长/大小
-    const details = [];
-    if (asset.width && asset.height) details.push(`${asset.width}×${asset.height}`);
-    if (asset.duration) details.push(formatDuration(asset.duration));
-    details.push(asset.contentLength ? formatBytes(asset.contentLength) : "大小 —");
-    metadata.textContent = details.join(" · ");
-    info.appendChild(title);
-    info.appendChild(metadata);
+    // 无标题/名称时不渲染占位名（避免“图片 1”这类无意义名字），类型由角标展示
+    if (asset.title || asset.name) {
+      const title = document.createElement("strong");
+      title.className = "media-card-title";
+      title.textContent = asset.title || asset.name;
+      info.appendChild(title);
+    }
+    // 分辨率/时长与文件大小分两行展示
+    const metaStack = document.createElement("div");
+    metaStack.className = "media-card-meta-stack";
+    const resParts = [];
+    if (asset.width && asset.height) resParts.push(`${asset.width}×${asset.height}`);
+    if (asset.duration) resParts.push(formatDuration(asset.duration));
+    if (resParts.length > 0) {
+      const resLine = document.createElement("span");
+      resLine.className = "media-card-meta";
+      resLine.textContent = resParts.join(" · ");
+      metaStack.appendChild(resLine);
+    }
+    const sizeLine = document.createElement("span");
+    sizeLine.className = "media-card-meta";
+    sizeLine.textContent = asset.contentLength ? formatBytes(asset.contentLength) : "大小 —";
+    metaStack.appendChild(sizeLine);
+    info.appendChild(metaStack);
     const cardDownload = document.createElement("button");
     cardDownload.type = "button";
     cardDownload.className = "btn media-card-download";
