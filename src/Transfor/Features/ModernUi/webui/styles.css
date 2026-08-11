@@ -164,9 +164,10 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
 .media-badge { position:absolute; z-index:2; right:8px; bottom:8px; padding:3px 7px; border-radius:6px; color:#fff; background:rgba(11,18,32,.72); font-size:11px; }
 .media-card-info { display:flex; flex-direction:column; gap:5px; padding:8px 4px 0; }
 .media-card-title { overflow:hidden; color:var(--ff-text); font-size:13px; line-height:18px; text-overflow:ellipsis; white-space:nowrap; }
-/* 分辨率/时长一行、文件大小一行 */
-.media-card-meta-stack { display:flex; flex-direction:column; gap:2px; min-width:0; }
 .media-card-meta { overflow:hidden; color:var(--ff-muted); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+/* 视频卡片占位：播放图标 + 标签，清晰不空白 */
+.media-preview.video-placeholder { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; color:var(--ff-primary); font-size:12px; }
+.media-preview.video-placeholder svg { fill:none; stroke:currentColor; stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round; }
 .media-card-download { width:100%; min-height:32px; padding:4px 10px; color:var(--ff-primary); background:#fff; }
 .media-card-download:hover { color:#fff; background:var(--ff-primary); }
 /* 平铺展示：从上到下一列，仅基础信息，每行高度限定；高度随内容自适应、按每页条数封顶 */
@@ -176,7 +177,7 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
 .media-card-grid.view-list .media-preview { font-size:11px; }
 .media-card-grid.view-list .media-card-info { display:flex; align-items:center; gap:12px; padding:8px 12px; }
 .media-card-grid.view-list .media-card-title { flex:0 1 42%; }
-.media-card-grid.view-list .media-card-meta-stack { flex:1; min-width:0; }
+.media-card-grid.view-list .media-card-meta { flex:1; min-width:0; }
 .media-card-grid.view-list .media-card-download { width:auto; min-height:30px; padding:4px 14px; margin-right:8px; }
 /* 分页条（解析结果 + 下载队列共用样式） */
 .pagination-bar { display:flex; align-items:center; justify-content:flex-end; gap:10px; margin-top:12px; flex-wrap:wrap; }

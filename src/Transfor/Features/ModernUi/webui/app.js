@@ -409,7 +409,13 @@ function renderPost(post) {
     const preview = document.createElement("div");
     preview.className = "media-preview";
     const canPreview = asset.kind === "image" && asset.status === "Selected";
-    preview.textContent = canPreview ? "加载预览…" : (asset.status !== "Selected" ? (asset.message || "不可下载") : (asset.kind === "video" ? "视频" : "图片"));
+    if (asset.kind === "video" && asset.status === "Selected") {
+      // 视频卡片：清晰播放图标占位（不再是低对比度空白）
+      preview.classList.add("video-placeholder");
+      preview.innerHTML = '<svg viewBox="0 0 24 24" width="36" height="36" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M10 8.5l6 3.5-6 3.5z"/></svg><span>视频</span>';
+    } else {
+      preview.textContent = canPreview ? "加载预览…" : (asset.status !== "Selected" ? (asset.message || "不可下载") : (asset.kind === "video" ? "视频" : "图片"));
+    }
     thumb.appendChild(preview);
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
@@ -444,25 +450,15 @@ function renderPost(post) {
       title.textContent = asset.title || asset.name;
       info.appendChild(title);
     }
-    // 分辨率/时长与文件大小分两行展示
-    const metaStack = document.createElement("div");
-    metaStack.className = "media-card-meta-stack";
-    const resParts = [];
-    if (asset.width && asset.height) resParts.push(`${asset.width}×${asset.height}`);
-    if (asset.duration) resParts.push(formatDuration(asset.duration));
-    if (resParts.length > 0) {
-      const resLine = document.createElement("span");
-      resLine.className = "media-card-meta";
-      resLine.textContent = resParts.join(" · ");
-      metaStack.appendChild(resLine);
-    }
-    const sizeLine = document.createElement("span");
-    sizeLine.className = "media-card-meta";
-    sizeLine.textContent = asset.contentLength ? formatBytes(asset.contentLength) : "大小 —";
-    metaStack.appendChild(sizeLine);
-    info.appendChild(metaStack);
-    card._asset = asset;
-    card._sizeLine = sizeLine;
+    // 分辨率/时长与大小一行展示，用 - 分隔
+    const metaLine = document.createElement("span");
+    metaLine.className = "media-card-meta";
+    const metaParts = [];
+    if (asset.width && asset.height) metaParts.push(`${asset.width}×${asset.height}`);
+    if (asset.duration) metaParts.push(formatDuration(asset.duration));
+    metaParts.push(asset.contentLength ? formatBytes(asset.contentLength) : "大小 —");
+    metaLine.textContent = metaParts.join(" - ");
+    info.appendChild(metaLine);
     const cardDownload = document.createElement("button");
     cardDownload.type = "button";
     cardDownload.className = "btn media-card-download";
@@ -472,6 +468,9 @@ function renderPost(post) {
     info.appendChild(cardDownload);
     card.appendChild(thumb);
     card.appendChild(info);
+    card._asset = asset;
+    card._sizeLine = metaLine;
+    card._metaPrefix = metaParts.slice(0, -1);
     cards.push(card);
   });
   mediaPost.style.display = "block";
@@ -499,7 +498,13 @@ async function probeAssetSizes(cards) {
         const { size } = await Bridge.invoke("getAssetSize", { assetIndex }, 8000);
         if (size > 0) {
           card._asset.contentLength = size;
-          if (card._sizeLine) card._sizeLine.textContent = formatBytes(size);
+          if (card._sizeLine) {
+            // 回填时保留分辨率前缀（分辨率/时长 - 真实大小）
+            const prefix = card._metaPrefix && card._metaPrefix.length > 0
+              ? card._metaPrefix.join(" - ") + " - "
+              : "";
+            card._sizeLine.textContent = prefix + formatBytes(size);
+          }
         }
       } catch { /* HEAD 失败（TLS 拦截等）保持 大小 — */ }
     }
