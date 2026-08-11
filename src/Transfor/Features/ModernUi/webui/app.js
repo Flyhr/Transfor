@@ -233,16 +233,19 @@ function formatBytes(bytes) {
 function renderPost(post) {
   currentShareLink = mediaLink.value.trim();
   currentAssets = post.assets;
+  const mediaCount = document.getElementById("media-count");
+  if (mediaCount) mediaCount.textContent = String(post.assets.length);
   document.getElementById("media-title").textContent = post.title || "未命名作品";
   document.getElementById("media-author").textContent = post.authorName ? "作者：" + post.authorName : "";
   mediaGrid.innerHTML = "";
   const previewLoaders = [];
   post.assets.forEach((asset) => {
     const card = document.createElement("div");
-    card.className = "card";
+    card.className = "media-card";
     card.style.cssText = "padding:10px;margin:0;display:flex;flex-direction:column;gap:8px";
     const thumb = document.createElement("div");
-    thumb.style.cssText = "height:110px;background:var(--hover);border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:12px;overflow:hidden";
+    thumb.className = "media-thumbnail";
+    thumb.style.cssText = "height:120px;background:var(--hover);border-radius:8px 8px 0 0;display:flex;align-items:center;justify-content:center;color:var(--text-secondary);font-size:12px;overflow:hidden";
     const canPreview = asset.kind === "image" && asset.status === "Selected";
     thumb.textContent = canPreview ? "加载预览…" : (asset.status !== "Selected" ? (asset.message || "不可下载") : (asset.kind === "video" ? "视频" : "图片"));
     if (canPreview) {
@@ -251,7 +254,8 @@ function renderPost(post) {
       previewLoaders.push({ thumb, assetIndex: asset.index });
     }
     const info = document.createElement("div");
-    info.style.cssText = "display:flex;flex-direction:column;gap:2px;font-size:12px";
+    info.className = "media-card-info";
+    info.style.cssText = "display:flex;flex-direction:column;gap:4px;font-size:12px";
     const sizeText = asset.contentLength ? ` · ${formatBytes(asset.contentLength)}` : "";
     info.innerHTML = `<div>${assetTypeLabel(asset)}${asset.width && asset.height ? ` · ${asset.width}×${asset.height}` : ""}${sizeText}</div>`;
     const checkRow = document.createElement("label");
@@ -819,6 +823,7 @@ buildKeyOptions();
 document.querySelectorAll("[data-history-tab]").forEach((button) => {
   button.addEventListener("click", () => {
     const media = button.dataset.historyTab === "media";
+    document.getElementById("history-text-panel").hidden = media;
     document.getElementById("history-media-panel").hidden = !media;
     document.querySelectorAll("[data-history-tab]").forEach((item) => item.classList.toggle("btn-primary", item === button));
   });

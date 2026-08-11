@@ -13,15 +13,15 @@ internal sealed class AppShellForm : Form
     // HTML 浏览器页顶部工具条高度（浏览器控件从此处以下覆盖内容区）
     private const int BrowserToolbarHeight = 64;
     // 宿主侧边栏宽度
-    private const int SidebarWidth = 80;
+    private const int SidebarWidth = 176;
 
     private static readonly (string Page, string Label)[] NavItems =
     {
-        ("home", "工作台"),
-        ("media", "媒体"),
-        ("browser", "浏览器"),
-        ("history", "历史"),
-        ("settings", "设置"),
+        ("home", "⌂  工作台"),
+        ("media", "▣  媒体"),
+        ("browser", "◎  浏览器"),
+        ("history", "◷  历史"),
+        ("settings", "⚙  设置"),
     };
 
     private readonly AppBridge bridge;
@@ -133,14 +133,15 @@ internal sealed class AppShellForm : Form
             {
                 Text = label,
                 AutoSize = false,
-                Height = 81,
+                Height = 56,
                 Width = SidebarWidth - 16,
                 FlatStyle = FlatStyle.Flat,
                 ForeColor = Color.FromArgb(71, 85, 105),
                 BackColor = Color.Transparent,
                 FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(240, 247, 250), MouseDownBackColor = Color.FromArgb(225, 242, 243) },
-                TextAlign = ContentAlignment.MiddleCenter,
-                Font = new Font(Font.FontFamily, 9F),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(12, 0, 8, 0),
+                Font = new Font(Font.FontFamily, 10F),
                 Cursor = Cursors.Hand,
                 Tag = page,
             };
