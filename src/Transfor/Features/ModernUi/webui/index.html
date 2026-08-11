@@ -305,9 +305,17 @@ function applyTheme(theme) {
   currentTheme = theme;
   document.documentElement.dataset.theme = theme;
 }
+function notifyTheme() {
+  // 当前生效明暗（system 时按系统偏好），同步宿主侧边栏配色
+  const theme = document.documentElement.dataset.theme;
+  const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  Bridge.invoke("setTheme", { dark }).catch(() => {});
+}
 window.__toggleTheme = () => {
   applyTheme(THEMES[(THEMES.indexOf(currentTheme) + 1) % THEMES.length]);
+  notifyTheme();
 };
+window.__notifyTheme = notifyTheme;
 
 /* ===== 导航（宿主侧边栏与内部跳转共用） ===== */
 function navigateTo(page) {

@@ -37,6 +37,11 @@ internal sealed class AppShellForm : Form
     private AppBridgeEvents? events;
     private BrowserNavigationService? browserNavigation;
     private long navigationVersion;
+    private Panel? sidebar;
+    private Button? themeButton;
+    private Label? sidebarVersionLabel;
+    private string? activeNavPage;
+    private bool sidebarDark = true;
 
     public AppShellForm(
         AppBridge bridge,
@@ -80,14 +85,15 @@ internal sealed class AppShellForm : Form
             LayoutBrowserPanel();
         };
         bridge.SetActiveNav = page => SetActiveNavButton(page);
+        bridge.SetTheme = dark => ApplySidebarTheme(dark);
 
         Load += (_, _) => InitializeAsync();
     }
 
-    // C# 侧边栏：导航按钮 + 底部版本/主题
+    // C# 侧边栏：导航按钮 + 底部版本/主题（配色随 HTML 主题联动）
     private Control BuildSidebar()
     {
-        var sidebar = new Panel
+        sidebar = new Panel
         {
             Dock = DockStyle.Fill,
             BackColor = Color.FromArgb(38, 38, 38),
@@ -123,9 +129,9 @@ internal sealed class AppShellForm : Form
         var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
         footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        var version = new Label { Text = "Transfor v" + AppVersion.Current, ForeColor = Color.FromArgb(157, 157, 157), AutoSize = true, Padding = new Padding(2, 6, 2, 2) };
-        footer.Controls.Add(version, 0, 0);
-        var themeButton = new Button
+        sidebarVersionLabel = new Label { Text = "Transfor v" + AppVersion.Current, ForeColor = Color.FromArgb(157, 157, 157), AutoSize = true, Padding = new Padding(2, 6, 2, 2) };
+        footer.Controls.Add(sidebarVersionLabel, 0, 0);
+        themeButton = new Button
         {
             Text = "切换主题",
             AutoSize = true,
@@ -144,6 +150,44 @@ internal sealed class AppShellForm : Form
         return sidebar;
     }
 
+    // 侧边栏配色随主题（深色/浅色）联动；HTML 切换主题或系统主题变化时由 Bridge 回调
+    private void ApplySidebarTheme(bool dark)
+    {
+        sidebarDark = dark;
+        if (sidebar is null)
+        {
+            return;
+        }
+
+        var background = dark ? Color.FromArgb(38, 38, 38) : Color.FromArgb(246, 246, 246);
+        var text = dark ? Color.White : Color.FromArgb(27, 27, 27);
+        var secondary = dark ? Color.FromArgb(157, 157, 157) : Color.FromArgb(110, 110, 110);
+        var hover = dark ? Color.FromArgb(60, 60, 60) : Color.FromArgb(229, 229, 229);
+        var active = dark ? Color.FromArgb(60, 60, 60) : Color.FromArgb(229, 229, 229);
+
+        sidebar.BackColor = background;
+        if (sidebarVersionLabel is not null)
+        {
+            sidebarVersionLabel.ForeColor = secondary;
+        }
+
+        if (themeButton is not null)
+        {
+            themeButton.ForeColor = text;
+            themeButton.BackColor = dark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(229, 229, 229);
+            themeButton.FlatAppearance.MouseOverBackColor = hover;
+        }
+
+        foreach (var (key, button) in navButtons)
+        {
+            button.ForeColor = text;
+            button.FlatAppearance.MouseOverBackColor = hover;
+            button.FlatAppearance.MouseDownBackColor = active;
+            var isActive = string.Equals(key, activeNavPage, StringComparison.Ordinal);
+            button.BackColor = isActive ? active : Color.Transparent;
+        }
+    }
+
     // 导航到指定页面：驱动 HTML 页面切换 + 浏览器控件显隐 + 侧边栏高亮
     private void NavigateTo(string page)
     {
@@ -153,11 +197,12 @@ internal sealed class AppShellForm : Form
 
     private void SetActiveNavButton(string? page)
     {
+        activeNavPage = page;
         foreach (var (key, button) in navButtons)
         {
             var active = string.Equals(key, page, StringComparison.Ordinal);
             button.Font = new Font(Font, active ? FontStyle.Bold : FontStyle.Regular);
-            button.BackColor = active ? Color.FromArgb(60, 60, 60) : Color.Transparent;
+            button.BackColor = active ? (sidebarDark ? Color.FromArgb(60, 60, 60) : Color.FromArgb(229, 229, 229)) : Color.Transparent;
         }
     }
 
@@ -223,6 +268,10 @@ internal sealed class AppShellForm : Form
             // App Bridge：JSON 消息协议
             core.WebMessageReceived += OnWebMessageReceived;
             core.Navigate("https://appassets.transfor/index.html");
+
+            // 页面加载后由 HTML 推送当前主题（同步宿主侧边栏配色）
+            core.NavigationCompleted += (_, _) =>
+                ExecuteAppScript("window.__notifyTheme && window.__notifyTheme();");
 
             // 事件推送：下载协调器事件 → UI 线程 → 经 ExecuteScriptAsync 注入
             // window.__bridgeDeliver（与请求响应同一条可靠通道；postMessage 事件不可达）；

@@ -31,6 +31,9 @@ internal sealed class AppBridge
     // 侧边栏高亮回调（AppShell 提供）：HTML 内部跳转（如「查看媒体」）时同步宿主高亮
     public Action<string>? SetActiveNav { get; set; }
 
+    // 主题回调（AppShell 提供）：HTML 主题切换（含跟随系统）时同步宿主侧边栏配色
+    public Action<bool>? SetTheme { get; set; }
+
     public AppBridge(
         TextStateStore stateStore,
         IUpdateService updateService,
@@ -88,6 +91,7 @@ internal sealed class AppBridge
                 "browserGetState" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowserGetState()),
                 "setBrowserVisible" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SetBrowserVisibleState(request)),
                 "setActiveNav" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SetActiveNavState(request)),
+                "setTheme" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SetThemeState(request)),
                 _ => AppBridgeProtocol.CreateErrorResponse(request.Id, $"未知方法：{request.Method}"),
             };
         }
@@ -657,6 +661,15 @@ internal sealed class AppBridge
         }
 
         SetActiveNav?.Invoke(page);
+        return new { ok = true };
+    }
+
+    // 主题同步（HTML 主题切换/跟随系统变化时通知宿主侧边栏配色）
+    private object SetThemeState(BridgeRequest request)
+    {
+        var dark = request.GetBool("dark")
+            ?? throw new ArgumentException("参数 dark 必须为布尔值。");
+        SetTheme?.Invoke(dark);
         return new { ok = true };
     }
 }
