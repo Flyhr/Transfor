@@ -42,6 +42,8 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：文本转换常驻系�
 - **下载管理页已迁移**：任务列表（等待中/下载中/已完成/失败/已取消 + 进度条 + 速度 + 已下载/总量），取消/重试（进程内）/打开文件/打开文件夹（仅限下载目录内），事件增量更新；下方历史记录（最近 50 条，重新执行/打开文件夹）
 - **历史页已迁移**：文本转换（引号/空格）+ 媒体下载分组，搜索过滤、单条删除、整组清空、媒体记录「重新执行」
 - **浏览器页已迁移**：宿主侧边栏（C#）+ 内容区嵌套互联网 WebView2（共享 `Browser\UserData` 登录态，与 AppWebView 严格隔离）——地址栏（容错：分享文本/尾部标点/多余字段均可识别）/后退/前进/刷新/停止；页面加载后自动检测媒体，「当前页面检测到 X 个可能的媒体 [查看媒体]」直达解析（尺寸与装饰资源过滤，避免 Logo/头像误报）；浏览器初始化失败不影响其他页面
+- **设置页已迁移（完整可编辑）**：常规（更新通道/历史上限）、下载（目录浏览/并发/默认全选/打开目录/质量偏好）、网络（模式/代理地址）、快捷键（历史面板热键可改，占用报错）、浏览器数据（清除 Cookie/缓存/全部）、更新（检查）
+- **首页已迁移**：文本工具（引号/空格 Tab 切换）+ 快捷操作（跳转各页）+ 最近记录（文本/媒体，媒体可重新执行）+ 版本与更新状态
 - App Bridge：JSON 消息协议（`getAppInfo`/`getSettings`/`saveSettings`/`checkUpdate`/`resolveMedia`/`downloadSelected`/`getPreview`/`getClipboardText`/`getDownloads`/`cancelTask`/`cancelAllDownloads`/`retryTask`/`openFile`/`openFolder`/`getHistory`/`clearHistory`/`deleteHistoryEntry`）+ 事件推送（`downloadProgress`/`taskCompleted`/`batchCompleted`）
 - **安全隔离**：AppWebView 使用独立 Profile（`Browser\AppUi`，与互联网浏览器 `Browser\UserData` 严格分离）、禁止外部导航与新窗口，仅经 Bridge 协议访问应用服务
 - 现有 WinForms 主界面完整保留；下载/历史/浏览器/设置页为后续迁移（Phase 6 M3–M5）

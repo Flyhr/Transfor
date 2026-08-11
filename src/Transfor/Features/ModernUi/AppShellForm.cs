@@ -86,6 +86,30 @@ internal sealed class AppShellForm : Form
         };
         bridge.SetActiveNav = page => SetActiveNavButton(page);
         bridge.SetTheme = dark => ApplySidebarTheme(dark);
+        // 下载目录浏览（系统目录对话框）
+        bridge.BrowseDirectory = () =>
+        {
+            using var dialog = new FolderBrowserDialog { Description = "选择默认下载目录" };
+            return dialog.ShowDialog(this) == DialogResult.OK ? dialog.SelectedPath : null;
+        };
+        // 浏览器数据清除（共享 Browser\UserData 的 Profile）
+        bridge.ClearBrowserData = async scope =>
+        {
+            if (browserWebView.CoreWebView2 is not { } core)
+            {
+                throw new InvalidOperationException("浏览器尚未初始化。");
+            }
+
+            var kinds = scope switch
+            {
+                "cookies" => CoreWebView2BrowsingDataKinds.Cookies,
+                "cache" => CoreWebView2BrowsingDataKinds.CacheStorage,
+                _ => CoreWebView2BrowsingDataKinds.Cookies
+                    | CoreWebView2BrowsingDataKinds.CacheStorage
+                    | CoreWebView2BrowsingDataKinds.AllDomStorage,
+            };
+            await core.Profile.ClearBrowsingDataAsync(kinds);
+        };
 
         Load += (_, _) => InitializeAsync();
     }

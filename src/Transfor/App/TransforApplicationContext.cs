@@ -241,7 +241,10 @@ internal sealed class TransforApplicationContext : ApplicationContext
                     services.Media.ResolveCoordinator,
                     services.Media.DownloadCoordinator,
                     services.Media.State,
-                    services.Media.Preview),
+                    services.Media.Preview)
+                {
+                    HotKeyManager = services.HotKeys,
+                },
                 services.Browser,
                 AppPaths.Default.AppUiProfileDirectory,
                 services.Media.DownloadCoordinator);

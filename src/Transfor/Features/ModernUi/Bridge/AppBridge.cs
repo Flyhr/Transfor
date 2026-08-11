@@ -34,6 +34,15 @@ internal sealed class AppBridge
     // 主题回调（AppShell 提供）：HTML 主题切换（含跟随系统）时同步宿主侧边栏配色
     public Action<bool>? SetTheme { get; set; }
 
+    // 热键服务（应用注入）；未设置时快捷键编辑报错
+    public GlobalHotKeyManager? HotKeyManager { get; set; }
+
+    // 下载目录浏览回调（AppShell 提供 FolderBrowserDialog）
+    public Func<string?>? BrowseDirectory { get; set; }
+
+    // 浏览器数据清除回调（AppShell 提供；scope=cookies/cache/all）
+    public Func<string, Task>? ClearBrowserData { get; set; }
+
     public AppBridge(
         TextStateStore stateStore,
         IUpdateService updateService,
@@ -92,6 +101,9 @@ internal sealed class AppBridge
                 "setBrowserVisible" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SetBrowserVisibleState(request)),
                 "setActiveNav" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SetActiveNavState(request)),
                 "setTheme" => AppBridgeProtocol.CreateSuccessResponse(request.Id, SetThemeState(request)),
+                "browseDirectory" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowseDirectoryState()),
+                "clearBrowserData" => await ClearBrowserDataAsync(request).ConfigureAwait(false),
+                "getRecent" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetRecent()),
                 _ => AppBridgeProtocol.CreateErrorResponse(request.Id, $"未知方法：{request.Method}"),
             };
         }
@@ -112,6 +124,21 @@ internal sealed class AppBridge
         updateChannel = stateStore.Settings.UpdateChannel.ToString().ToLowerInvariant(),
         quoteHistoryLimit = stateStore.Settings.QuoteHistoryLimit,
         spaceHistoryLimit = stateStore.Settings.SpaceHistoryLimit,
+        hotKey = new
+        {
+            modifiers = stateStore.Settings.HistoryHotKey.Modifiers.ToString(),
+            key = stateStore.Settings.HistoryHotKey.Key.ToString(),
+        },
+        media = new
+        {
+            downloadDirectory = mediaStateStore.Settings.DownloadDirectory,
+            maxConcurrentDownloads = mediaStateStore.Settings.MaxConcurrentDownloads,
+            defaultSelectAll = mediaStateStore.Settings.DefaultSelectAll,
+            openFolderAfterDownload = mediaStateStore.Settings.OpenFolderAfterDownload,
+            qualityPreference = mediaStateStore.Settings.QualityPreference.ToString().ToLowerInvariant(),
+            networkMode = mediaStateStore.Settings.NetworkMode.ToString().ToLowerInvariant(),
+            proxyAddress = mediaStateStore.Settings.ProxyAddress,
+        },
     };
 
     private object SaveSettings(BridgeRequest request)
@@ -153,9 +180,174 @@ internal sealed class AppBridge
             next = next with { SpaceHistoryLimit = space };
         }
 
+        // 快捷键（需热键服务）：先注册新热键（系统立即生效），再随文本设置持久化；
+        // 持久化失败回滚热键注册并抛出
+        var keyText = request.GetString("hotKeyKey");
+        var modifiersText = request.GetString("hotKeyModifiers");
+        if (keyText is not null || modifiersText is not null)
+        {
+            var newHotKey = ParseHotKey(keyText ?? string.Empty, modifiersText ?? string.Empty);
+            if (HotKeyManager is null)
+            {
+                throw new InvalidOperationException("热键服务未初始化。");
+            }
+
+            if (!HotKeyManager.TryReplace(newHotKey, out var hotKeyError))
+            {
+                throw new InvalidOperationException(hotKeyError);
+            }
+
+            var previousHotKey = stateStore.Settings.HistoryHotKey;
+            try
+            {
+                next = next with { HistoryHotKey = newHotKey };
+            }
+            catch
+            {
+                HotKeyManager.TryReplace(previousHotKey, out _);
+                throw;
+            }
+        }
+
+        // 文本设置一次性持久化（含热键；写失败时内存回滚且热键已注册的新值保留——
+        // 旧界面同语义：注册成功即生效，持久化失败提示）
         stateStore.UpdateSettings(next);
+
+        // 媒体设置（下载目录/并发/默认全选/打开目录/质量/网络模式/代理）
+        var mediaNext = mediaStateStore.Settings;
+        var directoryText = request.GetString("downloadDirectory");
+        if (!string.IsNullOrWhiteSpace(directoryText))
+        {
+            mediaNext = mediaNext with { DownloadDirectory = directoryText };
+        }
+
+        var concurrency = request.GetInt32("maxConcurrentDownloads");
+        if (concurrency is not null)
+        {
+            mediaNext = mediaNext with { MaxConcurrentDownloads = concurrency.Value };
+        }
+
+        var defaultSelectAll = request.GetBool("defaultSelectAll");
+        if (defaultSelectAll is not null)
+        {
+            mediaNext = mediaNext with { DefaultSelectAll = defaultSelectAll.Value };
+        }
+
+        var openFolder = request.GetBool("openFolderAfterDownload");
+        if (openFolder is not null)
+        {
+            mediaNext = mediaNext with { OpenFolderAfterDownload = openFolder.Value };
+        }
+
+        var qualityText = request.GetString("qualityPreference");
+        if (!string.IsNullOrWhiteSpace(qualityText))
+        {
+            mediaNext = mediaNext with { QualityPreference = ParseEnum<MediaQualityPreference>(qualityText, "质量偏好") };
+        }
+
+        var networkText = request.GetString("networkMode");
+        if (!string.IsNullOrWhiteSpace(networkText))
+        {
+            mediaNext = mediaNext with { NetworkMode = ParseEnum<MediaNetworkMode>(networkText, "网络模式") };
+        }
+
+        var proxyText = request.GetString("proxyAddress");
+        if (proxyText is not null)
+        {
+            mediaNext = mediaNext with { ProxyAddress = proxyText };
+        }
+
+        // 媒体设置校验（并发/枚举/CustomProxy 代理地址/目录）后一次性持久化
+        mediaNext.Validate();
+        mediaStateStore.UpdateSettings(mediaNext);
+
         return GetSettings();
     }
+
+    // 解析快捷键（modifiers 逗号分隔如 "Control,Alt"）；纯解析不注册
+    private static HotKeyBinding ParseHotKey(string keyText, string modifiersText)
+    {
+        if (!Enum.TryParse<System.Windows.Forms.Keys>(keyText, true, out var key)
+            || key == System.Windows.Forms.Keys.None)
+        {
+            throw new ArgumentException($"非法快捷键主键：{keyText}");
+        }
+
+        var modifiers = System.Windows.Forms.Keys.None;
+        foreach (var part in modifiersText.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!Enum.TryParse<System.Windows.Forms.Keys>(part, true, out var modifier)
+                || modifier is not (System.Windows.Forms.Keys.Control or System.Windows.Forms.Keys.Alt or System.Windows.Forms.Keys.Shift or System.Windows.Forms.Keys.LWin))
+            {
+                throw new ArgumentException($"非法修饰键：{part}");
+            }
+
+            modifiers |= modifier;
+        }
+
+        return HotKeyBinding.Create(modifiers, key);
+    }
+
+    private static TEnum ParseEnum<TEnum>(string text, string displayName)
+        where TEnum : struct, Enum
+    {
+        if (!Enum.TryParse<TEnum>(text, true, out var value) || !Enum.IsDefined(value))
+        {
+            throw new ArgumentException($"非法{displayName}：{text}");
+        }
+
+        return value;
+    }
+
+    // 下载目录浏览（宿主弹系统目录对话框）
+    private object BrowseDirectoryState() => new
+    {
+        path = BrowseDirectory?.Invoke(),
+    };
+
+    // 浏览器数据清除（scope=cookies/cache/all，宿主经共享 Profile 执行）
+    private async Task<string> ClearBrowserDataAsync(BridgeRequest request)
+    {
+        var scope = request.GetString("scope");
+        if (scope is not ("cookies" or "cache" or "all"))
+        {
+            throw new ArgumentException($"非法清除范围：{scope ?? "(空)"}");
+        }
+
+        if (ClearBrowserData is null)
+        {
+            throw new InvalidOperationException("浏览器服务不可用。");
+        }
+
+        await ClearBrowserData(scope).ConfigureAwait(false);
+        return AppBridgeProtocol.CreateSuccessResponse(request.Id, new { cleared = true });
+    }
+
+    // 最近记录（文本两工具 + 媒体各最近 5 条，首页卡片用）
+    private object GetRecent() => new
+    {
+        text = new
+        {
+            quote = stateStore.GetHistory(TextToolId.QuoteConversion)
+                .TakeLast(5)
+                .Select(h => new { input = h.OriginalInput, output = h.ConvertedOutput, time = h.CreatedAtUtc })
+                .ToArray(),
+            space = stateStore.GetHistory(TextToolId.SpaceRemoval)
+                .TakeLast(5)
+                .Select(h => new { input = h.OriginalInput, output = h.ConvertedOutput, time = h.CreatedAtUtc })
+                .ToArray(),
+        },
+        media = mediaStateStore.GetHistory()
+            .TakeLast(5)
+            .Select(h => new
+            {
+                title = h.Title,
+                sourceShareLink = h.SourceShareLink,
+                successCount = h.SuccessCount,
+                time = h.DownloadedAtUtc,
+            })
+            .ToArray(),
+    };
 
     private async Task<string> CheckUpdateAsync(BridgeRequest request)
     {

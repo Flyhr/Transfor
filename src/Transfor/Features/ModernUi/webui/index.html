@@ -110,7 +110,6 @@ body {
 <div class="content">
   <section class="page active" id="page-home">
     <h1>首页</h1>
-    <p class="placeholder">文本工具与快捷操作。</p>
     <div class="card">
       <div style="display:flex;gap:6px;margin-bottom:12px">
         <button class="btn btn-primary" id="tab-quote" data-panel="panel-quote">引号转换</button>
@@ -134,6 +133,23 @@ body {
           <span id="space-status" style="color:var(--text-secondary);margin-left:8px"></span>
         </div>
       </div>
+    </div>
+    <div class="card">
+      <h3>快捷操作</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn" data-goto="media">去媒体下载</button>
+        <button class="btn" data-goto="downloads">去下载管理</button>
+        <button class="btn" data-goto="history">去历史</button>
+        <button class="btn" data-goto="browser">去浏览器</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="row" style="margin-bottom:4px">
+        <h3 style="margin:0">最近记录</h3>
+        <span id="home-version-status" style="margin-left:auto;color:var(--text-secondary);font-size:12px"></span>
+      </div>
+      <div id="home-recent-text" style="color:var(--text-secondary);font-size:12px">加载中…</div>
+      <div id="home-recent-media" style="color:var(--text-secondary);font-size:12px;margin-top:6px"></div>
     </div>
   </section>
 
@@ -219,21 +235,75 @@ body {
 
   <section class="page" id="page-settings">
     <h1>设置</h1>
-    <p class="placeholder">常规/下载/浏览器/更新/外观/快捷键（Phase 6.6 迁移）。</p>
     <div class="card">
-      <h3>更新通道（经 App Bridge 读写真实设置）</h3>
-      <div class="row">
-        <span class="label">更新通道</span>
+      <h3>常规</h3>
+      <div class="row"><span class="label">更新通道</span>
         <select class="input" id="setting-channel" style="padding:5px">
           <option value="stable">Stable 稳定版</option>
           <option value="beta">Beta 测试版</option>
         </select>
       </div>
+      <div class="row"><span class="label">引号历史上限</span><input class="input" id="setting-quote-limit" type="number" min="1" max="500" style="width:120px"></div>
+      <div class="row"><span class="label">空格历史上限</span><input class="input" id="setting-space-limit" type="number" min="1" max="500" style="width:120px"></div>
+    </div>
+    <div class="card">
+      <h3>下载</h3>
       <div class="row">
-        <button class="btn btn-primary" id="setting-save">保存设置</button>
+        <span class="label">下载目录</span>
+        <input class="input" id="setting-directory" style="flex:1">
+        <button class="btn" id="setting-browse">浏览…</button>
+      </div>
+      <div class="row"><span class="label">最大并发</span><input class="input" id="setting-concurrency" type="number" min="1" max="8" style="width:120px"></div>
+      <div class="row"><span class="label">默认全选</span><input type="checkbox" id="setting-select-all" style="transform:scale(1.2)"></div>
+      <div class="row"><span class="label">下载后打开目录</span><input type="checkbox" id="setting-open-folder" style="transform:scale(1.2)"></div>
+      <div class="row"><span class="label">质量偏好</span>
+        <select class="input" id="setting-quality" style="padding:5px">
+          <option value="highest">最高质量</option>
+          <option value="balanced">Balanced（至少 720p）</option>
+        </select>
+      </div>
+    </div>
+    <div class="card">
+      <h3>网络</h3>
+      <div class="row"><span class="label">网络模式</span>
+        <select class="input" id="setting-network" style="padding:5px">
+          <option value="direct">强制直连</option>
+          <option value="system">系统代理</option>
+          <option value="customproxy">指定代理</option>
+        </select>
+      </div>
+      <div class="row" id="setting-proxy-row"><span class="label">代理地址</span><input class="input" id="setting-proxy" placeholder="http://127.0.0.1:7897" style="flex:1"></div>
+    </div>
+    <div class="card">
+      <h3>快捷键</h3>
+      <div class="row">
+        <span class="label">历史面板快捷键</span>
+        <span style="display:flex;gap:10px;align-items:center">
+          <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-ctrl"> Ctrl</label>
+          <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-alt"> Alt</label>
+          <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-shift"> Shift</label>
+          <select class="input" id="setting-key" style="padding:5px"></select>
+        </span>
+      </div>
+      <div style="color:var(--text-secondary);font-size:12px">修改后立即生效；被其他程序占用时保存会报错。</div>
+    </div>
+    <div class="card">
+      <h3>浏览器数据</h3>
+      <div class="row" style="margin-bottom:0">
+        <button class="btn" id="setting-clear-cookies">清除 Cookie</button>
+        <button class="btn" id="setting-clear-cache">清除缓存</button>
+        <button class="btn" id="setting-clear-all">清除全部浏览器数据</button>
+        <span id="setting-browser-result" style="color:var(--text-secondary)"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>更新与外观</h3>
+      <div class="row">
+        <button class="btn btn-primary" id="setting-save">保存全部设置</button>
         <button class="btn" id="setting-check-update">检查更新</button>
         <span id="setting-result" style="color:var(--text-secondary)"></span>
       </div>
+      <div style="color:var(--text-secondary);font-size:12px;margin-top:6px">主题切换与版本信息在左侧导航栏；更新通道决定收到稳定版还是测试版更新。</div>
     </div>
   </section>
 </div>
@@ -381,6 +451,54 @@ function setupTextTool(prefix, tool) {
 }
 setupTextTool("quote", "quote");
 setupTextTool("space", "space");
+
+/* ===== 首页：快捷操作/最近记录/版本与更新状态（Phase 6.1 收尾） ===== */
+document.querySelectorAll("#page-home [data-goto]").forEach((btn) => {
+  btn.addEventListener("click", () => navigateTo(btn.dataset.goto));
+});
+
+function loadHomeSummary() {
+  return Promise.all([Bridge.invoke("getRecent"), Bridge.invoke("getAppInfo")])
+    .then(([recent, info]) => {
+      const textParts = [];
+      recent.text.quote.slice().reverse().forEach((h) => textParts.push(`引号：${h.input.slice(0, 30)} → ${h.output.slice(0, 30)}`));
+      recent.text.space.slice().reverse().forEach((h) => textParts.push(`空格：${h.input.slice(0, 30)} → ${h.output.slice(0, 30)}`));
+      document.getElementById("home-recent-text").textContent = textParts.length > 0
+        ? textParts.map((t) => "• " + t).join("\n")
+        : "暂无文本转换记录。";
+      const mediaParts = recent.media.slice().reverse().map((m) => ({
+        label: `${m.title || "未命名作品"}（成功 ${m.successCount}）`,
+        link: m.sourceShareLink,
+      }));
+      const mediaContainer = document.getElementById("home-recent-media");
+      mediaContainer.innerHTML = "";
+      if (mediaParts.length === 0) {
+        mediaContainer.textContent = "暂无下载记录。";
+      } else {
+        mediaParts.forEach((m) => {
+          const row = document.createElement("div");
+          row.style.cssText = "display:flex;align-items:center;gap:8px;padding:2px 0";
+          const text = document.createElement("span");
+          text.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+          text.textContent = "• " + m.label;
+          text.title = m.link;
+          const redo = document.createElement("button");
+          redo.className = "btn";
+          redo.textContent = "重新执行";
+          redo.style.cssText = "padding:1px 8px;font-size:12px";
+          redo.addEventListener("click", () => reparseShareLink(m.link));
+          row.appendChild(text);
+          row.appendChild(redo);
+          mediaContainer.appendChild(row);
+        });
+      }
+      const channel = info.channel === "beta" ? "Beta" : "Stable";
+      document.getElementById("home-version-status").textContent = `Transfor v${info.version} · ${channel}`;
+    })
+    .catch(() => {
+      document.getElementById("home-recent-text").textContent = "最近记录加载失败。";
+    });
+}
 
 /* ===== 媒体下载页（Phase 6.2） ===== */
 const mediaLink = document.getElementById("media-link");
@@ -918,17 +1036,109 @@ document.getElementById("browser-view-media").addEventListener("click", () => {
   if (url) reparseShareLink(url);
 });
 
-/* ===== 设置页（真实 Bridge 调用） ===== */
-const channelSelect = document.getElementById("setting-channel");
+/* ===== 设置页（Phase 6.6：常规/下载/网络/快捷键/浏览器/更新/外观） ===== */
 const settingResult = document.getElementById("setting-result");
 
-document.getElementById("setting-save").addEventListener("click", async () => {
-  try {
-    const settings = await Bridge.invoke("saveSettings", { updateChannel: channelSelect.value });
-    channelSelect.value = settings.updateChannel;
-    toast("设置已保存");
-  } catch (e) { toast(e.message, "error"); }
+// 主键候选（字母/数字/F 键/常用键）
+function buildKeyOptions() {
+  const keys = [];
+  for (let c = 65; c <= 90; c++) keys.push(String.fromCharCode(c));
+  for (let d = 48; d <= 57; d++) keys.push(String.fromCharCode(d));
+  for (let f = 1; f <= 12; f++) keys.push("F" + f);
+  keys.push("Back", "Tab", "Return", "Space", "Home", "End", "Up", "Down", "Left", "Right");
+  const select = document.getElementById("setting-key");
+  keys.forEach((k) => {
+    const opt = document.createElement("option");
+    opt.value = k;
+    opt.textContent = k === "Return" ? "Enter" : k === "Space" ? "空格" : k;
+    select.appendChild(opt);
+  });
+}
+
+// Keys 名称 → 修饰键勾选
+function loadHotKey(modifiers, key) {
+  document.getElementById("setting-mod-ctrl").checked = modifiers.includes("Control");
+  document.getElementById("setting-mod-alt").checked = modifiers.includes("Alt");
+  document.getElementById("setting-mod-shift").checked = modifiers.includes("Shift");
+  const keySelect = document.getElementById("setting-key");
+  if (key) keySelect.value = key;
+  if (keySelect.selectedIndex < 0) keySelect.value = "Q";
+}
+
+function collectHotKey() {
+  const mods = [];
+  if (document.getElementById("setting-mod-ctrl").checked) mods.push("Control");
+  if (document.getElementById("setting-mod-alt").checked) mods.push("Alt");
+  if (document.getElementById("setting-mod-shift").checked) mods.push("Shift");
+  return { modifiers: mods.join(","), key: document.getElementById("setting-key").value };
+}
+
+// 网络模式切换时显示/隐藏代理地址
+document.getElementById("setting-network").addEventListener("change", (e) => {
+  document.getElementById("setting-proxy-row").style.display = e.target.value === "customproxy" ? "flex" : "none";
 });
+
+function loadSettingsUi() {
+  return Bridge.invoke("getSettings").then((settings) => {
+    document.getElementById("setting-channel").value = settings.updateChannel;
+    document.getElementById("setting-quote-limit").value = settings.quoteHistoryLimit;
+    document.getElementById("setting-space-limit").value = settings.spaceHistoryLimit;
+    loadHotKey(settings.hotKey.modifiers, settings.hotKey.key);
+    const media = settings.media;
+    document.getElementById("setting-directory").value = media.downloadDirectory;
+    document.getElementById("setting-concurrency").value = media.maxConcurrentDownloads;
+    document.getElementById("setting-select-all").checked = media.defaultSelectAll;
+    document.getElementById("setting-open-folder").checked = media.openFolderAfterDownload;
+    document.getElementById("setting-quality").value = media.qualityPreference;
+    document.getElementById("setting-network").value = media.networkMode;
+    document.getElementById("setting-proxy").value = media.proxyAddress;
+    document.getElementById("setting-proxy-row").style.display = media.networkMode === "customproxy" ? "flex" : "none";
+  }).catch((e) => settingResult.textContent = "设置加载失败：" + e.message);
+}
+
+document.getElementById("setting-save").addEventListener("click", async () => {
+  const hotKey = collectHotKey();
+  try {
+    await Bridge.invoke("saveSettings", {
+      updateChannel: document.getElementById("setting-channel").value,
+      quoteHistoryLimit: String(document.getElementById("setting-quote-limit").value),
+      spaceHistoryLimit: String(document.getElementById("setting-space-limit").value),
+      hotKeyModifiers: hotKey.modifiers,
+      hotKeyKey: hotKey.key,
+      downloadDirectory: document.getElementById("setting-directory").value,
+      maxConcurrentDownloads: Number(document.getElementById("setting-concurrency").value),
+      defaultSelectAll: document.getElementById("setting-select-all").checked,
+      openFolderAfterDownload: document.getElementById("setting-open-folder").checked,
+      qualityPreference: document.getElementById("setting-quality").value,
+      networkMode: document.getElementById("setting-network").value,
+      proxyAddress: document.getElementById("setting-proxy").value,
+    }, 20000);
+    settingResult.textContent = "设置已保存。";
+    toast("设置已保存");
+    loadSettingsUi();
+  } catch (e) { settingResult.textContent = e.message; toast(e.message, "error"); }
+});
+
+document.getElementById("setting-browse").addEventListener("click", async () => {
+  try {
+    const { path } = await Bridge.invoke("browseDirectory");
+    if (path) document.getElementById("setting-directory").value = path;
+  } catch (e) { settingResult.textContent = "选择目录失败：" + e.message; }
+});
+
+// 浏览器数据清除（确认后执行）
+function clearBrowserData(scope, confirmText, successText) {
+  if (!confirm(confirmText)) return;
+  Bridge.invoke("clearBrowserData", { scope }, 30000)
+    .then(() => {
+      document.getElementById("setting-browser-result").textContent = successText;
+      toast(successText);
+    })
+    .catch((e) => { document.getElementById("setting-browser-result").textContent = e.message; toast(e.message, "error"); });
+}
+document.getElementById("setting-clear-cookies").addEventListener("click", () => clearBrowserData("cookies", "确定清除浏览器 Cookie 吗？登录状态将被清除。", "Cookie 已清除。"));
+document.getElementById("setting-clear-cache").addEventListener("click", () => clearBrowserData("cache", "确定清除浏览器缓存吗？", "缓存已清除。"));
+document.getElementById("setting-clear-all").addEventListener("click", () => clearBrowserData("all", "确定清除全部浏览器数据吗？Cookie、缓存与登录状态将被全部清除。", "全部浏览器数据已清除。"));
 
 document.getElementById("setting-check-update").addEventListener("click", async () => {
   settingResult.textContent = "检查中…";
@@ -939,11 +1149,13 @@ document.getElementById("setting-check-update").addEventListener("click", async 
   } catch (e) { settingResult.textContent = "检查失败：" + e.message; }
 });
 
-/* ===== 初始化（版本/通道信息由宿主侧边栏显示；此处回填设置页） ===== */
+buildKeyOptions();
+
+/* ===== 初始化（版本/通道信息由宿主侧边栏显示；此处回填设置页与首页） ===== */
 (async () => {
   try {
-    const settings = await Bridge.invoke("getSettings");
-    channelSelect.value = settings.updateChannel;
+    await loadSettingsUi();
+    loadHomeSummary();
   } catch (e) {
     settingResult.textContent = "Bridge 不可用：" + e.message;
   }

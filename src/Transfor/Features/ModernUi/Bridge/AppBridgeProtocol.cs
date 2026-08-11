@@ -71,6 +71,12 @@ internal sealed record BridgeRequest(long? Id, string Method, JsonElement? Param
             ? element.GetBoolean()
             : null;
 
+    // 读取整数参数
+    public int? GetInt32(string name) =>
+        TryGet(name, out var element) && element.ValueKind == JsonValueKind.Number
+            ? element.GetInt32()
+            : null;
+
     private bool TryGet(string name, out JsonElement element)
     {
         element = default;
