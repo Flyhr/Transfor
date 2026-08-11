@@ -38,6 +38,10 @@ internal sealed class AppBridge
     // 热键服务（应用注入）；未设置时快捷键编辑报错
     public GlobalHotKeyManager? HotKeyManager { get; set; }
 
+    // 浏览器会话初始化（应用注入；解析前调用，幂等——已挂接立即返回）：
+    // HTTP 直解析失败转浏览器兜底前确保会话可用；失败时抛出真实原因
+    public Func<ValueTask>? EnsureBrowserInitialized { get; set; }
+
     // 下载目录浏览回调（AppShell 提供 FolderBrowserDialog）
     public Func<string?>? BrowseDirectory { get; set; }
 
@@ -494,6 +498,13 @@ internal sealed class AppBridge
         if (uri is null)
         {
             throw new ArgumentException(linkError ?? "未在文本中找到链接。");
+        }
+
+        // 浏览器会话惰性初始化（幂等）：确保 HTTP 直解析失败时的浏览器兜底可用；
+        // 初始化失败抛出真实原因，不呈现「浏览器会话尚未启用」类表面错误
+        if (EnsureBrowserInitialized is not null)
+        {
+            await EnsureBrowserInitialized().ConfigureAwait(false);
         }
 
         // 新解析使旧结果立即失效（失败/交互也不保留旧作品）

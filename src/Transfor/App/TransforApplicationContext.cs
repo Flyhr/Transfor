@@ -48,23 +48,27 @@ internal sealed class TransforApplicationContext : ApplicationContext
             historyStore,
             services.PasteCoordinator);
 
-        // 启动即挂接浏览器会话（只挂接不启动，首次使用时惰性启动专用 Edge），
-        // Automatic 解析的浏览器兜底无需用户先点击「打开真实 Edge 登录」
-        try
-        {
-            services.Media.EnsureBrowserInitializedAsync(mainForm).GetAwaiter().GetResult();
-        }
-        catch
-        {
-            // 浏览器不可用不阻断应用启动；相关功能在解析时给出明确提示
-        }
-
         // 启动预初始化隐藏宿主：统一线程锚点 = 主窗体，在构造器（STA 主线程 = UI 线程）
         // 同步创建，消灭首次解析的懒初始化竞态与跨线程风险；
         // 主窗体不再自动显示（新界面为主界面）——必须先创建句柄，否则后台线程的
         // 浏览器调度（EnsureUiAnchorReady）会报「主窗口句柄未创建」；
         // 失败不阻断启动（记录脱敏日志；解析/下载时给出明确提示）
         _ = mainForm.Handle;
+
+        // 启动即挂接浏览器会话（只挂接不启动，首次使用时惰性启动专用 Edge），
+        // Automatic 解析的浏览器兜底无需用户先点击「打开真实 Edge 登录」；
+        // 在锚点句柄创建之后执行（先锚点后浏览器）；
+        // 挂接失败不阻断启动（记录日志；解析前经 AppBridge/媒体页重试并给出真实原因）
+        try
+        {
+            services.Media.EnsureBrowserInitializedAsync(mainForm).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            var category = ErrorClassifier.Classify(ex, ErrorCategory.Browser);
+            AppLog.Browser.Error($"[{category}] 启动浏览器会话挂接失败：{ErrorChainFormatter.Format(ex)}");
+        }
+
         try
         {
             services.Browser.UiAnchor = mainForm;
@@ -284,7 +288,9 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
         if (appShell is null || appShell.IsDisposed)
         {
-            appShell = new AppShellForm(
+            // 局部捕获：委托解析时闭包引用本方法内的 shell（字段赋值晚于构造）
+            AppShellForm shell = null!;
+            shell = new AppShellForm(
                 new AppBridge(
                     historyStore,
                     updatesService,
@@ -295,10 +301,14 @@ internal sealed class TransforApplicationContext : ApplicationContext
                     new MediaSizeProbe(services.Media.RequestSender, services.Media.BrowserSessions))
                 {
                     HotKeyManager = services.HotKeys,
+                    // 浏览器会话惰性初始化（幂等）：与旧界面媒体页同模式，
+                    // 解析前确保浏览器兜底可用，挂接失败时解析给出真实原因而非「尚未启用」
+                    EnsureBrowserInitialized = () => services.Media.EnsureBrowserInitializedAsync(shell),
                 },
                 services.Browser,
                 AppPaths.Default.AppUiProfileDirectory,
                 services.Media.DownloadCoordinator);
+            appShell = shell;
         }
 
         appShell.Show();
