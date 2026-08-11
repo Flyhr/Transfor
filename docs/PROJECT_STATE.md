@@ -81,7 +81,7 @@ tests/Transfor.Tests/   # 控制台测试运行器（无框架，Program.cs 全�
 - **下载快照（M2 审查修复）**：MediaDownloadCoordinator.GetSnapshot（DownloadSnapshot：等待/下载中/已落定 + 进度 + 终态），CancelTask 支持排队批次（出队落定不写历史）；CreateRetryTask（进程内重试候选：复用 Asset/Variant，仅活动批次内有效）；TaskRuntime 保留 SourceShareLink/AssetIndex/Post；DownloadFileNameBuilder.BuildFileName（自 MediaDownloadPage 迁移，Bridge 与 WinForms 页共用同一命名规则）
 - **诊断目录**：`%TEMP%\Transfor\diagnostics\`（解析完成 capture-*.json + 下载失败 failed-media-* + 崩溃 crash-*.txt）；**日志**：`%TEMP%\Transfor\logs\`（五类分类，1MB 轮转保留 5 个；敏感数据 Cookie/Token/认证头禁写）
 - **Phase 7**：AppLog 分类日志（关键路径接入）；ErrorCategory/TransforError/ErrorClassifier（Network/Parse/Browser/Download/Update/Permission）；WebView2 Runtime 启动检查（托盘气泡提示一次）；崩溃恢复确认（状态文件损坏回退/浏览器初始化隔离/退出取消下载）；下载安全（SafeHttpRequestSender）与更新完整性（Velopack 校验）验收确认；发布检查清单入 README
-- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新包未做代码签名；WebView2 媒体预取未实现；Edge CDP 保留未删除；webui 单文件嵌入（改 UI 需重新编译）
+- **已知边界**：未登录（not_exist_login_cookie）时视频可能返回封面/低清；Android Motion Photo / Apple Live Photo 封装未做（二期）；DASH/HLS 分段流不支持；更新包未做代码签名；WebView2 媒体预取未实现；Edge CDP 保留未删除；webui 多文件嵌入（index.html + styles.css + app.js，改 UI 后需重新构建生效）
 
 ## 六、开发注意事项（坑）
 

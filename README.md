@@ -108,9 +108,9 @@ src/Transfor/
 │       └── UI/                              # BrowserView（浏览器功能页）/ BrowserHostForm（解析+下载隐藏宿主）
 │   └── ModernUi/                            # 新界面（Phase 5 预览）：Web UI + App Bridge
 │       ├── AppShellForm.cs                  # WinForms 宿主窗体（AppWebView，独立 Profile + 导航拦截）
-│       ├── WebUiResources.cs                # 嵌入资源读取（index.html）
+│       ├── WebUiResources.cs                # 嵌入资源读取（index.html / styles.css / app.js）
 │       ├── Bridge/                          # AppBridge（方法分发）/ AppBridgeProtocol（JSON 消息协议）
-│       └── webui/index.html                 # 单文件 UI：Design System + 侧边栏 + 主题 + Bridge JS
+│       └── webui/                           # 多文件 UI：index.html + styles.css + app.js（嵌入程序集，改后需重新构建）
 │   └── MediaDownload/                       # 媒体下载：契约、模型、协调器、服务、解析器与 UI
 │       ├── Contracts/                       # IMediaResolver / IMediaDownloadService / IBrowserSessionAccessor / 浏览器捕获模型
 │       ├── Models/                          # MediaAsset / MediaVariant / ResolvedMediaPost / 下载批次/设置/历史等
