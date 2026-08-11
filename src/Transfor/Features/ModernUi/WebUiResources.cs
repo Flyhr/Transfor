@@ -7,12 +7,23 @@ namespace Transfor;
 internal static class WebUiResources
 {
     private const string IndexResourceName = "Transfor.WebUi.index.html";
+    private const string StylesResourceName = "Transfor.WebUi.styles.css";
+    private const string AppScriptResourceName = "Transfor.WebUi.app.js";
 
     // 加载主页面 HTML（嵌入资源缺失时返回 null，调用方降级提示）
     public static string? LoadIndexHtml()
     {
+        return LoadResource(IndexResourceName);
+    }
+
+    public static string? LoadStylesCss() => LoadResource(StylesResourceName);
+
+    public static string? LoadAppScript() => LoadResource(AppScriptResourceName);
+
+    private static string? LoadResource(string resourceName)
+    {
         var assembly = typeof(WebUiResources).Assembly;
-        using var stream = assembly.GetManifestResourceStream(IndexResourceName);
+        using var stream = assembly.GetManifestResourceStream(resourceName);
         if (stream is null)
         {
             return null;
@@ -25,4 +36,10 @@ internal static class WebUiResources
     // 资源是否已嵌入（测试用）
     internal static bool ContainsIndex() =>
         typeof(WebUiResources).Assembly.GetManifestResourceNames().Contains(IndexResourceName, StringComparer.Ordinal);
+
+    internal static bool ContainsStyles() =>
+        typeof(WebUiResources).Assembly.GetManifestResourceNames().Contains(StylesResourceName, StringComparer.Ordinal);
+
+    internal static bool ContainsAppScript() =>
+        typeof(WebUiResources).Assembly.GetManifestResourceNames().Contains(AppScriptResourceName, StringComparer.Ordinal);
 }

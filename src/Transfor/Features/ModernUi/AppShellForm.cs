@@ -11,15 +11,14 @@ namespace Transfor;
 internal sealed class AppShellForm : Form
 {
     // HTML 浏览器页顶部工具条高度（浏览器控件从此处以下覆盖内容区）
-    private const int BrowserToolbarHeight = 56;
+    private const int BrowserToolbarHeight = 64;
     // 宿主侧边栏宽度
-    private const int SidebarWidth = 200;
+    private const int SidebarWidth = 92;
 
     private static readonly (string Page, string Label)[] NavItems =
     {
-        ("home", "首页"),
-        ("media", "媒体下载"),
-        ("downloads", "下载"),
+        ("home", "工作台"),
+        ("media", "媒体"),
         ("browser", "浏览器"),
         ("history", "历史"),
         ("settings", "设置"),
@@ -38,10 +37,9 @@ internal sealed class AppShellForm : Form
     private BrowserNavigationService? browserNavigation;
     private long navigationVersion;
     private Panel? sidebar;
-    private Button? themeButton;
     private Label? sidebarVersionLabel;
     private string? activeNavPage;
-    private bool sidebarDark = true;
+    private bool sidebarDark;
 
     public AppShellForm(
         AppBridge bridge,
@@ -121,8 +119,8 @@ internal sealed class AppShellForm : Form
         sidebar = new Panel
         {
             Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(38, 38, 38),
-            Padding = new Padding(10),
+            BackColor = Color.FromArgb(247, 251, 251),
+            Padding = new Padding(8),
         };
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -135,13 +133,14 @@ internal sealed class AppShellForm : Form
             {
                 Text = label,
                 AutoSize = false,
-                Height = 38,
-                Width = SidebarWidth - 24,
+                Height = 54,
+                Width = SidebarWidth - 16,
                 FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.White,
+                ForeColor = Color.FromArgb(43, 71, 76),
                 BackColor = Color.Transparent,
-                FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(60, 60, 60), MouseDownBackColor = Color.FromArgb(45, 45, 45) },
-                TextAlign = ContentAlignment.MiddleLeft,
+                FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(234, 248, 246), MouseDownBackColor = Color.FromArgb(220, 244, 240) },
+                TextAlign = ContentAlignment.MiddleCenter,
+                Font = new Font(Font.FontFamily, 8F),
                 Cursor = Cursors.Hand,
                 Tag = page,
             };
@@ -151,24 +150,10 @@ internal sealed class AppShellForm : Form
         }
         layout.Controls.Add(navPanel, 0, 0);
 
-        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+        var footer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 1 };
         footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        footer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        sidebarVersionLabel = new Label { Text = "Transfor v" + AppVersion.Current, ForeColor = Color.FromArgb(157, 157, 157), AutoSize = true, Padding = new Padding(2, 6, 2, 2) };
+        sidebarVersionLabel = new Label { Text = "v" + AppVersion.Current, ForeColor = Color.FromArgb(100, 123, 128), AutoSize = true, Padding = new Padding(2, 6, 2, 2) };
         footer.Controls.Add(sidebarVersionLabel, 0, 0);
-        themeButton = new Button
-        {
-            Text = "切换主题",
-            AutoSize = true,
-            FlatStyle = FlatStyle.Flat,
-            ForeColor = Color.White,
-            BackColor = Color.FromArgb(50, 50, 50),
-            FlatAppearance = { BorderSize = 0, MouseOverBackColor = Color.FromArgb(70, 70, 70) },
-            Padding = new Padding(8, 4, 8, 4),
-            Cursor = Cursors.Hand,
-        };
-        themeButton.Click += (_, _) => ExecuteAppScript("window.__toggleTheme && window.__toggleTheme();");
-        footer.Controls.Add(themeButton, 0, 1);
         layout.Controls.Add(footer, 0, 1);
 
         sidebar.Controls.Add(layout);
@@ -184,23 +169,16 @@ internal sealed class AppShellForm : Form
             return;
         }
 
-        var background = dark ? Color.FromArgb(38, 38, 38) : Color.FromArgb(246, 246, 246);
-        var text = dark ? Color.White : Color.FromArgb(27, 27, 27);
-        var secondary = dark ? Color.FromArgb(157, 157, 157) : Color.FromArgb(110, 110, 110);
-        var hover = dark ? Color.FromArgb(60, 60, 60) : Color.FromArgb(229, 229, 229);
-        var active = dark ? Color.FromArgb(60, 60, 60) : Color.FromArgb(229, 229, 229);
+        var background = Color.FromArgb(247, 251, 251);
+        var text = Color.FromArgb(43, 71, 76);
+        var secondary = Color.FromArgb(100, 123, 128);
+        var hover = Color.FromArgb(234, 248, 246);
+        var active = Color.FromArgb(220, 244, 240);
 
         sidebar.BackColor = background;
         if (sidebarVersionLabel is not null)
         {
             sidebarVersionLabel.ForeColor = secondary;
-        }
-
-        if (themeButton is not null)
-        {
-            themeButton.ForeColor = text;
-            themeButton.BackColor = dark ? Color.FromArgb(50, 50, 50) : Color.FromArgb(229, 229, 229);
-            themeButton.FlatAppearance.MouseOverBackColor = hover;
         }
 
         foreach (var (key, button) in navButtons)
@@ -227,7 +205,7 @@ internal sealed class AppShellForm : Form
         {
             var active = string.Equals(key, page, StringComparison.Ordinal);
             button.Font = new Font(Font, active ? FontStyle.Bold : FontStyle.Regular);
-            button.BackColor = active ? (sidebarDark ? Color.FromArgb(60, 60, 60) : Color.FromArgb(229, 229, 229)) : Color.Transparent;
+            button.BackColor = active ? Color.FromArgb(220, 244, 240) : Color.Transparent;
         }
     }
 
@@ -253,7 +231,9 @@ internal sealed class AppShellForm : Form
     private async void InitializeAsync()
     {
         var html = WebUiResources.LoadIndexHtml();
-        if (html is null)
+        var styles = WebUiResources.LoadStylesCss();
+        var script = WebUiResources.LoadAppScript();
+        if (html is null || styles is null || script is null)
         {
             MessageBox.Show(this, "新界面资源缺失（嵌入资源未包含）。", "Transfor", MessageBoxButtons.OK, MessageBoxIcon.Error);
             Close();
@@ -274,6 +254,8 @@ internal sealed class AppShellForm : Form
             var webRoot = Path.Combine(Path.GetTempPath(), "Transfor", "WebUi");
             Directory.CreateDirectory(webRoot);
             File.WriteAllText(Path.Combine(webRoot, "index.html"), html);
+            File.WriteAllText(Path.Combine(webRoot, "styles.css"), styles);
+            File.WriteAllText(Path.Combine(webRoot, "app.js"), script);
             core.SetVirtualHostNameToFolderMapping(
                 "appassets.transfor",
                 webRoot,

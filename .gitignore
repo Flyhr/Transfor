@@ -4,5 +4,6 @@ obj/
 /.idea/
 /releases/
 /publish/
+/.superpowers/
 # 测试文件本地保留，不再提交到仓库（CI 不再执行测试）
 /tests/
