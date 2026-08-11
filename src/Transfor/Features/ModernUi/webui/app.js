@@ -192,12 +192,26 @@ document.getElementById("media-paste").addEventListener("click", async () => {
     const shareUrl = extractShareUrl(text);
     if (shareUrl) { mediaLink.value = shareUrl; mediaStatus.textContent = "已粘贴链接。"; }
     else { mediaLink.value = ""; mediaStatus.textContent = text ? "剪贴板中未找到链接。" : "剪贴板为空。"; }
+    updateLinkClearVisibility();
   } catch (e) { mediaStatus.textContent = "读取剪贴板失败：" + e.message; }
 });
 
+// 链接输入框右侧叉号：清空输入框全部内容
+const mediaLinkClear = document.getElementById("media-link-clear");
+function updateLinkClearVisibility() {
+  mediaLinkClear.hidden = mediaLink.value.length === 0;
+}
+mediaLink.addEventListener("input", updateLinkClearVisibility);
+mediaLinkClear.addEventListener("click", () => {
+  mediaLink.value = "";
+  updateLinkClearVisibility();
+  mediaStatus.textContent = "";
+  mediaLink.focus();
+});
+updateLinkClearVisibility();
+
 const resolveButton = document.getElementById("media-resolve");
 const downloadButton = document.getElementById("media-download");
-const downloadStatus = document.getElementById("media-download-status");
 let activeBatch = null; // { batchId, total, done }
 
 document.getElementById("media-resolve").addEventListener("click", async () => {
@@ -207,7 +221,7 @@ document.getElementById("media-resolve").addEventListener("click", async () => {
   // 解析开始时清空旧作品（失败/交互也不保留，防止误下载旧作品）
   resetMediaView();
   resolveButton.disabled = true;
-  mediaStatus.textContent = "解析中…（可能需要 30–60 秒，含浏览器兜底）";
+  mediaStatus.textContent = "解析中…";
   try {
     const result = await Bridge.invoke("resolveMedia", { link }, 120000);
     if (result.status === "succeeded") {
@@ -230,7 +244,6 @@ function resetMediaView() {
   mediaGrid.innerHTML = "";
   document.getElementById("media-select-all").checked = false;
   document.getElementById("media-selection-count").textContent = "已选择 0 / 0";
-  downloadStatus.textContent = "";
   activeBatch = null;
 }
 
@@ -372,9 +385,8 @@ async function downloadSingleAsset(asset, button) {
       assets: [asset.index],
     });
     activeBatch = { batchId, total: accepted, done: 0 };
-    downloadStatus.textContent = `已加入下载队列：${accepted} 个媒体（下载中 0/${accepted}）。`;
     toast(`已加入下载队列：${accepted || 1} 个媒体`);
-    refreshDownloads();
+    await refreshDownloads();
   } catch (e) {
     toast("下载失败：" + e.message, "error");
   } finally {
@@ -384,21 +396,20 @@ async function downloadSingleAsset(asset, button) {
 }
 
 document.getElementById("media-download").addEventListener("click", async () => {
-  if (!currentShareLink) return;
+  if (!currentShareLink) { toast("请先解析作品。", "error"); return; }
   const indexes = [];
   mediaGrid.querySelectorAll(".media-card").forEach((card) => {
     const cb = card.querySelector(".media-card-checkbox");
     if (cb && cb.checked && !cb.disabled) indexes.push(Number(card.dataset.assetIndex));
   });
-  if (indexes.length === 0) { downloadStatus.textContent = "请先勾选要下载的媒体。"; return; }
+  if (indexes.length === 0) { toast("请先勾选要下载的媒体。", "error"); return; }
   downloadButton.disabled = true;
   try {
     const { accepted, batchId } = await Bridge.invoke("downloadSelected", { shareLink: currentShareLink, assets: indexes });
     activeBatch = { batchId, total: accepted, done: 0 };
-    downloadStatus.textContent = `已加入下载队列：${accepted} 个媒体（下载中 0/${accepted}）。`;
     toast(`已加入下载队列：${accepted} 个媒体`);
     await refreshDownloads();
-  } catch (e) { downloadStatus.textContent = "下载失败：" + e.message; }
+  } catch (e) { toast("下载失败：" + e.message, "error"); }
   finally { downloadButton.disabled = false; }
 });
 
@@ -406,82 +417,49 @@ document.getElementById("media-download").addEventListener("click", async () => 
 Bridge.on("taskCompleted", (data) => {
   if (activeBatch && data.batchId === activeBatch.batchId) {
     activeBatch.done += 1;
-    const statusLabel = data.status === "succeeded" ? "完成" : (data.status === "cancelled" ? "已取消" : "失败");
-    downloadStatus.textContent = `${statusLabel} ${activeBatch.done}/${activeBatch.total}。`;
     if (activeBatch.done >= activeBatch.total) activeBatch = null;
   }
 });
-Bridge.on("batchCompleted", () => {
-  if (activeBatch) { downloadStatus.textContent = "本批次下载已全部落定。"; activeBatch = null; }
-});
+Bridge.on("batchCompleted", () => { activeBatch = null; });
 
-/* ===== 下载管理页（Phase 6.3） ===== */
+/* ===== 下载队列（Phase 6.3 真实任务队列：活动/排队 + 保留终态任务） ===== */
 const downloadsList = document.getElementById("downloads-list");
 const downloadsEmpty = document.getElementById("downloads-empty");
 const downloadTasks = new Map();   // taskId -> 任务视图对象
 const taskTimestamps = new Map();  // taskId -> { bytes, time }（速度计算）
 
-const phaseLabels = { pending: "等待中", downloading: "下载中", completed: "已结束" };
+const phaseLabels = { pending: "排队中", downloading: "下载中", completed: "已结束" };
 const statusLabels = { succeeded: "已完成", failed: "下载失败", cancelled: "已取消" };
 
+// 只读实时任务快照（活动/排队/保留终态）；历史页才用 getHistory，队列不拿批次历史冒充任务行
 function refreshDownloads() {
-  return Bridge.invoke("getDownloads").then((tasks) => {
-    downloadTasks.clear();
-    taskTimestamps.clear();
-    tasks.forEach((t) => downloadTasks.set(t.taskId, { ...t, speed: null }));
-    renderDownloads();
-  }).catch(() => {});
-}
-
-// 下载历史记录（来自持久化下载历史；最近 50 条，倒序）
-function renderDownloadHistory(mediaHistory) {
-  const container = document.getElementById("downloads-history");
-  const visible = (mediaHistory || []).slice(-50).reverse();
-  if (visible.length === 0) {
-    container.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:6px 0">暂无历史记录。</div>';
-    return;
-  }
-  container.innerHTML = "";
-  visible.forEach((h) => {
-    const row = document.createElement("div");
-    row.style.cssText = "display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;border-bottom:1px solid var(--border)";
-    const text = document.createElement("span");
-    text.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-    const time = h.time ? new Date(h.time).toLocaleString() : "";
-    text.textContent = `${h.title || "未命名作品"}（成功 ${h.successCount} / 失败 ${h.failureCount} / 取消 ${h.cancelledCount}）· ${time}`;
-    text.title = h.sourceShareLink;
-    const redo = document.createElement("button");
-    redo.className = "btn";
-    redo.textContent = "重新执行";
-    redo.style.cssText = "padding:2px 8px;font-size:12px";
-    redo.addEventListener("click", () => reparseShareLink(h.sourceShareLink));
-    const open = document.createElement("button");
-    open.className = "btn";
-    open.textContent = "打开文件夹";
-    open.style.cssText = "padding:2px 8px;font-size:12px";
-    const firstFile = h.savedFiles && h.savedFiles.length > 0 ? h.savedFiles[0] : null;
-    open.addEventListener("click", () => {
-      if (!firstFile) { toast("无文件记录", "error"); return; }
-      Bridge.invoke("openFolder", { path: firstFile }).catch((e) => toast(e.message, "error"));
+  return Bridge.invoke("getDownloads")
+    .then((tasks) => {
+      downloadTasks.clear();
+      taskTimestamps.clear();
+      for (const task of tasks || []) {
+        downloadTasks.set(task.taskId, { ...task, speed: null });
+      }
+      renderDownloads([...downloadTasks.values()]);
+    })
+    .catch((error) => {
+      console.error("加载下载队列失败", error);
     });
-    row.appendChild(text);
-    row.appendChild(redo);
-    row.appendChild(open);
-    container.appendChild(row);
-  });
 }
 
-function renderDownloads() {
-  downloadsEmpty.style.display = downloadTasks.size === 0 ? "block" : "none";
-  downloadsList.style.display = downloadTasks.size === 0 ? "none" : "flex";
+function renderDownloads(tasks) {
+  downloadsEmpty.style.display = tasks.length === 0 ? "block" : "none";
+  downloadsList.style.display = tasks.length === 0 ? "none" : "flex";
   downloadsList.innerHTML = "";
-  downloadTasks.forEach((t) => downloadsList.appendChild(buildTaskRow(t)));
+  tasks.forEach((t) => downloadsList.appendChild(buildTaskRow(t)));
 }
 
+// 横向任务行：缩略图｜文件名｜状态｜进度｜百分比｜速度｜错误｜操作（一个媒体一行）
 function buildTaskRow(t) {
-  const row = document.createElement("div");
+  const row = document.createElement("article");
   row.className = "download-task-row";
   row.dataset.taskId = t.taskId;
+
   const thumbnail = document.createElement("div");
   thumbnail.className = "queue-thumbnail";
   const cachedPreview = previewCache.get(t.assetIndex);
@@ -495,39 +473,37 @@ function buildTaskRow(t) {
   }
   row.appendChild(thumbnail);
 
-  const main = document.createElement("div");
-  main.className = "queue-task-main";
-  const head = document.createElement("div");
-  head.className = "queue-task-head";
   const name = document.createElement("span");
   name.className = "queue-file-name";
   name.textContent = decodePath(t.targetPath);
+  name.title = t.targetPath;
+  row.appendChild(name);
+
   const status = document.createElement("span");
   status.className = "task-status";
-  head.appendChild(name);
-  head.appendChild(status);
-  main.appendChild(head);
+  row.appendChild(status);
 
-  const progressWrap = document.createElement("div");
-  progressWrap.className = "queue-task-progress";
+  const progressCell = document.createElement("div");
+  progressCell.className = "queue-progress-cell";
   const bar = document.createElement("div");
   bar.className = "progress";
   const fill = document.createElement("div");
   fill.style.width = "0%";
   bar.appendChild(fill);
+  progressCell.appendChild(bar);
+  row.appendChild(progressCell);
+
   const percent = document.createElement("span");
   percent.className = "queue-percent";
+  row.appendChild(percent);
+
   const speed = document.createElement("span");
   speed.className = "queue-speed";
-  progressWrap.appendChild(bar);
-  progressWrap.appendChild(percent);
-  progressWrap.appendChild(speed);
-  main.appendChild(progressWrap);
+  row.appendChild(speed);
 
   const error = document.createElement("span");
   error.className = "queue-error";
-  main.appendChild(error);
-  row.appendChild(main);
+  row.appendChild(error);
 
   const actions = document.createElement("div");
   actions.className = "queue-actions";
@@ -537,6 +513,10 @@ function buildTaskRow(t) {
   return row;
 }
 
+// 行状态渲染规则：
+// pending → 排队中（进度 —）；downloading → 下载中（进度条+百分比+速度）；
+// succeeded → 已完成（100%/大小 + 打开文件/打开目录）；failed → 下载失败（真实错误 + 重试）；
+// cancelled → 已取消（重试）
 function updateTaskRow(row, t) {
   const taskId = row.dataset.taskId;
   const statusEl = row.querySelector(".task-status");
@@ -548,27 +528,44 @@ function updateTaskRow(row, t) {
   if (!statusEl || !fill || !percentEl || !speedEl || !errorEl || !actions) return;
 
   if (t.phase === "completed") {
-    statusEl.textContent = statusLabels[t.status] || t.status;
+    statusEl.textContent = statusLabels[t.status] || t.status || "已结束";
     statusEl.dataset.status = t.status || "completed";
-    fill.style.width = t.status === "succeeded" ? "100%" : "0%";
-    percentEl.textContent = t.status === "succeeded" ? "100%" : "—";
-    speedEl.textContent = t.status === "succeeded" ? "已完成" : "—";
-    errorEl.textContent = t.status === "failed" ? (t.error || "网络连接超时") : (t.status === "cancelled" ? "已取消" : "");
+    if (t.status === "succeeded") {
+      fill.style.width = "100%";
+      percentEl.textContent = "100%";
+      speedEl.textContent = t.bytesDownloaded > 0 ? formatBytes(t.bytesDownloaded) : "已完成";
+      errorEl.textContent = "";
+    } else {
+      fill.style.width = "0%";
+      percentEl.textContent = "—";
+      speedEl.textContent = "—";
+      errorEl.textContent = t.status === "failed" ? (t.error || "网络连接超时") : "已取消";
+    }
   } else {
     statusEl.textContent = phaseLabels[t.phase] || t.phase;
     statusEl.dataset.status = t.phase || "pending";
-    const percent = t.percent != null ? Math.min(100, t.percent) : 0;
-    fill.style.width = percent + "%";
-    percentEl.textContent = t.percent != null ? `${Math.round(percent)}%` : "—";
-    speedEl.textContent = t.speed != null ? formatSpeed(t.speed) : "—";
+    if (t.phase === "downloading" && t.percent != null) {
+      const percent = Math.min(100, t.percent);
+      fill.style.width = percent + "%";
+      percentEl.textContent = `${Math.round(percent)}%`;
+      speedEl.textContent = t.speed != null ? formatSpeed(t.speed) : "—";
+    } else {
+      fill.style.width = "0%";
+      percentEl.textContent = "—";
+      speedEl.textContent = "—";
+    }
     errorEl.textContent = "";
   }
 
   actions.innerHTML = "";
   if (t.phase !== "completed") {
-    addAction(actions, "取消", () => Bridge.invoke("cancelTask", { taskId }).then(() => toast("已取消任务")).catch((e) => toast(e.message, "error")));
+    addAction(actions, "取消", () => Bridge.invoke("cancelTask", { taskId })
+      .then(() => { toast("已请求取消任务"); return refreshDownloads(); })
+      .catch((e) => toast(e.message, "error")));
   } else if (t.status === "failed" || t.status === "cancelled") {
-    addAction(actions, "重试", () => Bridge.invoke("retryTask", { taskId }).then(() => { toast("已重新加入队列"); return refreshDownloads(); }).catch((e) => toast(e.message, "error")));
+    addAction(actions, "重试", () => Bridge.invoke("retryTask", { taskId })
+      .then(() => { toast("已重新加入队列"); return refreshDownloads(); })
+      .catch((e) => toast(e.message, "error")));
   }
   if (t.status === "succeeded" && t.savedPath) {
     addAction(actions, "打开文件", () => Bridge.invoke("openFile", { path: t.savedPath }).catch((e) => toast(e.message, "error")));
@@ -597,11 +594,18 @@ function decodePath(path) {
   } catch { return path; }
 }
 
-// 下载事件：增量更新（进度节流渲染；完成/批次落定刷新）
+// 下载事件：增量更新（进度节流渲染；行缺失时刷新兜底，不静默丢失）
 let progressThrottle = 0;
+let refreshingQueue = false;
+function refreshQueueOnce() {
+  if (refreshingQueue) return;
+  refreshingQueue = true;
+  refreshDownloads().finally(() => { refreshingQueue = false; });
+}
+
 Bridge.on("downloadProgress", (data) => {
   const t = downloadTasks.get(data.taskId);
-  if (!t) return;
+  if (!t) { refreshQueueOnce(); return; }
   const now = Date.now();
   const prev = taskTimestamps.get(data.taskId);
   if (prev && now - prev.time >= 1000) {
@@ -626,7 +630,9 @@ Bridge.on("taskCompleted", (data) => {
     t.error = data.error;
     const row = downloadsList.querySelector(`[data-task-id="${data.taskId}"]`);
     if (row) updateTaskRow(row, t);
-    toast(statusLabels[data.status] || data.status + "：" + (data.savedPath || ""));
+    toast(statusLabels[data.status] || (data.status + "：" + (data.savedPath || "")));
+  } else {
+    refreshQueueOnce();
   }
 });
 Bridge.on("batchCompleted", () => refreshDownloads());

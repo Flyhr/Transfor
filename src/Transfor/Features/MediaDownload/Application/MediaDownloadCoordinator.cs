@@ -13,6 +13,10 @@ internal sealed class MediaDownloadCoordinator : IDisposable
     private readonly List<TaskCompletionSource<bool>> batchCompletions = new();
     private readonly Dictionary<Guid, CancellationTokenSource> taskCancellations = new();
     private readonly Dictionary<Guid, TaskRuntime> taskRuntimes = new();
+    // 终态任务保留（真实任务队列：批次落定后行仍可见）；入队序完成序，超上限清理最旧
+    private readonly Queue<Guid> completedOrder = new();
+    private const int MaxRetainedCompletedTasks = 100;
+    private long nextBatchSequence;
     private MediaDownloadBatch? activeBatch;
     private bool disposed;
 
@@ -65,17 +69,22 @@ internal sealed class MediaDownloadCoordinator : IDisposable
             var batchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             pendingBatches.Enqueue(new PendingBatch(batch, batchCts, completion));
             batchCompletions.Add(completion);
-            // 注册任务运行时状态（快照数据源；等待中 → 下载中 → 已落定）
+            // 注册任务运行时状态（快照数据源；等待中 → 下载中 → 已落定）；
+            // AssetIndex 用真实媒体索引（实况图 still/motion 配对、前端缩略图匹配依赖它），
+            // BatchSequence/TaskIndex 保证快照顺序稳定（批次入队序 + 批内创建序）
+            var batchSequence = ++nextBatchSequence;
             for (var i = 0; i < batch.Tasks.Count; i++)
             {
                 var task = batch.Tasks[i];
                 taskRuntimes[task.Id] = new TaskRuntime
                 {
                     BatchId = batch.Id,
+                    BatchSequence = batchSequence,
+                    TaskIndex = i,
                     Task = task,
                     Post = batch.Post,
                     SourceShareLink = batch.SourceShareLink,
-                    AssetIndex = i,
+                    AssetIndex = task.Asset.Index,
                 };
             }
 
@@ -120,13 +129,15 @@ internal sealed class MediaDownloadCoordinator : IDisposable
         }
     }
 
-    // 当前全部任务快照（活动 + 排队批次；含进度与终态；批次落定后清理）
+    // 当前全部任务快照（活动 + 排队批次 + 已保留的终态任务）；
+    // 顺序稳定：批次按入队顺序，批内按任务创建顺序（不按随机 BatchId）
     public IReadOnlyList<DownloadSnapshot> GetSnapshot()
     {
         lock (sync)
         {
             return taskRuntimes.Values
-                .OrderBy(runtime => runtime.BatchId)
+                .OrderBy(runtime => runtime.BatchSequence)
+                .ThenBy(runtime => runtime.TaskIndex)
                 .Select(runtime =>
                 {
                     var task = runtime.Task;
@@ -188,8 +199,8 @@ internal sealed class MediaDownloadCoordinator : IDisposable
     }
 
     // 构造进程内重试候选：复用原任务 Asset/Variant（CDN URL 可能仍有效）与作品上下文，
-    // 按统一文件名规则生成新目标路径；仅活动批次内有效——
-    // 运行时随批次落定清理，落定后返回 null（调用方引导走历史重新执行）
+    // 按统一文件名规则生成新目标路径；终态任务（失败/取消）在批次落定后仍可重试，
+    // 重试构造成功后旧终态行被替换（前端刷新后不残留重复失败行）
     public RetryCandidate? CreateRetryTask(Guid taskId, string downloadDirectory)
     {
         lock (sync)
@@ -210,6 +221,18 @@ internal sealed class MediaDownloadCoordinator : IDisposable
             var fileName = DownloadFileNameBuilder.BuildFileName(runtime.Post, asset, variant);
             var target = DownloadFileNameBuilder.BuildUniquePath(downloadDirectory, fileName);
             var retryTask = new MediaDownloadTask(Guid.NewGuid(), asset, variant, target);
+            // 终态替换：移除旧任务运行时（含完成序），新任务入队后成为唯一对应行
+            taskRuntimes.Remove(taskId);
+            var orderIds = completedOrder.ToList();
+            if (orderIds.Remove(taskId))
+            {
+                completedOrder.Clear();
+                foreach (var id in orderIds)
+                {
+                    completedOrder.Enqueue(id);
+                }
+            }
+
             return new RetryCandidate(runtime.SourceShareLink, runtime.Post, retryTask);
         }
     }
@@ -224,7 +247,7 @@ internal sealed class MediaDownloadCoordinator : IDisposable
             }
             disposed = true;
 
-            // 释放时取消所有活动与排队批次
+            // 释放时取消所有活动与排队批次，并清理全部运行时资源
             foreach (var source in taskCancellations.Values)
             {
                 source.Cancel();
@@ -233,6 +256,11 @@ internal sealed class MediaDownloadCoordinator : IDisposable
             {
                 pending.BatchCts.Cancel();
             }
+
+            taskCancellations.Clear();
+            taskRuntimes.Clear();
+            completedOrder.Clear();
+            pendingBatches.Clear();
         }
     }
 
@@ -305,12 +333,8 @@ internal sealed class MediaDownloadCoordinator : IDisposable
                     pair.Value.Dispose();
                 }
 
-                // 批次落定：清理该批次的任务运行时状态（快照不再包含）
-                foreach (var task in batch.Tasks)
-                {
-                    taskRuntimes.Remove(task.Id);
-                }
-
+                // 批次落定：终态任务运行时保留（真实任务队列：getDownloads 仍返回该批次任务行，
+                // 进程内重试可用）；超过上限的最旧终态任务在 NotifyCompleted 中清理
                 batchCompletions.Remove(pending.Completion);
                 activeBatch = null;
                 pending.Completion.TrySetResult(true);
@@ -425,7 +449,8 @@ internal sealed class MediaDownloadCoordinator : IDisposable
     }
 
     // 触发任务完成事件并返回结果（统一出口，所有路径恰好一次）；
-    // 同时把终态写入运行时快照（批次落定前保留，供快照/重试读取）
+    // 同时把终态写入运行时快照并进入保留队列（批次落定后仍可快照/重试）；
+    // 保留超过 MaxRetainedCompletedTasks 时清理最旧终态任务（仅 Completed，不影响活动任务）
     private MediaDownloadResult NotifyCompleted(
         MediaDownloadBatch batch,
         MediaDownloadTask task,
@@ -437,6 +462,13 @@ internal sealed class MediaDownloadCoordinator : IDisposable
             {
                 runtime.Phase = DownloadPhase.Completed;
                 runtime.Result = result;
+            }
+
+            completedOrder.Enqueue(task.Id);
+            while (completedOrder.Count > MaxRetainedCompletedTasks)
+            {
+                var oldest = completedOrder.Dequeue();
+                taskRuntimes.Remove(oldest);
             }
         }
 
@@ -451,10 +483,13 @@ internal sealed class MediaDownloadCoordinator : IDisposable
         TaskCompletionSource<bool> Completion);
 
     // 任务运行时状态（快照/重试数据源）：阶段、进度与终态；
-    // SourceShareLink 与 AssetIndex 供进程内重试（重新解析后按原资产构造新任务）
+    // SourceShareLink 与 AssetIndex 供进程内重试（重新解析后按原资产构造新任务）；
+    // BatchSequence/TaskIndex 保证快照顺序稳定（入队序 + 批内创建序）
     private sealed class TaskRuntime
     {
         public required Guid BatchId { get; init; }
+        public required long BatchSequence { get; init; }
+        public required int TaskIndex { get; init; }
         public required MediaDownloadTask Task { get; init; }
         public required ResolvedMediaPost Post { get; init; }
         public required string SourceShareLink { get; init; }

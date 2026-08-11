@@ -51,7 +51,10 @@
         <div class="flow-step"><span>1</span><strong>链接输入</strong></div>
         <div class="media-flow-content card media-input-card">
           <div class="media-input-row">
-            <input class="input" id="media-link" placeholder="粘贴抖音分享链接或直接图片/视频链接">
+            <div class="media-input-field">
+              <input class="input" id="media-link" placeholder="粘贴抖音分享链接或直接图片/视频链接">
+              <button type="button" class="input-clear" id="media-link-clear" title="清空输入" hidden>✕</button>
+            </div>
             <button class="btn" id="media-paste">粘贴</button>
             <button class="btn btn-primary" id="media-resolve">解析</button>
           </div>
