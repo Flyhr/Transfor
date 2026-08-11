@@ -461,6 +461,8 @@ function renderPost(post) {
     sizeLine.textContent = asset.contentLength ? formatBytes(asset.contentLength) : "大小 —";
     metaStack.appendChild(sizeLine);
     info.appendChild(metaStack);
+    card._asset = asset;
+    card._sizeLine = sizeLine;
     const cardDownload = document.createElement("button");
     cardDownload.type = "button";
     cardDownload.className = "btn media-card-download";
@@ -477,6 +479,32 @@ function renderPost(post) {
   // 全选控件与勾选状态同步（跨页），分页渲染（默认回到第 1 页）
   updateMediaSelectionCount();
   mediaPager.update(cards, true);
+
+  // 真实大小探测：缺失大小的媒体（图片为主）发 HEAD 取“下载的文件大小”，
+  // 并发受限、按资产去重、失败静默保持 大小 —
+  probeAssetSizes(cards.filter((c) => !c._asset.contentLength && !sizeProbed.has(c._asset.index)));
+}
+
+// 已探测过大小的资产（会话内去重，避免切页/重渲染重复请求）
+const sizeProbed = new Set();
+async function probeAssetSizes(cards) {
+  const concurrency = 2;
+  let index = 0;
+  const workers = Array.from({ length: Math.min(concurrency, cards.length) }, async () => {
+    while (index < cards.length) {
+      const card = cards[index++];
+      const assetIndex = card._asset.index;
+      sizeProbed.add(assetIndex);
+      try {
+        const { size } = await Bridge.invoke("getAssetSize", { assetIndex }, 8000);
+        if (size > 0) {
+          card._asset.contentLength = size;
+          if (card._sizeLine) card._sizeLine.textContent = formatBytes(size);
+        }
+      } catch { /* HEAD 失败（TLS 拦截等）保持 大小 — */ }
+    }
+  });
+  await Promise.all(workers);
 }
 
 async function loadPreviewsSequential(loaders) {

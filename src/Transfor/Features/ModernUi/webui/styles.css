@@ -155,13 +155,14 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
 .media-card-grid::-webkit-scrollbar, .download-list::-webkit-scrollbar { width: 8px; }
 .media-card-grid::-webkit-scrollbar-thumb, .download-list::-webkit-scrollbar-thumb { background: var(--ff-border); border-radius: 4px; }
 .media-card-grid::-webkit-scrollbar-thumb:hover, .download-list::-webkit-scrollbar-thumb:hover { background: var(--ff-muted); }
-.media-card { min-width:0; overflow:hidden; border:1px solid var(--ff-border); border-radius:var(--ff-radius); background:#fff; box-shadow:0 1px 3px rgba(11,18,32,.06); }
-.media-thumbnail { position:relative; height:207px; overflow:hidden; background:var(--ff-soft); }
+/* 图片与信息区分离：预览图独立四角圆角容器，下载/分辨率/大小在其下方独立展示 */
+.media-card { min-width:0; }
+.media-thumbnail { position:relative; height:207px; overflow:hidden; border-radius:12px; background:var(--ff-soft); box-shadow:0 1px 3px rgba(11,18,32,.06); }
 .media-preview { display:grid; place-items:center; width:100%; height:100%; color:var(--ff-muted); font-size:12px; }
 .media-preview img { display:block; width:100%; height:100%; object-fit:cover; }
 .media-card-checkbox { position:absolute; z-index:2; top:10px; left:10px; width:18px; height:18px; accent-color:var(--ff-primary); }
 .media-badge { position:absolute; z-index:2; right:8px; bottom:8px; padding:3px 7px; border-radius:6px; color:#fff; background:rgba(11,18,32,.72); font-size:11px; }
-.media-card-info { display:flex; flex-direction:column; gap:5px; padding:10px 12px 12px; }
+.media-card-info { display:flex; flex-direction:column; gap:5px; padding:8px 4px 0; }
 .media-card-title { overflow:hidden; color:var(--ff-text); font-size:13px; line-height:18px; text-overflow:ellipsis; white-space:nowrap; }
 /* 分辨率/时长一行、文件大小一行 */
 .media-card-meta-stack { display:flex; flex-direction:column; gap:2px; min-width:0; }
@@ -170,7 +171,7 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
 .media-card-download:hover { color:#fff; background:var(--ff-primary); }
 /* 平铺展示：从上到下一列，仅基础信息，每行高度限定；高度随内容自适应、按每页条数封顶 */
 .media-card-grid.view-list { display:flex; flex-direction:column; gap:8px; max-height:600px; }
-.media-card-grid.view-list .media-card { display:grid; grid-template-columns:76px minmax(0,1fr) auto; align-items:center; gap:12px; }
+.media-card-grid.view-list .media-card { display:grid; grid-template-columns:76px minmax(0,1fr) auto; align-items:center; gap:12px; overflow:hidden; border:1px solid var(--ff-border); border-radius:var(--ff-radius); background:#fff; box-shadow:0 1px 3px rgba(11,18,32,.06); }
 .media-card-grid.view-list .media-thumbnail { height:100px; }
 .media-card-grid.view-list .media-preview { font-size:11px; }
 .media-card-grid.view-list .media-card-info { display:flex; align-items:center; gap:12px; padding:8px 12px; }

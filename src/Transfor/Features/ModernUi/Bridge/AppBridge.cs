@@ -14,6 +14,7 @@ internal sealed class AppBridge
     private readonly MediaDownloadCoordinator downloadCoordinator;
     private readonly MediaStateStore mediaStateStore;
     private readonly MediaPreviewService previewService;
+    private readonly MediaSizeProbe sizeProbe;
 
     // 最近一次解析结果（downloadSelected/getPreview 引用；作品变化需重新解析）
     private ResolvedMediaPost? lastPost;
@@ -49,7 +50,8 @@ internal sealed class AppBridge
         MediaResolveCoordinator resolveCoordinator,
         MediaDownloadCoordinator downloadCoordinator,
         MediaStateStore mediaStateStore,
-        MediaPreviewService previewService)
+        MediaPreviewService previewService,
+        MediaSizeProbe sizeProbe)
     {
         this.stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
         this.updateService = updateService ?? throw new ArgumentNullException(nameof(updateService));
@@ -57,6 +59,7 @@ internal sealed class AppBridge
         this.downloadCoordinator = downloadCoordinator ?? throw new ArgumentNullException(nameof(downloadCoordinator));
         this.mediaStateStore = mediaStateStore ?? throw new ArgumentNullException(nameof(mediaStateStore));
         this.previewService = previewService ?? throw new ArgumentNullException(nameof(previewService));
+        this.sizeProbe = sizeProbe ?? throw new ArgumentNullException(nameof(sizeProbe));
     }
 
     // 处理一条请求 JSON，返回应回发的响应 JSON；非法消息返回 null；
@@ -82,6 +85,7 @@ internal sealed class AppBridge
                 "copyTextWithHistory" => AppBridgeProtocol.CreateSuccessResponse(request.Id, CopyTextWithHistory(request)),
                 "resolveMedia" => await ResolveMediaAsync(request).ConfigureAwait(false),
                 "getPreview" => await GetPreviewAsync(request).ConfigureAwait(false),
+                "getAssetSize" => AppBridgeProtocol.CreateSuccessResponse(request.Id, await GetAssetSizeAsync(request).ConfigureAwait(false)),
                 "downloadSelected" => AppBridgeProtocol.CreateSuccessResponse(request.Id, DownloadSelected(request)),
                 "getDownloads" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetDownloads()),
                 "cancelTask" => AppBridgeProtocol.CreateSuccessResponse(request.Id, CancelTask(request)),
@@ -579,6 +583,41 @@ internal sealed class AppBridge
         {
             dataUrl = $"data:{mime};base64,{Convert.ToBase64String(bytes)}",
         });
+    }
+
+    // 媒体真实大小探测：对首选变体 URL 发 HEAD 请求（与下载同链路同 Referer），
+    // 返回 Content-Length 即"下载的文件大小"；失败/无长度返回 null（前端保持 大小 —）
+    private async Task<object> GetAssetSizeAsync(BridgeRequest request)
+    {
+        if (lastPost is null)
+        {
+            throw new InvalidOperationException("请先解析作品。");
+        }
+
+        var index = request.Parameters.HasValue
+            && request.Parameters.Value.TryGetProperty("assetIndex", out var indexElement)
+            && indexElement.ValueKind == System.Text.Json.JsonValueKind.Number
+                ? indexElement.GetInt32()
+                : -1;
+        if (index < 0 || index >= lastPost.Assets.Count)
+        {
+            throw new ArgumentException($"媒体序号非法：{index}");
+        }
+
+        var asset = lastPost.Assets[index];
+        var selection = MediaQualitySelector.SelectBest(asset, mediaStateStore.Settings.QualityPreference);
+        if (selection.Status != MediaSelectionStatus.Selected || selection.Variant is null)
+        {
+            return new { size = (long?)null };
+        }
+
+        var variant = selection.Variant;
+        var size = await sizeProbe.ProbeAsync(
+            variant.Uri,
+            variant.RequestContext.Referer,
+            variant.RequestContext.BrowserSessionId,
+            CancellationToken.None).ConfigureAwait(false);
+        return new { size };
     }
 
     // 下载选中资产：引用最近解析结果，C# 侧复用文件名规则构造任务并入队；

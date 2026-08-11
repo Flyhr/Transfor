@@ -291,7 +291,8 @@ internal sealed class TransforApplicationContext : ApplicationContext
                     services.Media.ResolveCoordinator,
                     services.Media.DownloadCoordinator,
                     services.Media.State,
-                    services.Media.Preview)
+                    services.Media.Preview,
+                    new MediaSizeProbe(services.Media.RequestSender, services.Media.BrowserSessions))
                 {
                     HotKeyManager = services.HotKeys,
                 },

@@ -343,14 +343,16 @@ internal static class DouyinPageParser
                     GetInt(playAddress, "fps"),
                     MediaVariantSource.StructuredData,
                     variants,
-                    GetInt(bitRate, "bit_rate"));
+                    GetInt(bitRate, "bit_rate"),
+                    GetInt64(bitRate, "data_size"));
             }
         }
 
         return variants
             .Where(v => !IsMusicUrl(v.Url))
             .GroupBy(v => v.Url, StringComparer.Ordinal)
-            .Select(group => group.First())
+            // 同 URL 多档（play_addr 与 bit_rate 可能同 URL）：优先保留带真实大小的变体
+            .Select(group => group.OrderByDescending(v => v.ContentLength).First())
             .ToList();
     }
 
@@ -367,10 +369,10 @@ internal static class DouyinPageParser
 
         if (video.TryGetProperty("play_addr", out var playAddr))
         {
-            CollectUrlList(playAddr, "url_list", "video/mp4", width, height, fps, MediaVariantSource.StructuredData, variants);
+            CollectUrlList(playAddr, "url_list", "video/mp4", width, height, fps, MediaVariantSource.StructuredData, variants, dataSize: GetInt64(video, "data_size"));
         }
 
-        // 高清档位：bit_rate 数组每项含 play_addr（带该档分辨率/码率）
+        // 高清档位：bit_rate 数组每项含 play_addr（带该档分辨率/码率/大小）
         if (video.TryGetProperty("bit_rate", out var bitRates) && bitRates.ValueKind == JsonValueKind.Array)
         {
             foreach (var bitRate in bitRates.EnumerateArray())
@@ -383,7 +385,7 @@ internal static class DouyinPageParser
                     CollectUrlList(
                         bitRatePlayAddr, "url_list", "video/mp4",
                         bitRateWidth, bitRateHeight, fps, MediaVariantSource.StructuredData, variants,
-                        bitrateValue);
+                        bitrateValue, GetInt64(bitRate, "data_size"));
                 }
             }
         }
@@ -527,7 +529,8 @@ internal static class DouyinPageParser
         int? fps,
         MediaVariantSource source,
         List<DouyinVariantCandidate> variants,
-        long? bitrate = null)
+        long? bitrate = null,
+        long? dataSize = null)
     {
         if (!container.TryGetProperty(propertyName, out var urls) || urls.ValueKind != JsonValueKind.Array)
         {
@@ -538,7 +541,7 @@ internal static class DouyinPageParser
         {
             if (url.GetString() is { Length: > 0 } text)
             {
-                variants.Add(new DouyinVariantCandidate(text, contentType, width, height, fps, bitrate, null, null, source));
+                variants.Add(new DouyinVariantCandidate(text, contentType, width, height, fps, bitrate, dataSize, null, source));
             }
         }
     }
@@ -548,6 +551,9 @@ internal static class DouyinPageParser
 
     private static int? GetInt(JsonElement element, string property)
         => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number ? value.GetInt32() : null;
+
+    private static long? GetInt64(JsonElement element, string property)
+        => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var result) ? result : null;
 
     private static int? GetNestedInt(JsonElement element, string container, string property)
         => element.TryGetProperty(container, out var inner) ? GetInt(inner, property) : null;
