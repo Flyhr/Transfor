@@ -146,10 +146,10 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
   gap: 12px;
   overflow-y: auto;
 }
-/* 格子展示高度随所选行数自适应（1/2/3 行），超出时内滚 */
-.media-card-grid.rows-1 { height: 270px; }
-.media-card-grid.rows-2 { height: 525px; }
-.media-card-grid.rows-3 { height: 780px; }
+/* 格子展示高度随内容自适应、按所选行数封顶（1/2/3 行），超出时内滚 */
+.media-card-grid.rows-1 { max-height: 270px; }
+.media-card-grid.rows-2 { max-height: 525px; }
+.media-card-grid.rows-3 { max-height: 800px; }
 /* 滚动条常显（细条），避免叠加滚动条隐藏导致误以为不可滚动 */
 .media-card-grid, .download-list { scrollbar-width: thin; scrollbar-color: var(--ff-border) transparent; }
 .media-card-grid::-webkit-scrollbar, .download-list::-webkit-scrollbar { width: 8px; }
@@ -166,8 +166,8 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
 .media-card-meta { min-height:16px; overflow:hidden; color:var(--ff-muted); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
 .media-card-download { width:100%; min-height:32px; padding:4px 10px; color:var(--ff-primary); background:#fff; }
 .media-card-download:hover { color:#fff; background:var(--ff-primary); }
-/* 平铺展示：从上到下一列，仅基础信息，每行高度限定 */
-.media-card-grid.view-list { display:flex; flex-direction:column; gap:8px; height:600px; }
+/* 平铺展示：从上到下一列，仅基础信息，每行高度限定；高度随内容自适应、按每页条数封顶 */
+.media-card-grid.view-list { display:flex; flex-direction:column; gap:8px; max-height:600px; }
 .media-card-grid.view-list .media-card { display:grid; grid-template-columns:76px minmax(0,1fr) auto; align-items:center; gap:12px; }
 .media-card-grid.view-list .media-thumbnail { height:75px; }
 .media-card-grid.view-list .media-preview { font-size:11px; }
@@ -216,7 +216,7 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
   .media-batch-actions { justify-content:flex-start; flex-wrap:wrap; gap:8px; }
 }
 @media (max-width: 760px) {
-  .media-card-grid, .media-card-grid.view-list { height:auto; max-height:560px; }
+  .media-card-grid.rows-1, .media-card-grid.rows-2, .media-card-grid.rows-3, .media-card-grid.view-list { max-height:560px; }
   .media-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .queue-header { display:none; }
   .download-task-row { grid-template-columns:44px minmax(0,1fr) auto; row-gap:4px; }
