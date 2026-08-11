@@ -182,7 +182,7 @@ function assetTypeLabel(asset) {
 }
 
 // ===== 分页（解析结果 + 下载队列）：每页条数可改、页码可跳转、条数持久化 =====
-function createPager(prefix, sizeKey, pageSizes, defaultSize, renderPage) {
+function createPager(prefix, sizeKey, pageSizes, defaultSize, renderPage, onSizeChange) {
   let sizes = pageSizes;
   let key = sizeKey;
   const stored = Number(localStorage.getItem(key));
@@ -230,6 +230,7 @@ function createPager(prefix, sizeKey, pageSizes, defaultSize, renderPage) {
     pageSize = Number(els.size.value);
     page = 1;
     try { localStorage.setItem(key, String(pageSize)); } catch { /* 存储不可用不影响 */ }
+    if (onSizeChange) onSizeChange(pageSize);
     render();
   });
   rebuildSizeOptions();
@@ -242,6 +243,7 @@ function createPager(prefix, sizeKey, pageSizes, defaultSize, renderPage) {
       pageSize = sizes.some((s) => s.value === storedSize) ? storedSize : newDefault;
       page = 1;
       rebuildSizeOptions();
+      if (onSizeChange) onSizeChange(pageSize);
       render();
     },
   };
@@ -251,7 +253,9 @@ function createPager(prefix, sizeKey, pageSizes, defaultSize, renderPage) {
 const gridPageSizes = [{ value: 4, label: "1 行（4 个）" }, { value: 8, label: "2 行（8 个）" }, { value: 12, label: "3 行（12 个）" }];
 const listPageSizes = [{ value: 10, label: "10 条/页" }, { value: 20, label: "20 条/页" }, { value: 50, label: "50 条/页" }];
 
-const mediaPager = createPager("media", "transfor.gridPageSize", gridPageSizes, 8, renderMediaPage);
+const mediaPager = createPager("media", "transfor.gridPageSize", gridPageSizes, 8, renderMediaPage, (size) => {
+  if (mediaView === "grid") applyGridRowsClass(size);
+});
 const queuePager = createPager("queue", "transfor.queuePageSize", listPageSizes, 10, renderQueuePage);
 
 // 解析结果当前页渲染（卡片元素按页保留在 pager 内，切页仅换挂载）
@@ -263,6 +267,13 @@ function renderMediaPage(cards) {
     if (card._previewLoader) loaders.push(card._previewLoader);
   });
   loadPreviewsSequential(loaders);
+}
+
+// 格子展示容器高度随所选行数自适应（1 行 4 个 / 2 行 8 个 / 3 行 12 个）
+function applyGridRowsClass(pageSize) {
+  mediaGrid.classList.toggle("rows-1", pageSize === 4);
+  mediaGrid.classList.toggle("rows-2", pageSize === 8);
+  mediaGrid.classList.toggle("rows-3", pageSize === 12);
 }
 
 // 下载队列当前页渲染（pager 持有 taskId 列表，取值始终来自实时任务 Map）
@@ -282,6 +293,9 @@ let mediaView = localStorage.getItem("transfor.mediaView") === "list" ? "list" :
 function applyMediaView(view) {
   mediaView = view;
   mediaGrid.classList.toggle("view-list", view === "list");
+  if (view === "list") {
+    mediaGrid.classList.remove("rows-1", "rows-2", "rows-3");
+  }
   viewGridBtn.classList.toggle("active", view === "grid");
   viewListBtn.classList.toggle("active", view === "list");
   viewGridBtn.setAttribute("aria-pressed", String(view === "grid"));
@@ -685,7 +699,7 @@ function updateTaskRow(row, t) {
     if (t.status === "succeeded") {
       fill.style.width = "100%";
       percentEl.textContent = "100%";
-      speedEl.textContent = t.bytesDownloaded > 0 ? formatBytes(t.bytesDownloaded) : "已完成";
+      speedEl.textContent = "已完成";
       errorEl.textContent = "";
     } else {
       fill.style.width = "0%";

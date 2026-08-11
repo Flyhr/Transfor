@@ -144,9 +144,17 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
-  height: 520px;
   overflow-y: auto;
 }
+/* 格子展示高度随所选行数自适应（1/2/3 行），超出时内滚 */
+.media-card-grid.rows-1 { height: 270px; }
+.media-card-grid.rows-2 { height: 525px; }
+.media-card-grid.rows-3 { height: 780px; }
+/* 滚动条常显（细条），避免叠加滚动条隐藏导致误以为不可滚动 */
+.media-card-grid, .download-list { scrollbar-width: thin; scrollbar-color: var(--ff-border) transparent; }
+.media-card-grid::-webkit-scrollbar, .download-list::-webkit-scrollbar { width: 8px; }
+.media-card-grid::-webkit-scrollbar-thumb, .download-list::-webkit-scrollbar-thumb { background: var(--ff-border); border-radius: 4px; }
+.media-card-grid::-webkit-scrollbar-thumb:hover, .download-list::-webkit-scrollbar-thumb:hover { background: var(--ff-muted); }
 .media-card { min-width:0; overflow:hidden; border:1px solid var(--ff-border); border-radius:var(--ff-radius); background:#fff; box-shadow:0 1px 3px rgba(11,18,32,.06); }
 .media-thumbnail { position:relative; height:155px; overflow:hidden; background:var(--ff-soft); }
 .media-preview { display:grid; place-items:center; width:100%; height:100%; color:var(--ff-muted); font-size:12px; }
@@ -208,6 +216,7 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
   .media-batch-actions { justify-content:flex-start; flex-wrap:wrap; gap:8px; }
 }
 @media (max-width: 760px) {
+  .media-card-grid, .media-card-grid.view-list { height:auto; max-height:560px; }
   .media-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .queue-header { display:none; }
   .download-task-row { grid-template-columns:44px minmax(0,1fr) auto; row-gap:4px; }
