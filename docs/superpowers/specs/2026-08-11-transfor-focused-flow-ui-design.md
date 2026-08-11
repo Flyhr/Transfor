@@ -24,15 +24,19 @@
 ## 组件与交互
 
 - 所有 CSS token 使用 `--ff-*` 前缀；卡片圆角 12px、主控件高度 36px、主内容内边距 32px、流程区间距 24px。
-- 侧栏含默认、悬停、焦点、活动与媒体活动徽标；所有键盘焦点使用明显 `:focus-visible`。
+- 侧栏固定 176px，含默认、悬停、焦点、活动与媒体活动徽标；图标使用宿主轻量矢量绘制，不增加业务导航；所有键盘焦点使用明显 `:focus-visible`。
 - 流程轨为青绿/天空蓝连续细线；动效约 160ms，并在 `prefers-reduced-motion` 下关闭。
+- 媒体成功态固定显示成功提示、全选、选择数量和批量下载；结果卡片四列，只有 960px 以下改两列、720px 以下改单列。
+- 每张媒体卡片包含缩略图、覆盖式复选框、类型/尺寸/时长信息和独立下载按钮；独立下载不改变其余选择状态。
+- 粘贴和解析输入使用安全 URL 提取，只把首个 `http(s)` URL 保留在输入框和解析请求中。
 - 解析/下载时仅禁用相应解析或下载按钮，粘贴、清空、目录浏览和导航仍可用。
+- 下载队列在媒体页同屏呈现横向任务行，消费现有快照与 `downloadProgress`、`taskCompleted`、`batchCompleted`、`cancelTask`、`retryTask`、`openFile`、`openFolder` 事件/命令。
 - 960px 宽度时工作台及设置不可横向溢出，双栏改为单栏。
 
 ## 资源与宿主
 
-Web UI 从内联单文件改为 `index.html`、`styles.css`、`app.js` 三个程序集嵌入资源；临时写入目录中使用相对资源引用加载。`AppShellForm` 侧栏固定 92px、浏览器工具栏预留 64px，并继续提供 `setBrowserVisible`、`setActiveNav`、`setTheme` 的安全 Bridge 行为（无 UI 主题入口）。
+Web UI 从内联单文件改为 `index.html`、`styles.css`、`app.js` 三个程序集嵌入资源；临时写入目录中使用相对资源引用加载。`AppShellForm` 侧栏固定 176px、隐藏底部版本号、浏览器工具栏预留 64px，并继续提供 `setBrowserVisible`、`setActiveNav`、`setTheme` 的安全 Bridge 行为（无 UI 主题入口）。
 
 ## 验收
 
-离线断言覆盖三资源加载、无 downloads 路由/页面、媒体下载队列、工作台无跨页入口、历史无刷新、设置分类与固定保存栏，以及既有导航、主题 Bridge、取消/重试与下载事件。完成后运行 `dotnet run --project tests/Transfor.Tests` 和 `dotnet build Transfor.slnx`，均须无失败、无警告、无错误。
+离线断言覆盖三资源加载、无 downloads 路由/页面、媒体成功提示、`media-card`/`media-card-download` 结构、选择数量、连续流程轨、四列布局且 1100px 不降列、URL 提取函数、下载队列、工作台无跨页入口、历史结构、设置分类与固定保存栏，以及既有导航、主题 Bridge、取消/重试与下载事件。完成后运行 `dotnet run --project tests/Transfor.Tests -c Release`、`dotnet build Transfor.slnx -c Release` 和 self-contained win-x64 发布，均须无失败、无警告、无错误。
