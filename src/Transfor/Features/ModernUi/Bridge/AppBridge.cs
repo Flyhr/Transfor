@@ -344,7 +344,8 @@ internal sealed class AppBridge
         // 清洗组合键位（如 "Alt, Q" 可被 TryParse 解析为组合枚举）：只保留 KeyCode 部分，
         // 避免修饰位混入主键导致 Create 抛「快捷键必须包含一个普通按键」
         key &= System.Windows.Forms.Keys.KeyCode;
-        if (key == System.Windows.Forms.Keys.None)
+        // 数值文本（如 "1"）会被 TryParse 解析为 LButton 等非法键位：拒绝非普通按键
+        if (key == System.Windows.Forms.Keys.None || key < System.Windows.Forms.Keys.Back)
         {
             throw new ArgumentException($"非法快捷键主键：{keyText}");
         }

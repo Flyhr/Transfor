@@ -1040,13 +1040,15 @@ const hotkeyModDisplay = { Control: "Ctrl", Alt: "Alt", Shift: "Shift", LWin: "W
 function normalizeHotKeyKey(e) {
   const key = e.key;
   if (/^[a-zA-Z]$/.test(key)) return key.toUpperCase();
-  if (/^[0-9]$/.test(key)) return key;
+  // 数字键：映射为 Keys 枚举名 D0–D9（"1" 直接解析会变成 LButton，导致非法主键）
+  if (/^[0-9]$/.test(key)) return "D" + key;
   if (/^F([1-9]|1[0-2])$/.test(key)) return key;
   const map = { Backspace: "Back", Enter: "Return", " ": "Space", Home: "Home", End: "End", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right" };
   return map[key] || null;
 }
 
 function hotkeyDisplayKey(key) {
+  if (/^D[0-9]$/.test(key)) return key.slice(1);
   return key === "Return" ? "Enter" : key === "Space" ? "空格" : key;
 }
 
@@ -1077,16 +1079,20 @@ hotkeyCapture.addEventListener("keydown", (e) => {
   if (e.shiftKey) mods.push("Shift");
   if (e.metaKey) mods.push("LWin");
   const keyName = normalizeHotKeyKey(e);
-  const isModifierOnly = keyName === null && mods.length > 0 && ["Control", "Alt", "Shift", "Meta"].includes(e.key);
-  // 仅按下修饰键：显示等待主键
-  if (isModifierOnly || keyName === null) {
-    if (mods.length > 0 && !isModifierOnly) { toast("请同时按下修饰键与主键（如 Ctrl + T）。", "error"); }
-    else if (mods.length > 0) { hotkeyCapture.placeholder = "继续按下主键…"; }
+  // 仅按下修饰键（或修饰键 + 不可用主键）：实时显示当前按住的组合，清除旧的快捷键显示
+  if (keyName === null) {
+    if (mods.length > 0) {
+      hotkeyCapture.value = mods.map((m) => hotkeyModDisplay[m] || m).join(" + ");
+      hotkeyCapture.placeholder = "继续按下主键…";
+    } else {
+      toast("请同时按下 Ctrl/Alt/Shift/Win 中的至少一个修饰键。", "error");
+      renderHotkeyCapture();
+    }
     return;
   }
-  if (mods.length === 0) { toast("请同时按下 Ctrl/Alt/Shift/Win 中的至少一个修饰键。", "error"); return; }
+  if (mods.length === 0) { toast("请同时按下 Ctrl/Alt/Shift/Win 中的至少一个修饰键。", "error"); renderHotkeyCapture(); return; }
   const storedKey = normalizeStoredKey(keyName);
-  if (!storedKey) { toast("请选择普通按键作为主键（如字母、数字或 F 键）。", "error"); return; }
+  if (!storedKey) { toast("请选择普通按键作为主键（如字母、数字或 F 键）。", "error"); renderHotkeyCapture(); return; }
   currentHotKey = { modifiers: mods.join(","), key: storedKey };
   renderHotkeyCapture();
   autoSaveSettings();
