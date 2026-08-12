@@ -136,7 +136,7 @@ internal sealed class AppBridge
         hotKey = new
         {
             modifiers = stateStore.Settings.HistoryHotKey.Modifiers.ToString(),
-            key = stateStore.Settings.HistoryHotKey.Key.ToString(),
+            key = (stateStore.Settings.HistoryHotKey.Key & System.Windows.Forms.Keys.KeyCode).ToString(),
         },
         media = new
         {
@@ -337,6 +337,14 @@ internal sealed class AppBridge
     {
         if (!Enum.TryParse<System.Windows.Forms.Keys>(keyText, true, out var key)
             || key == System.Windows.Forms.Keys.None)
+        {
+            throw new ArgumentException($"非法快捷键主键：{keyText}");
+        }
+
+        // 清洗组合键位（如 "Alt, Q" 可被 TryParse 解析为组合枚举）：只保留 KeyCode 部分，
+        // 避免修饰位混入主键导致 Create 抛「快捷键必须包含一个普通按键」
+        key &= System.Windows.Forms.Keys.KeyCode;
+        if (key == System.Windows.Forms.Keys.None)
         {
             throw new ArgumentException($"非法快捷键主键：{keyText}");
         }

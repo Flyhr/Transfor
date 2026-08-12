@@ -1050,10 +1050,19 @@ function hotkeyDisplayKey(key) {
   return key === "Return" ? "Enter" : key === "Space" ? "空格" : key;
 }
 
+// 清洗主键：组合枚举文本（如 "Alt, Q"）只取最后一个键位，修饰键/空值返回空
+function normalizeStoredKey(key) {
+  if (!key) return "";
+  const parts = String(key).split(",");
+  const last = parts[parts.length - 1].trim();
+  return ["Control", "Alt", "Shift", "LWin", "RWin", "Meta", "None"].includes(last) ? "" : last;
+}
+
 function renderHotkeyCapture() {
   const mods = currentHotKey.modifiers.split(",").filter(Boolean).map((m) => hotkeyModDisplay[m] || m);
-  hotkeyCapture.value = mods.length > 0 && currentHotKey.key
-    ? mods.join(" + ") + " + " + hotkeyDisplayKey(currentHotKey.key)
+  const key = normalizeStoredKey(currentHotKey.key);
+  hotkeyCapture.value = mods.length > 0 && key
+    ? mods.join(" + ") + " + " + hotkeyDisplayKey(key)
     : "";
   hotkeyCapture.placeholder = mods.length > 0 ? "继续按下主键…" : "点击后按下组合键，如 Ctrl + T";
 }
@@ -1076,7 +1085,9 @@ hotkeyCapture.addEventListener("keydown", (e) => {
     return;
   }
   if (mods.length === 0) { toast("请同时按下 Ctrl/Alt/Shift/Win 中的至少一个修饰键。", "error"); return; }
-  currentHotKey = { modifiers: mods.join(","), key: keyName };
+  const storedKey = normalizeStoredKey(keyName);
+  if (!storedKey) { toast("请选择普通按键作为主键（如字母、数字或 F 键）。", "error"); return; }
+  currentHotKey = { modifiers: mods.join(","), key: storedKey };
   renderHotkeyCapture();
   autoSaveSettings();
 });
@@ -1120,7 +1131,7 @@ function loadSettingsUi() {
     document.getElementById("setting-channel").value = settings.updateChannel;
     document.getElementById("setting-quote-limit").value = settings.quoteHistoryLimit;
     document.getElementById("setting-space-limit").value = settings.spaceHistoryLimit;
-    currentHotKey = { modifiers: settings.hotKey.modifiers, key: settings.hotKey.key };
+    currentHotKey = { modifiers: settings.hotKey.modifiers, key: normalizeStoredKey(settings.hotKey.key) };
     renderHotkeyCapture();
     const media = settings.media;
     document.getElementById("setting-directory").value = media.downloadDirectory;
@@ -1174,13 +1185,15 @@ async function autoSaveSettings() {
   if (networkState === "custom" && !document.getElementById("setting-proxy").value.trim()) { toast("指定代理模式下请填写代理地址。", "error"); loadSettingsUi(); return; }
 
   const hotKey = currentHotKey;
+  const hotKeyKey = normalizeStoredKey(hotKey.key);
+  if (!hotKeyKey) { toast("快捷键主键无效，请重新按下组合键。", "error"); return; }
   try {
     const result = await Bridge.invoke("saveSettings", {
       updateChannel: document.getElementById("setting-channel").value,
       quoteHistoryLimit: String(document.getElementById("setting-quote-limit").value),
       spaceHistoryLimit: String(document.getElementById("setting-space-limit").value),
       hotKeyModifiers: hotKey.modifiers,
-      hotKeyKey: hotKey.key,
+      hotKeyKey,
       downloadDirectory: document.getElementById("setting-directory").value,
       maxConcurrentDownloads: Number(document.getElementById("setting-concurrency").value),
       defaultSelectAll: document.getElementById("setting-select-all").checked,
