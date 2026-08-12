@@ -120,6 +120,9 @@ internal sealed class AppShellForm : Form
     private string? activeNavPage;
     private bool sidebarDark;
 
+    // 新界面资源或 WebView2 初始化失败时，在 Close 前通知宿主解除“关闭隐藏到托盘”的拦截。
+    internal event EventHandler? InitializationFailed;
+
     public AppShellForm(
         AppBridge bridge,
         BrowserService browserService,
@@ -312,7 +315,7 @@ internal sealed class AppShellForm : Form
         if (html is null || styles is null || script is null)
         {
             MessageBox.Show(this, "新界面资源缺失（嵌入资源未包含）。", "Transfor", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            Close();
+            CloseAfterInitializationFailure();
             return;
         }
 
@@ -425,8 +428,14 @@ internal sealed class AppShellForm : Form
             var category = ErrorClassifier.Classify(ex, ErrorCategory.Browser);
             AppLog.Browser.Error($"[{category}] 新界面初始化失败：{ex.Message}", ex);
             MessageBox.Show(this, $"新界面初始化失败：{ex.Message}", "Transfor", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            Close();
+            CloseAfterInitializationFailure();
         }
+    }
+
+    private void CloseAfterInitializationFailure()
+    {
+        InitializationFailed?.Invoke(this, EventArgs.Empty);
+        Close();
     }
 
     // 媒体检测：统计页面媒体候选数并推送；仅当导航版本与当前地址仍匹配时生效

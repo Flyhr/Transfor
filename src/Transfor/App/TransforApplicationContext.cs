@@ -24,6 +24,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
     // 新界面宿主（Phase 5 预览）：首次打开创建，关闭后仍可再次打开
     private AppShellForm? appShell;
+    private AppShellForm? appShellAllowedToClose;
 
     public TransforApplicationContext(AppServices services)
     {
@@ -99,16 +100,6 @@ internal sealed class TransforApplicationContext : ApplicationContext
         // 主窗体延迟显示：先完成启动更新检查——
         // 强制更新时不进入主业务界面，直接进入阻断更新循环；其余情况正常显示
         _ = ShowAfterStartupCheckAsync();
-        // 新界面为当前主界面：启动即打开（主窗体保留作托盘/热键载体与旧界面入口）；
-        // WebView2 Runtime 缺失时降级为旧界面（不依赖 WebView2 的入口）
-        if (webView2Available)
-        {
-            ShowAppShell();
-        }
-        else
-        {
-            ShowMainWindow();
-        }
     }
 
     // 启动流程：后台检查更新（最多等待 timeout）；强制更新 → 不显示主窗体直接进入阻断循环；
@@ -123,25 +114,37 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
         if (!timedOut && result?.Status == UpdateStatus.RequiredUpdate)
         {
-            // 强制更新：不进入主业务界面；循环内「重新检查」变正常后回到这里继续显示
-            await RunRequiredUpdateLoopAsync(result).ConfigureAwait(true);
-            if (mainForm.IsDisposed)
+            // 强制更新：仅在用户重新检查确认不再强制时才能进入业务界面；
+            // 退出或更新重启都不允许回落到主界面。
+            if (!await RunRequiredUpdateLoopAsync(result).ConfigureAwait(true) || mainForm.IsDisposed)
             {
                 return;
             }
-        }
 
-        if (mainForm.Visible)
-        {
+            ShowStartupInterface();
             return;
         }
-
-        // 旧界面（预览）不再自动显示：新界面为当前主界面，启动自动打开；
-        // 旧界面经托盘「旧界面（预览）」手动打开（显示时触发 Shown 提示快捷键问题）
 
         if (result is not null && !timedOut)
         {
             await HandleUpdateResultAsync(result, manual: false).ConfigureAwait(true);
+        }
+
+        if (!mainForm.IsDisposed && !exiting)
+        {
+            ShowStartupInterface();
+        }
+    }
+
+    private void ShowStartupInterface()
+    {
+        if (webView2Available)
+        {
+            ShowAppShell();
+        }
+        else
+        {
+            ShowMainWindow();
         }
     }
 
@@ -318,13 +321,32 @@ internal sealed class TransforApplicationContext : ApplicationContext
             services.Browser,
             AppPaths.Default.AppUiProfileDirectory,
             services.Media.DownloadCoordinator);
+        shell.InitializationFailed += AppShell_InitializationFailed;
         shell.FormClosing += AppShell_FormClosing;
         return shell;
+    }
+
+    private void AppShell_InitializationFailed(object? sender, EventArgs e)
+    {
+        if (sender is not AppShellForm failedShell || !ReferenceEquals(failedShell, appShell))
+        {
+            return;
+        }
+
+        appShellAllowedToClose = failedShell;
     }
 
     // 用户关闭主界面时仅隐藏到托盘；显式「退出」会先设置 exiting，允许真正释放窗体。
     private void AppShell_FormClosing(object? sender, FormClosingEventArgs e)
     {
+        // AppShell 初始化失败会在 Close 前显式授权本次程序性关闭，
+        // 不能仅依赖 CloseReason（Form.Close 也可能报告为 UserClosing）。
+        if (ReferenceEquals(sender, appShellAllowedToClose))
+        {
+            appShellAllowedToClose = null;
+            return;
+        }
+
         if (exiting || e.CloseReason != CloseReason.UserClosing)
         {
             return;
@@ -488,7 +510,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
     }
 
     // 强制更新阻断循环：退出 → 退出应用；立即更新 → 下载（完成后必须重启）；重新检查 → 重新判定
-    private async Task RunRequiredUpdateLoopAsync(UpdateCheckResult result)
+    private async Task<bool> RunRequiredUpdateLoopAsync(UpdateCheckResult result)
     {
         while (!mainForm.IsDisposed)
         {
@@ -497,7 +519,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
             {
                 case UpdateNoticeForm.UserAction.Exit:
                     ExitApplication();
-                    return;
+                    return false;
 
                 case UpdateNoticeForm.UserAction.UpdateNow:
                     // 强制更新状态机：Restarting 结束；取消/失败都不允许跳过——
@@ -506,7 +528,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
                     switch (flow)
                     {
                         case UpdateDownloadForm.Result.RestartNow:
-                            return;
+                            return false;
 
                         case UpdateDownloadForm.Result.Failed:
                             ShowNotice("更新下载失败，请重试或选择退出后手动更新。", MessageBoxIcon.Error);
@@ -517,7 +539,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
                             continue;
 
                         default:
-                            return;
+                            return false;
                     }
 
                 case UpdateNoticeForm.UserAction.Recheck:
@@ -530,12 +552,14 @@ internal sealed class TransforApplicationContext : ApplicationContext
                     }
 
                     await HandleUpdateResultAsync(rechecked, manual: false);
-                    return;
+                    return !exiting && !mainForm.IsDisposed;
 
                 default:
-                    return;
+                    return false;
             }
         }
+
+        return false;
     }
 
     // 下载流程：进度窗体 → 下载 → 重启提示；强制更新下载完成直接重启；
