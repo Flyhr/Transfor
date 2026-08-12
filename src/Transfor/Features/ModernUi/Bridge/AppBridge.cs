@@ -152,6 +152,20 @@ internal sealed class AppBridge
 
     private string SaveSettings(BridgeRequest request)
     {
+        try
+        {
+            return SaveSettingsCore(request);
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            // 参数校验/业务错误：返回错误响应而非抛异常——
+            // 抛异常会使调试器在首次机会异常处中断，表现为「程序报错停止」
+            return AppBridgeProtocol.CreateErrorResponse(request.Id, ex.Message);
+        }
+    }
+
+    private string SaveSettingsCore(BridgeRequest request)
+    {
         // 两阶段原子化：第一阶段解析并校验全部候选（无副作用，任一非法整体拒绝）；
         // 第二阶段执行副作用（热键注册 → 文本持久化 → 媒体持久化），任一失败补偿回滚
         // ===== 第一阶段：解析与校验（无副作用） =====

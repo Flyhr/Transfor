@@ -1093,6 +1093,14 @@ function loadSettingsUi() {
 }
 
 document.getElementById("setting-save").addEventListener("click", async () => {
+  // 保存前本地校验：历史上限 1–500、并发 1–8，非法值提前提示不发起请求
+  const quoteLimit = Number(document.getElementById("setting-quote-limit").value);
+  const spaceLimit = Number(document.getElementById("setting-space-limit").value);
+  const concurrency = Number(document.getElementById("setting-concurrency").value);
+  if (!Number.isInteger(quoteLimit) || quoteLimit < 1 || quoteLimit > 500) { toast("引用历史上限需在 1–500 之间。", "error"); return; }
+  if (!Number.isInteger(spaceLimit) || spaceLimit < 1 || spaceLimit > 500) { toast("空格历史上限需在 1–500 之间。", "error"); return; }
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) { toast("同时下载任务数需在 1–8 之间。", "error"); return; }
+
   const hotKey = collectHotKey();
   try {
     const result = await Bridge.invoke("saveSettings", {
