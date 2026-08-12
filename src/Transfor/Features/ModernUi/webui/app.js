@@ -1070,6 +1070,7 @@ function collectHotKey() {
 // 网络模式三态分段开关：关闭（蓝，左）→ 系统代理（橙黄，中）→ 指定代理（绿，右）
 let networkState = "direct";
 const networkToggle = document.getElementById("network-toggle");
+const networkOrder = ["direct", "system", "custom"];
 function renderNetworkToggle() {
   networkToggle.className = "network-toggle state-" + networkState;
   networkToggle.setAttribute("aria-checked", String(networkState !== "direct"));
@@ -1078,13 +1079,21 @@ function renderNetworkToggle() {
   const custom = networkState === "custom";
   document.getElementById("setting-proxy-row").style.display = custom ? "flex" : "none";
 }
-function cycleNetwork() {
-  networkState = networkState === "direct" ? "system" : networkState === "system" ? "custom" : "direct";
+function applyNetworkState(next) {
+  if (next === networkState) return;
+  networkState = next;
   renderNetworkToggle();
+  autoSaveSettings();
 }
-networkToggle.addEventListener("click", cycleNetwork);
+// 点击任一段直接切换到该模式（无需逐档循环）
+document.querySelectorAll(".network-toggle .network-toggle-seg").forEach((seg, index) => {
+  seg.addEventListener("click", () => applyNetworkState(networkOrder[index]));
+});
+// 键盘：左右方向键逐段切换
 networkToggle.addEventListener("keydown", (e) => {
-  if (e.key === " " || e.key === "Enter") { e.preventDefault(); cycleNetwork(); }
+  const idx = networkOrder.indexOf(networkState);
+  if (e.key === "ArrowRight" && idx < networkOrder.length - 1) { e.preventDefault(); applyNetworkState(networkOrder[idx + 1]); }
+  else if (e.key === "ArrowLeft" && idx > 0) { e.preventDefault(); applyNetworkState(networkOrder[idx - 1]); }
 });
 
 function loadSettingsUi() {
@@ -1107,7 +1116,35 @@ function loadSettingsUi() {
   }).catch((e) => settingResult.textContent = "设置加载失败：" + e.message);
 }
 
-document.getElementById("setting-save").addEventListener("click", async () => {
+/* ===== 通用对话框（确认/提醒，整体风格统一） ===== */
+function showAppDialog(title, message, buttons) {
+  return new Promise((resolve) => {
+    document.getElementById("app-dialog-title").textContent = title;
+    document.getElementById("app-dialog-message").textContent = message;
+    const actions = document.getElementById("app-dialog-actions");
+    actions.innerHTML = "";
+    buttons.forEach((b) => {
+      const btn = document.createElement("button");
+      btn.className = "btn" + (b.class ? " " + b.class : "");
+      btn.textContent = b.label;
+      btn.addEventListener("click", () => { closeAppDialog(); resolve(b.value); });
+      actions.appendChild(btn);
+    });
+    document.getElementById("app-dialog").classList.add("open");
+  });
+}
+function closeAppDialog() {
+  document.getElementById("app-dialog").classList.remove("open");
+}
+document.getElementById("app-dialog").addEventListener("click", (e) => {
+  if (e.target.id === "app-dialog") closeAppDialog();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeAppDialog();
+});
+
+/* ===== 自动保存：设置变更直接保存，无需手动点击；需重启的弹窗提醒 ===== */
+async function autoSaveSettings() {
   // 保存前本地校验：历史上限 1–10000、并发 1–8，非法值提前提示不发起请求
   const quoteLimit = Number(document.getElementById("setting-quote-limit").value);
   const spaceLimit = Number(document.getElementById("setting-space-limit").value);
@@ -1133,36 +1170,49 @@ document.getElementById("setting-save").addEventListener("click", async () => {
       networkMode: document.getElementById("setting-network").value,
       proxyAddress: document.getElementById("setting-proxy").value,
     }, 20000);
-    const notice = result.restartRequired ? "网络设置将在重启应用后生效。" : "设置已保存。";
-    toast(notice);
-    loadSettingsUi();
+    // 网络设置需要重启生效：弹窗提醒
+    if (result.restartRequired) {
+      showAppDialog("网络设置", "网络设置将在重启应用后生效。", [{ label: "知道了", class: "btn-primary", value: true }]);
+    }
   } catch (e) {
     toast(e.message, "error");
     // 保存失败（如快捷键被占用）：重新加载已保存的真实设置，控件恢复修改前的值
     loadSettingsUi();
   }
+}
+// 常规/下载/快捷键控件变更即自动保存
+["setting-channel", "setting-quote-limit", "setting-space-limit", "setting-concurrency", "setting-quality", "setting-select-all", "setting-open-folder", "setting-directory", "setting-mod-ctrl", "setting-mod-alt", "setting-mod-shift", "setting-mod-win", "setting-key", "setting-proxy"].forEach((id) => {
+  document.getElementById(id).addEventListener("change", autoSaveSettings);
 });
 
 document.getElementById("setting-browse").addEventListener("click", async () => {
   try {
     const { path } = await Bridge.invoke("browseDirectory");
-    if (path) document.getElementById("setting-directory").value = path;
+    if (path) {
+      document.getElementById("setting-directory").value = path;
+      autoSaveSettings();
+    }
   } catch (e) { settingResult.textContent = "选择目录失败：" + e.message; }
 });
 
-// 浏览器数据清除（确认后执行）
-function clearBrowserData(scope, confirmText, successText) {
-  if (!confirm(confirmText)) return;
-  Bridge.invoke("clearBrowserData", { scope }, 30000)
-    .then(() => {
-      document.getElementById("setting-browser-result").textContent = successText;
-      toast(successText);
-    })
-    .catch((e) => { document.getElementById("setting-browser-result").textContent = e.message; toast(e.message, "error"); });
+// 浏览器数据清除（统一对话框二次确认后执行）
+function clearBrowserData(scope, confirmText, successText, danger, confirmLabel) {
+  showAppDialog("浏览器数据", confirmText, [
+    { label: "取消", value: false },
+    { label: confirmLabel || "清除", class: danger ? "btn-danger-soft" : "btn-primary", value: true },
+  ]).then((ok) => {
+    if (!ok) return;
+    Bridge.invoke("clearBrowserData", { scope }, 30000)
+      .then(() => {
+        document.getElementById("setting-browser-result").textContent = successText;
+        toast(successText);
+      })
+      .catch((e) => { document.getElementById("setting-browser-result").textContent = e.message; toast(e.message, "error"); });
+  });
 }
-document.getElementById("setting-clear-cookies").addEventListener("click", () => clearBrowserData("cookies", "确定清除浏览器 Cookie 吗？登录状态将被清除。", "Cookie 已清除。"));
-document.getElementById("setting-clear-cache").addEventListener("click", () => clearBrowserData("cache", "确定清除浏览器缓存吗？", "缓存已清除。"));
-document.getElementById("setting-clear-all").addEventListener("click", () => clearBrowserData("all", "确定清除全部浏览器数据吗？Cookie、缓存与登录状态将被全部清除。", "全部浏览器数据已清除。"));
+document.getElementById("setting-clear-cookies").addEventListener("click", () => clearBrowserData("cookies", "确定清除浏览器 Cookie 吗？登录状态将被清除。", "Cookie 已清除。", false, "清除"));
+document.getElementById("setting-clear-cache").addEventListener("click", () => clearBrowserData("cache", "确定清除浏览器缓存吗？", "缓存已清除。", false, "清除"));
+document.getElementById("setting-clear-all").addEventListener("click", () => clearBrowserData("all", "确定清除全部浏览器数据吗？Cookie、缓存与登录状态将被全部清除。", "全部浏览器数据已清除。", true, "全部清除"));
 
 document.getElementById("setting-check-update").addEventListener("click", async () => {
   settingResult.textContent = "检查中…";

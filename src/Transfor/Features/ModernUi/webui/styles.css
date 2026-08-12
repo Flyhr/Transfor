@@ -250,15 +250,10 @@ body { color: var(--ff-text); background: var(--ff-bg); } .content { padding: va
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration:1ms!important; transition-duration:1ms!important; scroll-behavior:auto!important; } }
 
-/* ===== 对话框 ===== */
-.dialog-backdrop {
-  position: fixed; inset: 0; background: rgba(0,0,0,.35); display: none;
-  align-items: center; justify-content: center; z-index: 999;
-}
-.dialog-backdrop.open { display: flex; }
-.dialog {
-  background: var(--bg-surface); border-radius: var(--radius-lg);
-  padding: var(--spacing-5); min-width: 360px; box-shadow: var(--shadow-card);
-}
-.dialog h3 { margin-bottom: var(--spacing-3); }
-.dialog .dialog-actions { display: flex; justify-content: flex-end; gap: var(--spacing-2); margin-top: var(--spacing-4); }
+/* ===== 对话框（确认/提醒，居中显示，整体风格统一） ===== */
+.dialog-backdrop { position:fixed; inset:0; background:rgba(11,18,32,.42); display:none; align-items:center; justify-content:center; z-index:999; }
+.dialog-backdrop.open { display:flex; }
+.dialog { background:#fff; border:1px solid var(--ff-border); border-radius:14px; padding:20px 22px; width:360px; max-width:calc(100vw - 48px); box-shadow:0 8px 24px rgba(11,18,32,.18); }
+.dialog h3 { margin:0 0 8px; font-size:15px; color:var(--ff-text); }
+.dialog p { margin:0 0 18px; font-size:13px; line-height:1.6; color:var(--ff-muted); white-space:pre-wrap; }
+.dialog .dialog-actions { display:flex; justify-content:flex-end; gap:10px; }
