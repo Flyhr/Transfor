@@ -1208,9 +1208,9 @@ async function autoSaveSettings() {
       networkMode: document.getElementById("setting-network").value,
       proxyAddress: document.getElementById("setting-proxy").value,
     }, 20000);
-    // 网络设置需要重启生效：弹窗提醒
+    // 网络设置需要重启生效：右上角 toast 提示
     if (result.restartRequired) {
-      showAppDialog("网络设置", "网络设置将在重启应用后生效。", [{ label: "知道了", class: "btn-primary", value: true }]);
+      toast("网络设置将在重启应用后生效。");
     }
   } catch (e) {
     toast(e.message, "error");
