@@ -38,10 +38,12 @@ internal sealed class HistoryPanelForm : Form
         // 恢复上次查看的工具分类
         currentTool = historyStore.UiState.LastViewedTool;
 
-        // 面板样式：无任务栏入口的置顶工具窗口（Focused Flow 白底圆角）
+        // 面板样式：无任务栏入口的置顶工具窗口
+        // FixedSingle 与主窗体（Sizable）使用相同的标准系统标题栏渲染（背景/关闭叉号一致），
+        // 同时保持窗口不可缩放
         Text = "Transfor 历史记录";
         StartPosition = FormStartPosition.Manual;
-        FormBorderStyle = FormBorderStyle.FixedToolWindow;
+        FormBorderStyle = FormBorderStyle.FixedSingle;
         ShowInTaskbar = false;
         TopMost = true;
         KeyPreview = true;
