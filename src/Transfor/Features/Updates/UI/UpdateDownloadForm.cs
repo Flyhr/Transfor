@@ -40,13 +40,13 @@ internal sealed class UpdateDownloadForm : Form
         MaximizeBox = false;
         MinimizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(440, 180);
+        ClientSize = new Size(440, 210);
         Font = new Font("Microsoft YaHei UI", 10F);
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(16), ColumnCount = 1, RowCount = 5 };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
 
