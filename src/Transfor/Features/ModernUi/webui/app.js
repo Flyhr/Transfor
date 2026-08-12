@@ -1145,14 +1145,14 @@ document.addEventListener("keydown", (e) => {
 
 /* ===== 自动保存：设置变更直接保存，无需手动点击；需重启的弹窗提醒 ===== */
 async function autoSaveSettings() {
-  // 保存前本地校验：历史上限 1–10000、并发 1–8，非法值提前提示不发起请求
+  // 保存前本地校验：历史上限 1–10000、并发 1–8，非法值提示并恢复为已保存值
   const quoteLimit = Number(document.getElementById("setting-quote-limit").value);
   const spaceLimit = Number(document.getElementById("setting-space-limit").value);
   const concurrency = Number(document.getElementById("setting-concurrency").value);
-  if (!Number.isInteger(quoteLimit) || quoteLimit < 1 || quoteLimit > 10000) { toast("引用历史上限最高10000。", "error"); return; }
-  if (!Number.isInteger(spaceLimit) || spaceLimit < 1 || spaceLimit > 10000) { toast("空格历史上限最高10000。", "error"); return; }
-  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) { toast("同时下载任务数最高8", "error"); return; }
-  if (networkState === "custom" && !document.getElementById("setting-proxy").value.trim()) { toast("指定代理模式下请填写代理地址。", "error"); return; }
+  if (!Number.isInteger(quoteLimit) || quoteLimit < 1 || quoteLimit > 10000) { toast("引用历史上限最高10000。", "error"); loadSettingsUi(); return; }
+  if (!Number.isInteger(spaceLimit) || spaceLimit < 1 || spaceLimit > 10000) { toast("空格历史上限最高10000。", "error"); loadSettingsUi(); return; }
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) { toast("同时下载任务数最高8", "error"); loadSettingsUi(); return; }
+  if (networkState === "custom" && !document.getElementById("setting-proxy").value.trim()) { toast("指定代理模式下请填写代理地址。", "error"); loadSettingsUi(); return; }
 
   const hotKey = collectHotKey();
   try {
