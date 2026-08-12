@@ -3,7 +3,7 @@ using Microsoft.Web.WebView2.WinForms;
 namespace Transfor;
 
 // 浏览器统一门面（Phase 3）：管理 WebView2 环境/Profile 生命周期与各能力子服务；
-// 页面（BrowserView）只通过本门面访问浏览器，禁止业务代码直接创建 WebView2
+// 界面只通过本门面访问浏览器，禁止业务代码直接创建 WebView2
 internal interface IBrowserService
 {
     // Profile 管理（独立持久化目录）

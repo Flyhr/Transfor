@@ -2,19 +2,15 @@ using Microsoft.Web.WebView2.Core;
 
 namespace Transfor;
 
-// 应用级上下文：持有主窗口、历史面板、托盘图标与全局热键，并协调它们之间的跳转
+// 应用级上下文：持有现代界面、历史面板、托盘图标与全局热键，并协调它们之间的跳转。
 internal sealed class TransforApplicationContext : ApplicationContext
 {
     private readonly TextStateStore historyStore;
     private readonly AppServices services;
     private readonly UpdateService updatesService;
-    private readonly MainForm mainForm;
     private readonly HistoryPanelForm historyPanel;
     private readonly GlobalHotKeyManager hotKeyManager;
     private readonly NotifyIcon trayIcon;
-
-    // 启动时注册快捷键失败的错误信息，待主窗口首次显示后弹窗提示
-    private string? startupHotKeyError;
 
     // 是否正在退出（防止重复触发退出流程）
     private bool exiting;
@@ -22,7 +18,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
     // 更新检查进行中（防止托盘多次触发并发检查）
     private bool updateCheckRunning;
 
-    // 新界面宿主（Phase 5 预览）：首次打开创建，关闭后仍可再次打开
+    // 现代界面是唯一主界面；Runtime 缺失时保持 null，托盘仍可检查更新或退出。
     private AppShellForm? appShell;
     private AppShellForm? appShellAllowedToClose;
 
@@ -33,14 +29,38 @@ internal sealed class TransforApplicationContext : ApplicationContext
         hotKeyManager = services.HotKeys;
         updatesService = services.Updates;
 
-        // 新界面是浏览器唯一 UI 锚点：先创建并显式建立句柄，避免后台浏览器操作
-        // 在 InvokeRequired 尚未可靠前落到错误线程。旧界面仅保留作本阶段 Runtime 回退。
+        historyPanel = new HistoryPanelForm(
+            historyStore,
+            services.PasteCoordinator);
+
+        // 创建系统托盘图标：主界面隐藏后进程驻留托盘。
+        trayIcon = new NotifyIcon
+        {
+            Icon = SystemIcons.Application,
+            Text = "Transfor",
+            Visible = true,
+            ContextMenuStrip = CreateTrayMenu(),
+        };
+        trayIcon.DoubleClick += (_, _) => ShowAppShell();
+        // 按下全局快捷键时，在鼠标附近呼出历史面板
+        hotKeyManager.HotKeyPressed += (_, _) => ShowHistoryPanel();
+
+        CheckWebView2Runtime();
+        if (webView2Available)
+        {
+            InitializeAppShellAndBrowser();
+        }
+        RegisterSavedHotKey();
+        // 延迟显示现代界面：先完成启动更新检查；Runtime 缺失时仅保留托盘能力。
+        _ = ShowAfterStartupCheckAsync();
+    }
+
+    private void InitializeAppShellAndBrowser()
+    {
         appShell = CreateAppShell();
         _ = appShell.Handle;
         services.Browser.UiAnchor = appShell;
 
-        // 隐藏宿主必须在 AppShell 的 UI 线程上预初始化；失败不阻断启动，
-        // 后续浏览器兜底会给出明确错误。
         try
         {
             services.Browser.EnsureHostCoreAsync(CancellationToken.None).GetAwaiter().GetResult();
@@ -51,8 +71,6 @@ internal sealed class TransforApplicationContext : ApplicationContext
             AppLog.Browser.Warn($"[{category}] 浏览器隐藏宿主初始化失败：{hostEx.Message}");
         }
 
-        // 启动即挂接浏览器会话（只挂接不启动，首次使用时惰性启动专用 Edge）。
-        // 置于隐藏宿主之后，确保自动解析的浏览器兜底共享同一 UI 锚点。
         try
         {
             services.Media.EnsureBrowserInitializedAsync(appShell).GetAwaiter().GetResult();
@@ -62,44 +80,6 @@ internal sealed class TransforApplicationContext : ApplicationContext
             var category = ErrorClassifier.Classify(ex, ErrorCategory.Browser);
             AppLog.Browser.Error($"[{category}] 启动浏览器会话挂接失败：{ErrorChainFormatter.Format(ex)}");
         }
-
-        // 由页面集合构造主窗口外壳：文本转换 + 媒体下载 + 浏览器
-        var pages = new IFeaturePage[]
-        {
-            new TextToolsPage(services.State),
-            new MediaDownloadPage(
-                services.Media.ResolveCoordinator,
-                services.Media.DownloadCoordinator,
-                services.Media.State,
-                services.Media.EnsureBrowserInitializedAsync,
-                services.Media.Preview),
-            new BrowserView(services.Browser),
-        };
-        mainForm = new MainForm(pages);
-        historyPanel = new HistoryPanelForm(
-            historyStore,
-            services.PasteCoordinator);
-
-        // 创建系统托盘图标：关闭主窗口后进程驻留托盘
-        trayIcon = new NotifyIcon
-        {
-            Icon = SystemIcons.Application,
-            Text = "Transfor",
-            Visible = true,
-            ContextMenuStrip = CreateTrayMenu(),
-        };
-        // 双击托盘图标重新打开主窗口
-        trayIcon.DoubleClick += (_, _) => ShowMainWindow();
-        // 按下全局快捷键时，在鼠标附近呼出历史面板
-        hotKeyManager.HotKeyPressed += (_, _) => ShowHistoryPanel();
-
-        CheckWebView2Runtime();
-
-        RegisterSavedHotKey();
-        mainForm.Shown += MainForm_Shown;
-        // 主窗体延迟显示：先完成启动更新检查——
-        // 强制更新时不进入主业务界面，直接进入阻断更新循环；其余情况正常显示
-        _ = ShowAfterStartupCheckAsync();
     }
 
     // 启动流程：后台检查更新（最多等待 timeout）；强制更新 → 不显示主窗体直接进入阻断循环；
@@ -108,7 +88,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
     {
         var (result, timedOut) = await WaitStartupCheckAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(true);
         var status = result?.Status ?? UpdateStatus.CheckFailed;
-        if (mainForm.IsDisposed)
+        if (appShell is { IsDisposed: true })
         {
             return;
         }
@@ -122,7 +102,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
                     status,
                     timedOut,
                     requiredUpdateResolved,
-                    mainForm.IsDisposed,
+                    appShell is { IsDisposed: true },
                     exiting))
             {
                 return;
@@ -141,7 +121,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
                 status,
                 timedOut,
                 requiredUpdateResolved: false,
-                mainForm.IsDisposed,
+                appShell is { IsDisposed: true },
                 exiting))
         {
             ShowStartupInterface();
@@ -153,10 +133,6 @@ internal sealed class TransforApplicationContext : ApplicationContext
         if (webView2Available)
         {
             ShowAppShell();
-        }
-        else
-        {
-            ShowMainWindow();
         }
     }
 
@@ -187,13 +163,11 @@ internal sealed class TransforApplicationContext : ApplicationContext
         }
     }
 
-    // 构建托盘右键菜单：新界面（主界面）/ 旧界面（预览）/ 设置 / 检查更新 / 退出
+    // 构建托盘右键菜单：新界面 / 检查更新 / 退出。
     private ContextMenuStrip CreateTrayMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("旧界面（预览）", null, (_, _) => ShowMainWindow());
         menu.Items.Add("新界面", null, (_, _) => ShowAppShell());
-        menu.Items.Add("设置", null, (_, _) => ShowSettings());
         menu.Items.Add("检查更新", null, (_, _) => _ = CheckAndPromptAsync(manual: true));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("退出", null, (_, _) => ExitApplication());
@@ -208,55 +182,24 @@ internal sealed class TransforApplicationContext : ApplicationContext
             return;
         }
 
-        startupHotKeyError = error;
+        var message = error;
         if (historyStore.Settings.HistoryHotKey != HotKeyBinding.Default
             && hotKeyManager.TryRegister(HotKeyBinding.Default, out var defaultError))
         {
-            startupHotKeyError += $"已回退为默认快捷键 Alt+Q。{defaultError}";
+            message += $"已回退为默认快捷键 Alt+Q。{defaultError}";
             try
             {
                 historyStore.UpdateSettings(historyStore.Settings with { HistoryHotKey = HotKeyBinding.Default });
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                startupHotKeyError += $"默认快捷键状态保存失败：{ex.Message}";
+                message += $"默认快捷键状态保存失败：{ex.Message}";
             }
         }
+        trayIcon.ShowBalloonTip(5000, "Transfor", message, ToolTipIcon.Warning);
     }
 
-    // 主窗口首次显示后，弹窗告知启动时的快捷键问题
-    private void MainForm_Shown(object? sender, EventArgs e)
-    {
-        if (string.IsNullOrWhiteSpace(startupHotKeyError))
-        {
-            return;
-        }
-
-        var message = startupHotKeyError;
-        startupHotKeyError = null;
-        mainForm.BeginInvoke(() => MessageBox.Show(mainForm, message, "快捷键提示", MessageBoxButtons.OK, MessageBoxIcon.Warning));
-    }
-
-    // 显示并激活主窗口（最小化时先恢复为正常大小）
-    private void ShowMainWindow()
-    {
-        if (mainForm.IsDisposed)
-        {
-            return;
-        }
-
-        mainForm.Show();
-        if (mainForm.WindowState == FormWindowState.Minimized)
-        {
-            mainForm.WindowState = FormWindowState.Normal;
-        }
-
-        mainForm.BringToFront();
-        mainForm.Activate();
-    }
-
-    // WebView2 Runtime 启动检查（Phase 7 Task 7.4）：缺失时记录日志 + 托盘气泡提示一次，
-    // 并标记现代界面不可用（启动与 ShowAppShell 均降级为旧界面，不弹模态、不阻断启动）
+    // WebView2 Runtime 启动检查：缺失时不构造现代界面或初始化浏览器，仅保留托盘更新/退出能力。
     private bool webView2Available = true;
 
     private void CheckWebView2Runtime()
@@ -274,29 +217,19 @@ internal sealed class TransforApplicationContext : ApplicationContext
         }
 
         webView2Available = false;
-        AppLog.Browser.Warn("未检测到 WebView2 Runtime：现代界面降级为旧界面");
+        AppLog.Browser.Warn("未检测到 WebView2 Runtime：主界面不可用");
         trayIcon.ShowBalloonTip(
             5000,
             "Transfor",
-            "未检测到 WebView2 Runtime：现代界面不可用，已使用旧界面（浏览器与部分解析功能受限）。",
+            "未检测到 WebView2 Runtime：请安装后再使用主界面。",
             ToolTipIcon.Warning);
     }
 
-    // 以模态对话框打开设置窗口（主窗口不可见时以无所有者方式弹出）
-    private void ShowSettings()
-    {
-        using var settings = new SettingsForm(historyStore, hotKeyManager, services.Browser);
-        settings.ShowDialog(mainForm.Visible ? mainForm : null);
-    }
-
-    // 打开新界面宿主（Phase 5 预览）：Web UI + App Bridge；独立 Profile 与互联网浏览器隔离；
-    // 下载协调器事件经 Bridge 推送（随窗体生命周期挂接）
+    // 打开现代界面宿主：Web UI + App Bridge；独立 Profile 与互联网浏览器隔离。
     private void ShowAppShell()
     {
-        // Runtime 缺失时降级为旧界面（现代界面依赖 WebView2）
         if (!webView2Available)
         {
-            ShowMainWindow();
             return;
         }
 
@@ -398,7 +331,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
         // 不进入释放与 ExitThread 序列（避免 finally 无条件退出）
         if (services.Media.DownloadCoordinator.HasActiveTasks)
         {
-            var confirm = MessageBox.Show(mainForm, "仍有下载任务进行中，确定要退出并取消任务吗？", "退出确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+            var confirm = MessageBox.Show(DialogOwner, "仍有下载任务进行中，确定要退出并取消任务吗？", "退出确认", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
             if (confirm != DialogResult.Yes)
             {
                 exiting = false;
@@ -416,11 +349,10 @@ internal sealed class TransforApplicationContext : ApplicationContext
             // 释放全部服务：媒体先取消下载，浏览器宿主最后释放
             await services.DisposeAsync();
             historyPanel.CloseForExit();
-            mainForm.CloseForExit();
         }
         catch (Exception ex)
         {
-            MessageBox.Show(mainForm, $"退出时发生错误：{ex.Message}", "退出错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(DialogOwner, $"退出时发生错误：{ex.Message}", "退出错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -446,23 +378,23 @@ internal sealed class TransforApplicationContext : ApplicationContext
             try
             {
                 result = await Task.Run(() => updatesService.CheckForUpdatesAsync(CurrentUpdateChannel, CancellationToken.None))
-                    .ConfigureAwait(false);
+                    .ConfigureAwait(true);
             }
             catch
             {
                 if (manual)
                 {
-                    mainForm.BeginInvoke(() => ShowNotice("检查更新失败，请稍后重试。", MessageBoxIcon.Warning));
+                    ShowNotice("检查更新失败，请稍后重试。", MessageBoxIcon.Warning);
                 }
                 return;
             }
 
-            if (mainForm.IsDisposed)
+            if (exiting)
             {
                 return;
             }
 
-            await InvokeUiAsync(() => HandleUpdateResultAsync(result, manual)).ConfigureAwait(false);
+            await HandleUpdateResultAsync(result, manual).ConfigureAwait(true);
         }
         finally
         {
@@ -472,32 +404,6 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
     // 当前更新通道（设置中可切换，实时生效）
     private UpdateChannel CurrentUpdateChannel => historyStore.Settings.UpdateChannel;
-
-    // 把异步动作调度到 UI 线程执行：对话框与窗体必须在 UI 线程创建，
-    // 动作内的 await 延续会回到 UI 线程上下文
-    private Task InvokeUiAsync(Func<Task> action)
-    {
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (mainForm.IsDisposed)
-        {
-            tcs.TrySetCanceled();
-            return tcs.Task;
-        }
-
-        mainForm.BeginInvoke(async () =>
-        {
-            try
-            {
-                await action();
-                tcs.TrySetResult();
-            }
-            catch (Exception ex)
-            {
-                tcs.TrySetException(ex);
-            }
-        });
-        return tcs.Task;
-    }
 
     // UI 线程：按检查结果处理（可选更新提示一次；强制更新进入阻断循环）
     private async Task HandleUpdateResultAsync(UpdateCheckResult result, bool manual)
@@ -512,7 +418,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
         switch (result.Status)
         {
             case UpdateStatus.OptionalUpdate:
-                var action = UpdateNoticeForm.ShowOptional(mainForm.Visible ? mainForm : null, result);
+                var action = UpdateNoticeForm.ShowOptional(DialogFormOwner, result);
                 if (action == UpdateNoticeForm.UserAction.UpdateNow)
                 {
                     await RunDownloadFlowAsync(result, required: false);
@@ -528,9 +434,9 @@ internal sealed class TransforApplicationContext : ApplicationContext
     // 强制更新阻断循环：退出 → 退出应用；立即更新 → 下载（完成后必须重启）；重新检查 → 重新判定
     private async Task<bool> RunRequiredUpdateLoopAsync(UpdateCheckResult result)
     {
-        while (!mainForm.IsDisposed)
+        while (!exiting && appShell is not { IsDisposed: true })
         {
-            var action = UpdateNoticeForm.ShowRequired(mainForm.Visible ? mainForm : null, result);
+            var action = UpdateNoticeForm.ShowRequired(DialogFormOwner, result);
             switch (action)
             {
                 case UpdateNoticeForm.UserAction.Exit:
@@ -568,7 +474,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
                     }
 
                     await HandleUpdateResultAsync(rechecked, manual: false);
-                    return !exiting && !mainForm.IsDisposed;
+                    return !exiting && appShell is not { IsDisposed: true };
 
                 default:
                     return false;
@@ -586,7 +492,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
         var installer = services.UpdateInstallerFactory(CurrentUpdateChannel);
         try
         {
-            var action = await UpdateDownloadForm.RunAsync(mainForm.Visible ? mainForm : null, installer, result, required);
+            var action = await UpdateDownloadForm.RunAsync(DialogFormOwner, installer, result, required);
             switch (action)
             {
                 case UpdateDownloadForm.Result.RestartNow:
@@ -621,6 +527,10 @@ internal sealed class TransforApplicationContext : ApplicationContext
         }
     }
 
+    private IWin32Window? DialogOwner => appShell is { IsDisposed: false, Visible: true } ? appShell : null;
+
+    private Form? DialogFormOwner => appShell is { IsDisposed: false, Visible: true } ? appShell : null;
+
     private void ShowNotice(string message, MessageBoxIcon icon) =>
-        MessageBox.Show(mainForm, message, "更新", MessageBoxButtons.OK, icon);
+        MessageBox.Show(DialogOwner, message, "更新", MessageBoxButtons.OK, icon);
 }
