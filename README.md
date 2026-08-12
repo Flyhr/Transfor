@@ -9,8 +9,8 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：内置现代化界面�
 - **引号转换**：英文双引号 `"` → `'`，中文双引号 `“ ”` → `‘ ’`
 - **去除空格**：移除半角空格 ` ` 与全角空格 `　`，保留换行与制表符
 - **历史记录**：两种功能独立记录转换历史，自动裁剪，上限可在 1–500 之间配置（默认 100）
-- **全局快捷键**：[待移除] 默认 `Alt+Q` 呼出历史面板（可在设置中修改），选中历史项后自动粘贴到呼出前的目标窗口
-- **系统托盘**：关闭主窗口时最小化到托盘，双击托盘图标重新打开（托盘菜单提供「打开主窗口 / 退出」）
+- **全局快捷键**：默认 `Alt+Q` 呼出 `HistoryPanelForm` 历史面板（可在设置中修改），选中历史项后由 `PasteCoordinator` 自动粘贴到呼出前的目标窗口
+- **系统托盘**：关闭主界面时隐藏到托盘，双击托盘图标重新打开；托盘菜单提供「新界面 / 检查更新 / 退出」
 - **状态持久化**：设置、界面状态与文本历史分别保存到 `settings.json`、`ui-state.json` 与 `text-history.json`，文件损坏时自动回退到默认值
 
 ### 媒体下载
@@ -31,22 +31,22 @@ Windows 桌面工具。基于 .NET 10 + WinForms 构建：内置现代化界面�
 - 独立 Profile（`%LOCALAPPDATA%\Transfor\Browser\UserData`）：Cookie、LocalStorage、缓存与登录状态持久化，重启应用后保持登录
 - 媒体解析/下载的浏览器兜底（隐藏宿主）与「浏览器」页**共享同一 Profile**：在浏览器页登录抖音一次，解析与下载自动携带登录态
 - 设置中可清除浏览器数据：Cookie / 缓存 / 全部浏览器数据（登录态一并重置）
-- 初始化失败（如 WebView2 Runtime 缺失）时页面显示明确提示，不影响应用其他功能
+- WebView2 Runtime 缺失时主界面不可用：应用保留托盘并提示安装，仍可「检查更新」或「退出」；不再提供旧 WinForms 界面回退
 - 依赖系统 Edge WebView2 Runtime（Windows 11 内置；Windows 10 随 Edge 浏览器更新）
 
 ### 新界面（当前主界面）
 
-- 启动即进入新界面宿主：WinForms Host + WebView2 + 本地 HTML/CSS/JS（嵌入程序集，三文件）；WebView2 Runtime 缺失时降级为旧界面
+- 启动即进入唯一的新界面宿主：AppShellForm + WebView2 + 本地 HTML/CSS/JS（嵌入程序集，三文件）；WebView2 Runtime 缺失时仅保留托盘恢复操作
 - 左侧边栏导航（工作台/媒体下载/浏览器/历史/设置）+ 内容区；Design System 基础组件（按钮/输入/卡片/对话框/Toast/进度条/侧边栏）；主题：跟随系统/浅色/深色
 - **媒体下载页已迁移**：粘贴/输入分享链接（支持完整分享文本）→ 解析 → 媒体卡片（图片/视频/实况 LIVE、分辨率/大小、点击预览、勾选/全选）→ 下载选中；下载进度/完成经 Bridge 事件实时推送；解析失败不保留旧作品
-- **下载管理页已迁移**：任务列表（等待中/下载中/已完成/失败/已取消 + 进度条 + 速度 + 已下载/总量），取消/重试（进程内）/打开文件/打开文件夹（仅限下载目录内），事件增量更新；下方历史记录（最近 50 条，重新执行/打开文件夹）
+- **下载队列已并入媒体页**：解析结果下方连续展示可折叠队列（等待中/下载中/已完成/失败/已取消 + 进度条 + 速度 + 已下载/总量），支持取消、进程内重试、打开文件或目录；历史记录只在「历史」页展示
 - **历史页已迁移**：文本转换（引号/空格）+ 媒体下载分组，搜索过滤、单条删除、整组清空、媒体记录「重新执行」
 - **浏览器页已迁移**：宿主侧边栏（C#）+ 内容区嵌套互联网 WebView2（共享 `Browser\UserData` 登录态，与 AppWebView 严格隔离）——地址栏（容错：分享文本/尾部标点/多余字段均可识别）/后退/前进/刷新/停止；页面加载后自动检测媒体，「当前页面检测到 X 个可能的媒体 [查看媒体]」直达解析（尺寸与装饰资源过滤，避免 Logo/头像误报）；浏览器初始化失败不影响其他页面
 - **设置页已迁移（完整可编辑）**：常规（更新通道/历史上限）、下载（目录浏览/并发/默认全选/打开目录/质量偏好）、网络（模式/代理地址）、快捷键（历史面板热键可改，占用报错）、浏览器数据（清除 Cookie/缓存/全部）、更新（检查）
-- **首页已迁移**：文本工具（引号/空格 Tab 切换）+ 快捷操作（跳转各页）+ 最近记录（文本/媒体，媒体可重新执行）+ 版本与更新状态
+- **工作台已迁移**：文本工具（引号/空格 Tab 切换）以输入与实时结果双栏呈现，复制和状态集中在结果区
 - App Bridge：JSON 消息协议（`getAppInfo`/`getSettings`/`saveSettings`/`checkUpdate`/`resolveMedia`/`downloadSelected`/`getPreview`/`getClipboardText`/`getDownloads`/`cancelTask`/`cancelAllDownloads`/`retryTask`/`openFile`/`openFolder`/`getHistory`/`clearHistory`/`deleteHistoryEntry`）+ 事件推送（`downloadProgress`/`taskCompleted`/`batchCompleted`）
 - **安全隔离**：AppWebView 使用独立 Profile（`Browser\AppUi`，与互联网浏览器 `Browser\UserData` 严格分离）、禁止外部导航与新窗口，仅经 Bridge 协议访问应用服务
-- **旧界面清理计划**：旧 WinForms 界面（Shell/、各页旧 UI）、全局热键（Alt+Q 悬浮面板）与 Edge CDP 实现已标注 [待移除]（见项目结构）；新界面真机验收通过后分阶段删除
+- **已完成清理**：旧 WinForms 页面与废弃 EdgeCdp 实现已删除；全局热键、HistoryPanelForm 历史浮窗及粘贴回原应用的服务仍保留
 
 ### 应用更新
 
@@ -70,21 +70,16 @@ src/Transfor/
 │   ├── AppPaths.cs                          # 状态文件路径集合（%LOCALAPPDATA%\Transfor）
 │   ├── AppVersion.cs                        # 当前版本（读取 csproj <Version>）
 │   └── TransforApplicationContext.cs        # 应用上下文：新界面宿主/托盘/更新检查/退出流程
-├── Shell/                                   # [待移除] 旧界面主窗口外壳（新 UI 验收后删除）
-│   ├── IFeaturePage.cs                      # 功能页契约
-│   └── MainForm.cs                          # 旧主窗口（导航 + 隐藏到托盘）
 ├── Features/
 │   ├── TextTools/                           # 文本转换
 │   │   ├── Models/                          # TextToolId / TextToolDefinition（共用，保留）
 │   │   ├── Services/                        # QuoteConverter / SpaceRemover（核心，保留）
-│   │   └── UI/                              # [待移除] TextToolsPage（旧界面页面）
 │   ├── History/                             # 历史记录
 │   │   ├── Models/HistoryEntry.cs           # 历史条目（共用，保留）
-│   │   ├── Services/                        # [待移除] ITextHistoryRepository / PasteCoordinator（悬浮面板粘贴）
-│   │   └── UI/                              # [待移除] HistoryPanelForm（全局热键悬浮面板）
+│   │   ├── Services/                        # ITextHistoryRepository / PasteCoordinator（悬浮面板粘贴）
+│   │   └── UI/                              # HistoryPanelForm（全局热键悬浮面板）
 │   ├── Settings/                            # 设置
 │   │   ├── Models/                          # AppSettings / HotKeyBinding / TextUiState（共用，保留）
-│   │   └── UI/                              # [待移除] SettingsForm（旧界面设置窗口）
 │   ├── Updates/                             # 应用更新（Phase 1 检查 + Phase 2 Velopack）
 │   │   ├── Models/                          # UpdateStatus / UpdateChannel / UpdatePolicy / UpdateCheckResult
 │   │   ├── Services/                        # UpdateVersion(SemVer) / VersionComparer / UpdateService / IUpdatePolicySource / HttpUpdatePolicySource / IUpdateInstaller / VelopackUpdateInstaller
@@ -92,7 +87,7 @@ src/Transfor/
 │   ├── Browser/                             # WebView2 浏览器服务（新界面/解析兜底共用，保留）
 │   │   ├── Contracts/IBrowserService.cs     # 浏览器门面
 │   │   ├── Services/                        # BrowserService(共享环境+UI调度) / BrowserProfileService / BrowserNavigationService / BrowserCookieService
-│   │   └── UI/                              # BrowserHostForm（解析/下载隐藏宿主）；[待移除] BrowserView（旧界面浏览器页）
+│   │   └── UI/                              # BrowserHostForm（解析/下载隐藏宿主）
 │   ├── ModernUi/                            # 新界面（当前主界面）
 │   │   ├── AppShellForm.cs                  # 宿主窗体：C# 侧边栏 + AppWebView + 互联网浏览器控件
 │   │   ├── WebUiResources.cs                # 嵌入资源读取（index.html / styles.css / app.js）
@@ -106,7 +101,6 @@ src/Transfor/
 │       ├── Resolvers/
 │       │   ├── DirectMediaResolver.cs       # 直接图片/视频 URL 兜底解析
 │       │   └── Douyin/                      # 抖音静态解析（RENDER_DATA/JSON-LD/DOM）与浏览器兜底
-│       └── UI/                              # [待移除] MediaDownloadPage / MediaAssetGrid / DownloadQueueGrid / MediaPreviewControl / MediaSettingsForm（旧界面媒体页）
 ├── Infrastructure/                          # 基础设施
 │   ├── Networking/                          # 安全网络：DNS 抽象 / URI 校验 / 逐跳重定向 / HttpClient 工厂
 │   │   ├── IDnsResolver.cs / SystemDnsResolver.cs
@@ -124,20 +118,19 @@ src/Transfor/
 └── Platform/Windows/                        # Windows 平台适配层
     ├── Clipboard/
     │   ├── ClipboardTextReader.cs           # Win32 剪贴板读取（新界面用，后台线程安全）
-    │   └── WindowsClipboardService.cs       # [待移除] 剪贴板写入（旧界面粘贴用）
+    │   └── WindowsClipboardService.cs       # 剪贴板写入（热键历史面板粘贴用）
     ├── HotKeys/
-    │   └── GlobalHotKeyManager.cs           # [待移除] 全局热键（Alt+Q 悬浮面板一并移除）
+    │   └── GlobalHotKeyManager.cs           # 全局热键（Alt+Q 历史浮窗）
     ├── Input/
-    │   └── WindowsWindowInputService.cs     # [待移除] 前台窗口恢复 + SendInput 模拟 Ctrl+V（旧粘贴用）
+    │   └── WindowsWindowInputService.cs     # 前台窗口恢复 + SendInput 模拟 Ctrl+V（历史浮窗粘贴用）
     ├── Native/
-    │   └── WindowsNative.cs                 # user32.dll 互操作声明（热键移除后同步精简）
+    │   └── WindowsNative.cs                 # user32.dll 互操作声明（热键与粘贴服务使用）
     ├── WebView2/                            # WebView2 媒体解析兜底（Phase 4A/4B/4C，当前生效）
     │   ├── WebView2BrowserSessionAccessor.cs # IBrowserSessionAccessor 实现（捕获/下载/取 Cookie）
     │   ├── BrowserCaptureSession.cs         # 页面数据提取（RENDER_DATA/NEXT_DATA/DOM/详情接口直取）
     │   ├── BrowserDownloadController.cs     # 浏览器网络栈下载（CDP 流式写入 .part）
     │   ├── NetworkCaptureService.cs         # 网络捕获（Phase 4B：URL/Method/Content-Type/Status 记录）
     │   └── CdpNetworkCaptureService.cs      # CDP 捕获（Phase 4C：详情接口响应体读取）
-    └── EdgeCdp/                             # [待移除] 旧 Edge CDP 实现（已由 WebView2 替代，生产零引用）
 
 tests/
 └── Transfor.Tests/                          # 控制台式测试运行器（无框架依赖，全部离线）
@@ -176,7 +169,7 @@ dotnet run --project tests/Transfor.Tests
 - 分类日志：`%TEMP%\Transfor\logs\`（application/update/browser/media-resolve/download，按天分文件 + 1MB 轮转保留近 5 个）
 - 诊断文件：`%TEMP%\Transfor\diagnostics\`（解析现场 capture-*.json、崩溃 crash-*.txt）
 - **敏感数据约定**：Cookie/Token/完整认证头禁止写入日志
-- WebView2 Runtime 缺失：启动时检测并托盘气泡提示一次（不阻断启动；浏览器页与解析兜底有各自降级提示）
+- WebView2 Runtime 缺失：启动时检测并托盘气泡提示一次；主界面与浏览器兜底不可用，但仍可从托盘检查更新或退出
 - 错误分类：Network/Parse/Browser/Download/Update/Permission/Unknown（关键路径标注，UI 显示用户可读信息，日志保存技术细节）
 
 ## 发布流程（Phase 2）
@@ -205,8 +198,8 @@ dotnet run --project tests/Transfor.Tests
 
 ### 新界面
 
-1. 启动进入新界面：左侧边栏「工作台 / 媒体下载 / 浏览器 / 历史 / 设置」五页，右上角可切换主题（跟随系统/浅色/深色）。
-2. 关闭窗口不会退出程序，进程驻留系统托盘；托盘菜单提供「打开主窗口 / 退出」。
+1. 启动进入新界面：左侧边栏「工作台 / 媒体 / 浏览器 / 历史 / 设置」五页，右上角可切换主题（跟随系统/浅色/深色）。
+2. 关闭窗口不会退出程序，进程驻留系统托盘；托盘菜单提供「新界面 / 检查更新 / 退出」。
 
 ### 文本转换
 
