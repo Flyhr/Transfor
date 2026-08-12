@@ -1241,11 +1241,8 @@ function clearBrowserData(scope, confirmText, successText, danger, confirmLabel)
   ]).then((ok) => {
     if (!ok) return;
     Bridge.invoke("clearBrowserData", { scope }, 30000)
-      .then(() => {
-        document.getElementById("setting-browser-result").textContent = successText;
-        toast(successText);
-      })
-      .catch((e) => { document.getElementById("setting-browser-result").textContent = e.message; toast(e.message, "error"); });
+      .then(() => { toast(successText); })
+      .catch((e) => { toast(e.message, "error"); });
   });
 }
 document.getElementById("setting-clear-cookies").addEventListener("click", () => clearBrowserData("cookies", "确定清除浏览器 Cookie 吗？登录状态将被清除。", "Cookie 已清除。", false, "清除"));
