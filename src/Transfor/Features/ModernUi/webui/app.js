@@ -1031,41 +1031,56 @@ document.getElementById("browser-view-media").addEventListener("click", () => {
 /* ===== 设置页（Phase 6.6：常规/下载/网络/快捷键/浏览器/更新/外观） ===== */
 const settingResult = document.getElementById("setting-result");
 
-// 主键候选（字母/数字/F 键/常用键）
-function buildKeyOptions() {
-  const keys = [];
-  for (let c = 65; c <= 90; c++) keys.push(String.fromCharCode(c));
-  for (let d = 48; d <= 57; d++) keys.push(String.fromCharCode(d));
-  for (let f = 1; f <= 12; f++) keys.push("F" + f);
-  keys.push("Back", "Tab", "Return", "Space", "Home", "End", "Up", "Down", "Left", "Right");
-  const select = document.getElementById("setting-key");
-  keys.forEach((k) => {
-    const opt = document.createElement("option");
-    opt.value = k;
-    opt.textContent = k === "Return" ? "Enter" : k === "Space" ? "空格" : k;
-    select.appendChild(opt);
-  });
+/* ===== 快捷键按键捕获：点击输入框后按下组合键自动识别绑定 ===== */
+let currentHotKey = { modifiers: "", key: "Q" };
+const hotkeyCapture = document.getElementById("setting-hotkey-capture");
+const hotkeyModDisplay = { Control: "Ctrl", Alt: "Alt", Shift: "Shift", LWin: "Win" };
+
+// e.key → Keys 枚举名；无法作为主键的按键返回 null
+function normalizeHotKeyKey(e) {
+  const key = e.key;
+  if (/^[a-zA-Z]$/.test(key)) return key.toUpperCase();
+  if (/^[0-9]$/.test(key)) return key;
+  if (/^F([1-9]|1[0-2])$/.test(key)) return key;
+  const map = { Backspace: "Back", Enter: "Return", " ": "Space", Home: "Home", End: "End", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right" };
+  return map[key] || null;
 }
 
-// Keys 名称 → 修饰键勾选（含 Win=LWin）
-function loadHotKey(modifiers, key) {
-  document.getElementById("setting-mod-ctrl").checked = modifiers.includes("Control");
-  document.getElementById("setting-mod-alt").checked = modifiers.includes("Alt");
-  document.getElementById("setting-mod-shift").checked = modifiers.includes("Shift");
-  document.getElementById("setting-mod-win").checked = modifiers.includes("LWin");
-  const keySelect = document.getElementById("setting-key");
-  if (key) keySelect.value = key;
-  if (keySelect.selectedIndex < 0) keySelect.value = "Q";
+function hotkeyDisplayKey(key) {
+  return key === "Return" ? "Enter" : key === "Space" ? "空格" : key;
 }
 
-function collectHotKey() {
+function renderHotkeyCapture() {
+  const mods = currentHotKey.modifiers.split(",").filter(Boolean).map((m) => hotkeyModDisplay[m] || m);
+  hotkeyCapture.value = mods.length > 0 && currentHotKey.key
+    ? mods.join(" + ") + " + " + hotkeyDisplayKey(currentHotKey.key)
+    : "";
+  hotkeyCapture.placeholder = mods.length > 0 ? "继续按下主键…" : "点击后按下组合键，如 Ctrl + T";
+}
+
+// 捕获按键组合（输入框聚焦时按下）
+hotkeyCapture.addEventListener("keydown", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
   const mods = [];
-  if (document.getElementById("setting-mod-ctrl").checked) mods.push("Control");
-  if (document.getElementById("setting-mod-alt").checked) mods.push("Alt");
-  if (document.getElementById("setting-mod-shift").checked) mods.push("Shift");
-  if (document.getElementById("setting-mod-win").checked) mods.push("LWin");
-  return { modifiers: mods.join(","), key: document.getElementById("setting-key").value };
-}
+  if (e.ctrlKey) mods.push("Control");
+  if (e.altKey) mods.push("Alt");
+  if (e.shiftKey) mods.push("Shift");
+  if (e.metaKey) mods.push("LWin");
+  const keyName = normalizeHotKeyKey(e);
+  const isModifierOnly = keyName === null && mods.length > 0 && ["Control", "Alt", "Shift", "Meta"].includes(e.key);
+  // 仅按下修饰键：显示等待主键
+  if (isModifierOnly || keyName === null) {
+    if (mods.length > 0 && !isModifierOnly) { toast("请同时按下修饰键与主键（如 Ctrl + T）。", "error"); }
+    else if (mods.length > 0) { hotkeyCapture.placeholder = "继续按下主键…"; }
+    return;
+  }
+  if (mods.length === 0) { toast("请同时按下 Ctrl/Alt/Shift/Win 中的至少一个修饰键。", "error"); return; }
+  currentHotKey = { modifiers: mods.join(","), key: keyName };
+  renderHotkeyCapture();
+  autoSaveSettings();
+});
+hotkeyCapture.addEventListener("blur", () => renderHotkeyCapture());
 
 // 网络模式三态分段开关：关闭（蓝，左）→ 系统代理（橙黄，中）→ 指定代理（绿，右）
 let networkState = "direct";
@@ -1083,6 +1098,9 @@ function applyNetworkState(next) {
   if (next === networkState) return;
   networkState = next;
   renderNetworkToggle();
+  // 切换到指定代理且地址为空：先不保存（填写地址后 change 时保存），
+  // 避免空地址校验失败回退导致进不去指定代理界面
+  if (next === "custom" && !document.getElementById("setting-proxy").value.trim()) return;
   autoSaveSettings();
 }
 // 点击任一段直接切换到该模式（无需逐档循环）
@@ -1102,7 +1120,8 @@ function loadSettingsUi() {
     document.getElementById("setting-channel").value = settings.updateChannel;
     document.getElementById("setting-quote-limit").value = settings.quoteHistoryLimit;
     document.getElementById("setting-space-limit").value = settings.spaceHistoryLimit;
-    loadHotKey(settings.hotKey.modifiers, settings.hotKey.key);
+    currentHotKey = { modifiers: settings.hotKey.modifiers, key: settings.hotKey.key };
+    renderHotkeyCapture();
     const media = settings.media;
     document.getElementById("setting-directory").value = media.downloadDirectory;
     document.getElementById("setting-concurrency").value = media.maxConcurrentDownloads;
@@ -1154,7 +1173,7 @@ async function autoSaveSettings() {
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) { toast("同时下载任务数最高8", "error"); loadSettingsUi(); return; }
   if (networkState === "custom" && !document.getElementById("setting-proxy").value.trim()) { toast("指定代理模式下请填写代理地址。", "error"); loadSettingsUi(); return; }
 
-  const hotKey = collectHotKey();
+  const hotKey = currentHotKey;
   try {
     const result = await Bridge.invoke("saveSettings", {
       updateChannel: document.getElementById("setting-channel").value,
@@ -1181,7 +1200,7 @@ async function autoSaveSettings() {
   }
 }
 // 常规/下载/快捷键控件变更即自动保存
-["setting-channel", "setting-quote-limit", "setting-space-limit", "setting-concurrency", "setting-quality", "setting-select-all", "setting-open-folder", "setting-directory", "setting-mod-ctrl", "setting-mod-alt", "setting-mod-shift", "setting-mod-win", "setting-key", "setting-proxy"].forEach((id) => {
+["setting-channel", "setting-quote-limit", "setting-space-limit", "setting-concurrency", "setting-quality", "setting-select-all", "setting-open-folder", "setting-directory", "setting-proxy"].forEach((id) => {
   document.getElementById(id).addEventListener("change", autoSaveSettings);
 });
 
@@ -1222,8 +1241,6 @@ document.getElementById("setting-check-update").addEventListener("click", async 
     settingResult.textContent = labels[info.status] || info.status;
   } catch (e) { settingResult.textContent = "检查失败：" + e.message; }
 });
-
-buildKeyOptions();
 
 document.querySelectorAll("[data-history-tab]").forEach((button) => {
   button.addEventListener("click", () => {

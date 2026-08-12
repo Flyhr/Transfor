@@ -238,15 +238,9 @@
         <div class="setting-row">
           <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="10" x2="10.01" y2="10"/><line x1="14" y1="10" x2="14.01" y2="10"/><line x1="18" y1="10" x2="18.01" y2="10"/><line x1="9" y1="14" x2="15" y2="14"/></svg></span>
           <span class="label">历史面板快捷键</span>
-          <span style="display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px;align-items:center;margin-left:auto">
-            <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-ctrl"> Ctrl</label>
-            <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-alt"> Alt</label>
-            <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-shift"> Shift</label>
-            <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-win"> Win</label>
-            <select class="input" id="setting-key" style="padding:5px"></select>
-          </span>
+          <input class="input" id="setting-hotkey-capture" readonly placeholder="点击后按下组合键，如 Ctrl + T" style="width:200px;margin-left:auto;text-align:center;cursor:pointer" title="点击后按下要绑定的组合键">
         </div>
-        <div style="color:var(--text-secondary);font-size:12px;margin-top:4px">修改后立即生效；被其他程序占用时保存会报错。</div>
+        <div style="color:var(--text-secondary);font-size:12px;margin-top:4px">点击输入框后按住修饰键与主键（如 Ctrl + T），程序自动识别；修改后立即生效，被其他程序占用时保存会报错。</div>
       </div>
       <div class="card settings-card" id="settings-browser-card">
         <h3>浏览器数据</h3>
