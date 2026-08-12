@@ -120,6 +120,8 @@ internal sealed class HistoryPanelForm : Form
         root.Controls.Add(errorLabel, 0, 3);
         Controls.Add(root);
         FormClosing += HistoryPanelForm_FormClosing;
+        // 点击其他界面（面板失焦）时自动关闭，与 Ditto 行为一致
+        Deactivate += (_, _) => Hide();
     }
 
     // 拖拽条按下：释放捕获并模拟标题栏拖动（无边框窗口仍可移动）
