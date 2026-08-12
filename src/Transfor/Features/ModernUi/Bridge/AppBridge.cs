@@ -259,12 +259,15 @@ internal sealed class AppBridge
         {
             if (HotKeyManager is null)
             {
-                throw new InvalidOperationException("热键服务未初始化。");
+                // 热键服务未初始化：业务错误响应而非抛异常
+                //（抛异常会使调试器在首次机会异常处中断，表现为「报错停止程序」）
+                return AppBridgeProtocol.CreateErrorResponse(request.Id, "热键服务未初始化。");
             }
 
             if (!HotKeyManager.TryReplace(newHotKey, out var hotKeyError))
             {
-                throw new InvalidOperationException(hotKeyError);
+                // 注册失败（如快捷键被其他程序占用，错误码 1409）：业务错误响应而非抛异常
+                return AppBridgeProtocol.CreateErrorResponse(request.Id, hotKeyError);
             }
 
             previousHotKey = previousText.HistoryHotKey;
