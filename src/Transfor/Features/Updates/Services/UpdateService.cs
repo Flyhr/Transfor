@@ -31,11 +31,15 @@ internal sealed class UpdateService : IUpdateService
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // 保留完整异常链（HttpRequestException → IOException → SocketException），便于诊断
-            return new UpdateCheckResult(UpdateStatus.CheckFailed, current, null, null, null, ErrorChainFormatter.Format(ex));
+            var error = ErrorChainFormatter.Format(ex);
+            var category = ErrorClassifier.Classify(ex, ErrorCategory.Update);
+            AppLog.Update.Warn($"[{category}] 更新检查失败：{error}");
+            return new UpdateCheckResult(UpdateStatus.CheckFailed, current, null, null, null, error);
         }
 
         if (!policy.Enabled)
         {
+            AppLog.Update.Info("更新已被远程禁用");
             return new UpdateCheckResult(UpdateStatus.Disabled, current, null, null, policy);
         }
 

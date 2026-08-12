@@ -4,7 +4,7 @@ namespace Transfor;
 internal sealed record AppSettings(HotKeyBinding HistoryHotKey, int QuoteHistoryLimit, int SpaceHistoryLimit, UpdateChannel UpdateChannel)
 {
     public const int MinimumHistoryLimit = 1;
-    public const int MaximumHistoryLimit = 500;
+    public const int MaximumHistoryLimit = 10000;
 
     // 默认设置：快捷键 Alt+Q，两种历史各保留 100 条，更新通道 Stable
     public static AppSettings Default => new(HotKeyBinding.Default, 100, 100, UpdateChannel.Stable);
@@ -22,9 +22,9 @@ internal sealed record AppSettings(HotKeyBinding HistoryHotKey, int QuoteHistory
         }
     }
 
-    // 校验历史上限必须在 1–500 之间
+    // 校验历史上限必须在 1–10000 之间
     public static void ValidateHistoryLimit(int value, string parameterName)
     {
-        if (value is < MinimumHistoryLimit or > MaximumHistoryLimit) throw new ArgumentOutOfRangeException(parameterName, value, "历史上限必须在 1 到 500 之间。");
+        if (value is < MinimumHistoryLimit or > MaximumHistoryLimit) throw new ArgumentOutOfRangeException(parameterName, value, "历史上限必须在 1 到 10000 之间。");
     }
 }

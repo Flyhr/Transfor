@@ -154,7 +154,7 @@ internal sealed class SettingsForm : Form
             .OrderBy(key => key.ToString(), StringComparer.OrdinalIgnoreCase);
     }
 
-    // 创建历史上限输入框（1–500）
+    // 创建历史上限输入框（1–10000）
     private static NumericUpDown CreateLimitBox(int value)
     {
         return new NumericUpDown
@@ -263,7 +263,7 @@ internal sealed class SettingsForm : Form
             switch (scope)
             {
                 case BrowserDataScope.Cookies:
-                    browserService.Cookies.ClearCookies();
+                    await browserService.Cookies.ClearCookiesAsync();
                     break;
 
                 case BrowserDataScope.Cache:

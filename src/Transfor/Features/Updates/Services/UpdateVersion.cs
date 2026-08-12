@@ -17,16 +17,27 @@ internal sealed record UpdateVersion(int Major, int Minor, int Patch, IReadOnlyL
         }
 
         var value = text.Trim();
-        // 剥离 InformationalVersion 可能携带的 +build 元数据
+        // build 元数据（严格 SemVer）：+ 后必须非空（"1.2.3+" 拒绝；"1.2.3+abc" 合法并剥离）
         var plus = value.IndexOf('+');
         if (plus >= 0)
         {
+            if (plus == value.Length - 1)
+            {
+                return false;
+            }
+
             value = value[..plus];
         }
 
         var dash = value.IndexOf('-');
         var core = dash >= 0 ? value[..dash] : value;
         var prereleaseText = dash >= 0 ? value[(dash + 1)..] : null;
+
+        // 空预发布拒绝（"1.2.3-"）
+        if (dash >= 0 && string.IsNullOrEmpty(prereleaseText))
+        {
+            return false;
+        }
 
         var parts = core.Split('.');
         if (parts.Length != 3)
@@ -37,10 +48,17 @@ internal sealed record UpdateVersion(int Major, int Minor, int Patch, IReadOnlyL
         var numbers = new int[3];
         for (var i = 0; i < 3; i++)
         {
+            // 严格 SemVer：数字段无前导零（"01"、"003" 拒绝）
+            if (parts[i].Length > 1 && parts[i][0] == '0')
+            {
+                return false;
+            }
+
             if (!int.TryParse(parts[i], NumberStyles.None, CultureInfo.InvariantCulture, out var n))
             {
                 return false;
             }
+
             numbers[i] = n;
         }
 

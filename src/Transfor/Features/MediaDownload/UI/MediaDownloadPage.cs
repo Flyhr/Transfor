@@ -459,23 +459,10 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
         }
     }
 
+    // 文件名构造已迁移到 DownloadFileNameBuilder（Bridge 与页面共用同一规则）；
+    // 此处保留转发，兼容测试引用
     internal static string BuildFileName(ResolvedMediaPost post, MediaAsset asset, MediaVariant variant)
-    {
-        var baseName = string.IsNullOrWhiteSpace(post.Title)
-            ? "media"
-            : DownloadFileNameBuilder.SanitizeFileName(DownloadFileNameBuilder.StripHashtags(post.Title));
-        var ext = DownloadFileNameBuilder.ResolveExtension(variant.ContentType, asset.Kind, variant.Uri.AbsolutePath);
-        var number = asset.SourceIndex + 1;
-
-        return asset.Role switch
-        {
-            // 实况图配对：同一序号输出 _still 静态照片与 _motion 动态视频
-            MediaAssetRole.LivePhotoStill => $"{baseName}_{number:D2}_still{ext}",
-            MediaAssetRole.LivePhotoMotion => $"{baseName}_{number:D2}_motion{ext}",
-            MediaAssetRole.AlbumPreview => $"{baseName}_album_preview{ext}",
-            _ => asset.Index == 0 ? $"{baseName}{ext}" : $"{baseName}_{number:D2}{ext}",
-        };
-    }
+        => DownloadFileNameBuilder.BuildFileName(post, asset, variant);
 
     private void BrowseDirectory()
     {
@@ -513,6 +500,13 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     // 进度事件可能在后台线程触发：经 BeginInvoke 切回 UI 线程更新控件
     private void DownloadCoordinator_TaskProgressChanged(object? sender, MediaDownloadProgress e)
     {
+        // 页面从未显示时句柄未创建：BeginInvoke 会抛异常——
+        // 新界面（AppShell）触发下载时主窗口的媒体页可能未激活，直接跳过 UI 更新
+        if (!IsHandleCreated || IsDisposed)
+        {
+            return;
+        }
+
         BeginInvoke(() =>
         {
             queueGrid.UpdateProgress(e.TaskId, e.Percent);
@@ -522,6 +516,12 @@ internal sealed class MediaDownloadPage : UserControl, IFeaturePage
     // 完成事件：更新队列状态；成功后用实际文件回填资产表「尺寸」（解析阶段缺失时）
     private void DownloadCoordinator_TaskCompleted(object? sender, MediaDownloadTaskCompleted e)
     {
+        // 页面从未显示时句柄未创建：BeginInvoke 会抛异常（同上）
+        if (!IsHandleCreated || IsDisposed)
+        {
+            return;
+        }
+
         BeginInvoke(() =>
         {
             queueGrid.CompleteTask(e.TaskId, e.Result.Status, e.Result.Error);

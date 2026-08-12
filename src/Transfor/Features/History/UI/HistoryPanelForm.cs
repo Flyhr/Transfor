@@ -1,8 +1,20 @@
+using System.Drawing.Drawing2D;
+
 namespace Transfor;
 
-// 历史面板：全局快捷键呼出的小窗口，展示所选工具的历史并支持单击/回车粘贴回原窗口
+// 历史面板：全局快捷键呼出的小窗口，展示所选工具的历史并支持单击/回车粘贴回原窗口；
+// 视觉对齐新界面 Focused Flow 风格：白底、圆角、青绿选中态、双行列表项
 internal sealed class HistoryPanelForm : Form
 {
+    private static readonly Color ColorBackground = Color.FromArgb(255, 255, 255);
+    private static readonly Color ColorBorder = Color.FromArgb(226, 232, 240);
+    private static readonly Color ColorPrimary = Color.FromArgb(15, 118, 110);
+    private static readonly Color ColorPrimarySoft = Color.FromArgb(234, 248, 246);
+    private static readonly Color ColorText = Color.FromArgb(11, 18, 32);
+    private static readonly Color ColorMuted = Color.FromArgb(71, 85, 105);
+    private static readonly Color ColorFaint = Color.FromArgb(148, 163, 184);
+    private static readonly Color ColorDanger = Color.FromArgb(184, 63, 59);
+
     private readonly TextStateStore historyStore;
     private readonly PasteCoordinator pasteCoordinator;
     private readonly Button quoteButton;
@@ -26,30 +38,49 @@ internal sealed class HistoryPanelForm : Form
         // 恢复上次查看的工具分类
         currentTool = historyStore.UiState.LastViewedTool;
 
-        // 面板样式：无任务栏入口的置顶工具窗口
+        // 面板样式：无边框置顶工具窗口（Focused Flow 白底圆角，无系统标题栏/按钮），
+        // 顶部自绘拖拽条；点击条目自动粘贴并关闭，Esc 隐藏
         Text = "Transfor 历史记录";
         StartPosition = FormStartPosition.Manual;
-        FormBorderStyle = FormBorderStyle.FixedToolWindow;
+        FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
         KeyPreview = true;
         ClientSize = new Size(620, 500);
-        Font = new Font("Microsoft YaHei UI", 10F);
+        BackColor = ColorBackground;
+        Font = new Font("Segoe UI Variable", 10F);
+        Region = CreateRoundedRegion(new Rectangle(0, 0, ClientSize.Width, ClientSize.Height), 12);
 
-        // 布局：工具切换栏 / 历史列表 / 错误提示
+        // 布局：拖拽标题条 / 工具切换栏 / 历史列表 / 错误提示
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(12),
+            BackColor = ColorBackground,
+            Padding = new Padding(14),
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 4,
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
 
-        // 顶部工具切换按钮
-        var nav = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+        // 顶部拖拽条（替代系统标题栏；无最小化/最大化/关闭按钮）
+        var titleBar = new Label
+        {
+            Dock = DockStyle.Fill,
+            BackColor = ColorBackground,
+            ForeColor = ColorFaint,
+            Font = new Font("Segoe UI Variable", 9F),
+            Text = "Transfor 历史记录",
+            TextAlign = ContentAlignment.MiddleLeft,
+            Cursor = Cursors.SizeAll,
+            Padding = new Padding(6, 0, 0, 0),
+        };
+        titleBar.MouseDown += TitleBar_MouseDown;
+
+        // 工具切换按钮（胶囊选中态）
+        var nav = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, BackColor = ColorBackground, Padding = new Padding(0, 2, 0, 8) };
         quoteButton = CreateToolButton("引号转换");
         quoteButton.Click += (_, _) => SelectTool(TextToolId.QuoteConversion);
         spaceButton = CreateToolButton("去除空格");
@@ -57,13 +88,19 @@ internal sealed class HistoryPanelForm : Form
         nav.Controls.Add(quoteButton);
         nav.Controls.Add(spaceButton);
 
-        // 历史列表：单击或回车执行粘贴
+        // 历史列表：单击或回车执行粘贴（OwnerDraw 双行 + 圆角选中块）
         historyList = new ListBox
         {
             Dock = DockStyle.Fill,
-            HorizontalScrollbar = true,
+            BorderStyle = BorderStyle.None,
+            BackColor = ColorBackground,
+            ForeColor = ColorText,
             IntegralHeight = false,
+            DrawMode = DrawMode.OwnerDrawFixed,
+            ItemHeight = 44,
+            Font = new Font("Segoe UI Variable", 9.5F),
         };
+        historyList.DrawItem += HistoryList_DrawItem;
         historyList.MouseClick += (_, _) => ExecuteSelected();
         historyList.KeyDown += HistoryList_KeyDown;
 
@@ -71,15 +108,32 @@ internal sealed class HistoryPanelForm : Form
         errorLabel = new Label
         {
             Dock = DockStyle.Fill,
-            ForeColor = Color.Firebrick,
+            BackColor = ColorBackground,
+            ForeColor = ColorDanger,
+            Font = new Font("Segoe UI Variable", 9F),
             TextAlign = ContentAlignment.MiddleLeft,
         };
 
-        root.Controls.Add(nav, 0, 0);
-        root.Controls.Add(historyList, 0, 1);
-        root.Controls.Add(errorLabel, 0, 2);
+        root.Controls.Add(titleBar, 0, 0);
+        root.Controls.Add(nav, 0, 1);
+        root.Controls.Add(historyList, 0, 2);
+        root.Controls.Add(errorLabel, 0, 3);
         Controls.Add(root);
         FormClosing += HistoryPanelForm_FormClosing;
+        // 点击其他界面（面板失焦）时自动关闭，与 Ditto 行为一致
+        Deactivate += (_, _) => Hide();
+    }
+
+    // 拖拽条按下：释放捕获并模拟标题栏拖动（无边框窗口仍可移动）
+    private void TitleBar_MouseDown(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left)
+        {
+            return;
+        }
+
+        WindowsNative.ReleaseCapture();
+        WindowsNative.SendMessage(Handle, WindowsNative.WmNcLButtonDown, new IntPtr(WindowsNative.HtCaption), IntPtr.Zero);
     }
 
     // 在鼠标附近显示面板；foregroundWindow 为呼出前的目标窗口
@@ -118,6 +172,10 @@ internal sealed class HistoryPanelForm : Form
             FlatStyle = FlatStyle.Flat,
             Text = text,
             UseVisualStyleBackColor = false,
+            Cursor = Cursors.Hand,
+            Font = new Font("Segoe UI Variable", 9.5F),
+            Height = 30,
+            Padding = new Padding(14, 0, 14, 0),
         };
     }
 
@@ -141,12 +199,15 @@ internal sealed class HistoryPanelForm : Form
         }
     }
 
-    // 切换按钮的选中样式
+    // 切换按钮的选中样式（Focused Flow 青绿胶囊）
     private static void ApplyButtonState(Button button, bool selected)
     {
-        button.BackColor = selected ? Color.FromArgb(31, 111, 235) : Color.FromArgb(242, 245, 249);
-        button.ForeColor = selected ? Color.White : Color.FromArgb(35, 40, 48);
+        button.BackColor = selected ? ColorPrimary : ColorBackground;
+        button.ForeColor = selected ? Color.White : ColorMuted;
+        button.FlatAppearance.BorderColor = ColorBorder;
         button.FlatAppearance.BorderSize = selected ? 0 : 1;
+        button.FlatAppearance.MouseOverBackColor = selected ? ColorPrimary : ColorPrimarySoft;
+        button.Region = CreateRoundedRegion(new Rectangle(0, 0, button.Width, button.Height), 8);
     }
 
     // 刷新列表：倒序（最新在前）显示当前工具的历史
@@ -170,6 +231,39 @@ internal sealed class HistoryPanelForm : Form
         finally
         {
             historyList.EndUpdate();
+        }
+    }
+
+    // 自绘列表项：预览主行 + 时间副行；选中项浅青圆角块 + 青绿主文字
+    private void HistoryList_DrawItem(object? sender, DrawItemEventArgs e)
+    {
+        e.DrawBackground();
+        if (e.Index < 0 || e.Index >= historyList.Items.Count)
+        {
+            return;
+        }
+
+        var item = (HistoryListItem)historyList.Items[e.Index];
+        var bounds = e.Bounds;
+        var selected = (e.State & DrawItemState.Selected) != 0;
+
+        using var bg = new SolidBrush(selected ? ColorPrimarySoft : ColorBackground);
+        using var bgPath = CreateRoundedPath(new Rectangle(bounds.X + 2, bounds.Y + 2, bounds.Width - 4, bounds.Height - 4), 8);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        e.Graphics.FillPath(bg, bgPath);
+
+        var textRect = new Rectangle(bounds.X + 10, bounds.Y + 5, bounds.Width - 20, 22);
+        using var mainBrush = new SolidBrush(selected ? ColorPrimary : ColorText);
+        using var timeBrush = new SolidBrush(ColorFaint);
+        using var mainFont = new Font("Segoe UI Variable", 9.5F);
+        using var timeFont = new Font("Segoe UI Variable", 8.5F);
+        e.Graphics.DrawString(item.Preview, mainFont, mainBrush, textRect, StringFormat.GenericDefault);
+        e.Graphics.DrawString(item.TimeText, timeFont, timeBrush, new Rectangle(textRect.X, bounds.Y + 26, textRect.Width, 16), StringFormat.GenericDefault);
+
+        // 焦点虚线保留（键盘可访问性）
+        if ((e.State & DrawItemState.Focus) != 0)
+        {
+            ControlPaint.DrawFocusRectangle(e.Graphics, bounds, selected ? ColorPrimary : ColorMuted, ColorBackground);
         }
     }
 
@@ -221,22 +315,39 @@ internal sealed class HistoryPanelForm : Form
         Hide();
     }
 
-    // 列表项：显示转换结果预览（单行截断至 80 字符）与本地时间
+    // 圆角 Region（按控件实际尺寸构建；窗体 FixedToolWindow 不可缩放，构造时一次即可）
+    private static Region CreateRoundedRegion(Rectangle bounds, int radius)
+        => new Region(CreateRoundedPath(bounds, radius));
+
+    private static GraphicsPath CreateRoundedPath(Rectangle bounds, int radius)
+    {
+        var path = new GraphicsPath();
+        int d = radius * 2;
+        path.AddArc(bounds.X, bounds.Y, d, d, 180, 90);
+        path.AddArc(bounds.Right - d, bounds.Y, d, d, 270, 90);
+        path.AddArc(bounds.Right - d, bounds.Bottom - d, d, d, 0, 90);
+        path.AddArc(bounds.X, bounds.Bottom - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    // 列表项：预览单行 + 本地时间（双行绘制）
     private sealed record HistoryListItem(HistoryEntry Entry)
     {
-        public override string ToString()
+        public string Preview
         {
-            // 把多行内容压成单行便于预览
-            var preview = Entry.ConvertedOutput
-                .Replace("\r\n", " ", StringComparison.Ordinal)
-                .Replace('\r', ' ')
-                .Replace('\n', ' ');
-            if (preview.Length > 80)
+            get
             {
-                preview = preview[..80] + "…";
+                var preview = Entry.ConvertedOutput
+                    .Replace("\r\n", " ", StringComparison.Ordinal)
+                    .Replace('\r', ' ')
+                    .Replace('\n', ' ');
+                return preview.Length > 80 ? preview[..80] + "…" : preview;
             }
-
-            return $"{preview}    {Entry.CreatedAtUtc.ToLocalTime():yyyy-MM-dd HH:mm:ss}";
         }
+
+        public string TimeText => Entry.CreatedAtUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
+
+        public override string ToString() => $"{Preview}    {TimeText}";
     }
 }

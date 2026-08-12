@@ -79,10 +79,12 @@ internal static class AppBootstrapper
                 DownloadCoordinator = downloadCoordinator,
                 BrowserSessions = browserSessions,
                 HttpClient = httpClient,
+                RequestSender = requestSender,
                 Preview = new MediaPreviewService(requestSender, browserSessions, mediaCache),
                 // 浏览器会话工厂：WebView2 隐藏宿主（Phase 4A，替代 Edge CDP）；
-                // 与「浏览器」页共享 Profile（登录一次互通），首次解析/下载时惰性初始化
-                BrowserSessionFactory = owner => new WebView2BrowserSessionAccessor(owner, browserService, paths),
+                // 与「浏览器」页共享 Profile（登录一次互通），首次解析/下载时惰性初始化；
+                // 注入 SafeUriValidator：下载/捕获入口校验媒体与链接地址（防 SSRF）
+                BrowserSessionFactory = owner => new WebView2BrowserSessionAccessor(owner, browserService, paths, validator),
             },
         };
     }

@@ -24,7 +24,7 @@ static class Program
         {
             CrashDiagnostics.Write(e.Exception);
             MessageBox.Show(
-                $"程序遇到未处理异常：{ErrorChainFormatter.Format(e.Exception)}",
+                $"程序遇到未处理异常：{ErrorChainFormatter.Format(e.Exception)}{Environment.NewLine}{Environment.NewLine}{e.Exception}",
                 "Transfor 异常",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);
@@ -39,9 +39,12 @@ static class Program
 
         // 初始化 WinForms 全局配置（高 DPI 支持、主题与字体默认值等）
         ApplicationConfiguration.Initialize();
+        AppLog.Application.Info($"应用启动 v{AppVersion.Current}");
         // 组合根：组装全部应用服务；using 保证退出时释放全局热键等资源
         using var services = AppBootstrapper.Create();
+        AppLog.Application.Info("服务组装完成");
         // 启动消息循环，由 TransforApplicationContext 托管主窗口、历史面板与托盘的生命周期
         Application.Run(new TransforApplicationContext(services));
+        AppLog.Application.Info("应用退出");
     }
 }

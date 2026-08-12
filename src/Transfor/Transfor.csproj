@@ -7,7 +7,7 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- 应用唯一版本来源（SemVer）：0.x 开发阶段，1.0.0 正式发布 -->
-    <Version>0.14.1</Version>
+    <Version>0.15.0</Version>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -22,6 +22,13 @@
     <!-- WebView2：内置浏览器（Phase 3，独立 Profile 持久化登录态） -->
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
     <PackageReference Include="Velopack" Version="1.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Focused Flow 本地 webui：HTML/CSS/JS 分离嵌入程序集，经虚拟主机加载 -->
+    <EmbeddedResource Include="Features\ModernUi\webui\index.html" LogicalName="Transfor.WebUi.index.html" />
+    <EmbeddedResource Include="Features\ModernUi\webui\styles.css" LogicalName="Transfor.WebUi.styles.css" />
+    <EmbeddedResource Include="Features\ModernUi\webui\app.js" LogicalName="Transfor.WebUi.app.js" />
   </ItemGroup>
 
 </Project>

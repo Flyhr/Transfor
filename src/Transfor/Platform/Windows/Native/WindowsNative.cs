@@ -9,6 +9,10 @@ internal static class WindowsNative
     // WM_HOTKEY 消息：注册的全局快捷键被按下时系统向窗口发送
     internal const int WmHotKey = 0x0312;
 
+    // 无边框窗口拖拽：向标题栏区域发送鼠标按下消息
+    internal const int WmNcLButtonDown = 0x00A1;
+    internal const int HtCaption = 2;
+
     // SendInput 输入类型：键盘输入
     internal const uint InputKeyboard = 1;
 
@@ -41,6 +45,15 @@ internal static class WindowsNative
     // 获取当前前台窗口句柄（历史面板呼出前记录，作为粘贴目标）
     [DllImport("user32.dll")]
     internal static extern nint GetForegroundWindow();
+
+    // 释放鼠标捕获（无边框窗口拖拽前调用）
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static extern bool ReleaseCapture();
+
+    // 向窗口发送消息（无边框窗口模拟标题栏拖拽）
+    [DllImport("user32.dll")]
+    internal static extern nint SendMessage(nint hWnd, int msg, nint wParam, nint lParam);
 
     // 将窗口设置为前台窗口（粘贴前恢复目标窗口）
     [DllImport("user32.dll", SetLastError = true)]

@@ -14,11 +14,13 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
     private readonly MediaCache mediaCache;
     private readonly string sessionId = Guid.NewGuid().ToString("N");
     private readonly SemaphoreSlim downloadGate = new(1, 1);
+    private readonly SafeUriValidator validator;
 
-    public WebView2BrowserSessionAccessor(Control uiOwner, BrowserService browserService, AppPaths paths)
+    public WebView2BrowserSessionAccessor(Control uiOwner, BrowserService browserService, AppPaths paths, SafeUriValidator validator)
     {
         this.uiOwner = uiOwner ?? throw new ArgumentNullException(nameof(uiOwner));
         this.browserService = browserService ?? throw new ArgumentNullException(nameof(browserService));
+        this.validator = validator ?? throw new ArgumentNullException(nameof(validator));
         mediaCache = new MediaCache(paths.MediaCacheDirectory);
     }
 
@@ -47,6 +49,13 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
     {
         try
         {
+            // 安全校验：分享链接必须为允许的公网 http(s) 地址（拒绝私网/回环等，防 SSRF）
+            var pageValidation = await validator.ValidateAsync(pageUri, cancellationToken).ConfigureAwait(false);
+            if (!pageValidation.IsAllowed)
+            {
+                return new BrowserCaptureResult(null, null, null, Array.Empty<BrowserCapturedCandidate>(), BrowserCaptureStatus.Failed, $"链接地址不安全：{pageValidation.Error}");
+            }
+
             await browserService.EnsureHostAsync(cancellationToken).ConfigureAwait(false);
             var (structuredJson, domCandidates, networkRecords) = await browserService.Host
                 .CapturePageAsync(pageUri, cancellationToken).ConfigureAwait(false);
@@ -91,7 +100,10 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
         }
         catch (Exception ex)
         {
-            return new BrowserCaptureResult(null, null, null, Array.Empty<BrowserCapturedCandidate>(), BrowserCaptureStatus.Failed, ErrorChainFormatter.Format(ex));
+            var error = ErrorChainFormatter.Format(ex);
+            var category = ErrorClassifier.Classify(ex, ErrorCategory.Browser);
+            AppLog.MediaResolve.Error($"[{category}] 浏览器捕获失败：{error}", ex);
+            return new BrowserCaptureResult(null, null, null, Array.Empty<BrowserCapturedCandidate>(), BrowserCaptureStatus.Failed, error);
         }
     }
 
@@ -109,6 +121,14 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
         await downloadGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // 安全校验：媒体 URL 必须为允许的公网 http(s) 地址（拒绝私网/回环等，防 SSRF；
+            // 重定向由浏览器网络栈内部处理，最终内容经 MediaFileFinalizer 魔数校验兜底）
+            var mediaValidation = await validator.ValidateAsync(mediaUri, cancellationToken).ConfigureAwait(false);
+            if (!mediaValidation.IsAllowed)
+            {
+                return BrowserDownloadResult.Failed($"媒体地址不安全：{mediaValidation.Error}");
+            }
+
             await browserService.EnsureHostAsync(cancellationToken).ConfigureAwait(false);
             var partPath = $"{targetPath}.part.{taskId:N}";
             Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
@@ -158,7 +178,10 @@ internal sealed class WebView2BrowserSessionAccessor : IBrowserSessionAccessor
         }
         catch (Exception ex)
         {
-            return BrowserDownloadResult.Failed(ErrorChainFormatter.Format(ex));
+            var error = ErrorChainFormatter.Format(ex);
+            var category = ErrorClassifier.Classify(ex, ErrorCategory.Browser);
+            AppLog.Download.Error($"[{category}] 浏览器下载失败：{error}", ex);
+            return BrowserDownloadResult.Failed(error);
         }
         finally
         {

@@ -8,9 +8,9 @@
 
 ## 构建与测试（重要）
 
-- 构建：`dotnet build Transfor.slnx`（要求 0 警告 0 错误）
+- 构建：`dotnet build Transfor.slnx`（要求 0 警告 0 错误；slnx 已不含 tests 项目）
 - 测试：**测试项目是无框架控制台运行器**（`tests/Transfor.Tests`），**必须用 `dotnet run --project tests/Transfor.Tests` 执行**（输出 `All N tests passed.`），`dotnet test` 不会运行任何断言
-- CI（release.yml）已按此配置：restore → build --no-restore → `dotnet run --no-build`
+- **测试文件（tests/）不提交到 GitHub 仓库**（已 .gitignore + git rm --cached，本地保留）；CI（release.yml）不再执行测试，**发布前必须在本地跑全量测试**
 - 测试文件 `Program.cs` 中 `file` 类必须位于文件末尾；新增测试函数需在 Main 中注册调用
 - 新增纯函数时尽量补离线断言（项目风格：解析/格式化逻辑抽纯函数 + 测试）
 
@@ -70,6 +70,6 @@
 
 1. csproj `<Version>` 与 tag 版本一致
 2. 策略文件 latestVersion 已更新（两个通道）
-3. 全量测试通过（`dotnet run --project tests/Transfor.Tests`）
+3. 全量测试通过（本地：`dotnet run --project tests/Transfor.Tests`，测试文件不提交仓库、CI 不再执行）
 4. build 0 警告 0 错误
 5. 浏览器相关改动真机验证（测试用 fakes 无法覆盖真实 WebView2 行为）

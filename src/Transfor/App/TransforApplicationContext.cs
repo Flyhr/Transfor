@@ -1,3 +1,5 @@
+using Microsoft.Web.WebView2.Core;
+
 namespace Transfor;
 
 // 应用级上下文：持有主窗口、历史面板、托盘图标与全局热键，并协调它们之间的跳转
@@ -19,6 +21,9 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
     // 更新检查进行中（防止托盘多次触发并发检查）
     private bool updateCheckRunning;
+
+    // 新界面宿主（Phase 5 预览）：首次打开创建，关闭后仍可再次打开
+    private AppShellForm? appShell;
 
     public TransforApplicationContext(AppServices services)
     {
@@ -43,28 +48,36 @@ internal sealed class TransforApplicationContext : ApplicationContext
             historyStore,
             services.PasteCoordinator);
 
+        // 启动预初始化隐藏宿主：统一线程锚点 = 主窗体，在构造器（STA 主线程 = UI 线程）
+        // 同步创建，消灭首次解析的懒初始化竞态与跨线程风险；
+        // 主窗体不再自动显示（新界面为主界面）——必须先创建句柄，否则后台线程的
+        // 浏览器调度（EnsureUiAnchorReady）会报「主窗口句柄未创建」；
+        // 失败不阻断启动（记录脱敏日志；解析/下载时给出明确提示）
+        _ = mainForm.Handle;
+
         // 启动即挂接浏览器会话（只挂接不启动，首次使用时惰性启动专用 Edge），
-        // Automatic 解析的浏览器兜底无需用户先点击「打开真实 Edge 登录」
+        // Automatic 解析的浏览器兜底无需用户先点击「打开真实 Edge 登录」；
+        // 在锚点句柄创建之后执行（先锚点后浏览器）；
+        // 挂接失败不阻断启动（记录日志；解析前经 AppBridge/媒体页重试并给出真实原因）
         try
         {
             services.Media.EnsureBrowserInitializedAsync(mainForm).GetAwaiter().GetResult();
         }
-        catch
+        catch (Exception ex)
         {
-            // 浏览器不可用不阻断应用启动；相关功能在解析时给出明确提示
+            var category = ErrorClassifier.Classify(ex, ErrorCategory.Browser);
+            AppLog.Browser.Error($"[{category}] 启动浏览器会话挂接失败：{ErrorChainFormatter.Format(ex)}");
         }
 
-        // 启动预初始化隐藏宿主：统一线程锚点 = 主窗体，在构造器（STA 主线程 = UI 线程）
-        // 同步创建，消灭首次解析的懒初始化竞态与跨线程风险；
-        // 失败不阻断启动（解析/下载时给出明确提示）
         try
         {
             services.Browser.UiAnchor = mainForm;
             services.Browser.EnsureHostCoreAsync(CancellationToken.None).GetAwaiter().GetResult();
         }
-        catch
+        catch (Exception hostEx)
         {
-            // 浏览器宿主不可用不阻断应用启动；相关功能在解析时给出明确提示
+            var category = ErrorClassifier.Classify(hostEx, ErrorCategory.Browser);
+            AppLog.Browser.Warn($"[{category}] 浏览器隐藏宿主初始化失败：{hostEx.Message}");
         }
 
         // 创建系统托盘图标：关闭主窗口后进程驻留托盘
@@ -80,11 +93,23 @@ internal sealed class TransforApplicationContext : ApplicationContext
         // 按下全局快捷键时，在鼠标附近呼出历史面板
         hotKeyManager.HotKeyPressed += (_, _) => ShowHistoryPanel();
 
+        CheckWebView2Runtime();
+
         RegisterSavedHotKey();
         mainForm.Shown += MainForm_Shown;
         // 主窗体延迟显示：先完成启动更新检查——
         // 强制更新时不进入主业务界面，直接进入阻断更新循环；其余情况正常显示
         _ = ShowAfterStartupCheckAsync();
+        // 新界面为当前主界面：启动即打开（主窗体保留作托盘/热键载体与旧界面入口）；
+        // WebView2 Runtime 缺失时降级为旧界面（不依赖 WebView2 的入口）
+        if (webView2Available)
+        {
+            ShowAppShell();
+        }
+        else
+        {
+            ShowMainWindow();
+        }
     }
 
     // 启动流程：后台检查更新（最多等待 timeout）；强制更新 → 不显示主窗体直接进入阻断循环；
@@ -112,7 +137,8 @@ internal sealed class TransforApplicationContext : ApplicationContext
             return;
         }
 
-        mainForm.Show();
+        // 旧界面（预览）不再自动显示：新界面为当前主界面，启动自动打开；
+        // 旧界面经托盘「旧界面（预览）」手动打开（显示时触发 Shown 提示快捷键问题）
 
         if (result is not null && !timedOut)
         {
@@ -147,11 +173,12 @@ internal sealed class TransforApplicationContext : ApplicationContext
         }
     }
 
-    // 构建托盘右键菜单：打开主窗口 / 设置 / 检查更新 / 退出
+    // 构建托盘右键菜单：新界面（主界面）/ 旧界面（预览）/ 设置 / 检查更新 / 退出
     private ContextMenuStrip CreateTrayMenu()
     {
         var menu = new ContextMenuStrip();
-        menu.Items.Add("打开主窗口", null, (_, _) => ShowMainWindow());
+        menu.Items.Add("旧界面（预览）", null, (_, _) => ShowMainWindow());
+        menu.Items.Add("新界面", null, (_, _) => ShowAppShell());
         menu.Items.Add("设置", null, (_, _) => ShowSettings());
         menu.Items.Add("检查更新", null, (_, _) => _ = CheckAndPromptAsync(manual: true));
         menu.Items.Add(new ToolStripSeparator());
@@ -214,11 +241,78 @@ internal sealed class TransforApplicationContext : ApplicationContext
         mainForm.Activate();
     }
 
+    // WebView2 Runtime 启动检查（Phase 7 Task 7.4）：缺失时记录日志 + 托盘气泡提示一次，
+    // 并标记现代界面不可用（启动与 ShowAppShell 均降级为旧界面，不弹模态、不阻断启动）
+    private bool webView2Available = true;
+
+    private void CheckWebView2Runtime()
+    {
+        try
+        {
+            if (CoreWebView2Environment.GetAvailableBrowserVersionString() is not null)
+            {
+                return;
+            }
+        }
+        catch
+        {
+            // Runtime 未安装时 GetAvailableBrowserVersionString 抛异常，视为缺失
+        }
+
+        webView2Available = false;
+        AppLog.Browser.Warn("未检测到 WebView2 Runtime：现代界面降级为旧界面");
+        trayIcon.ShowBalloonTip(
+            5000,
+            "Transfor",
+            "未检测到 WebView2 Runtime：现代界面不可用，已使用旧界面（浏览器与部分解析功能受限）。",
+            ToolTipIcon.Warning);
+    }
+
     // 以模态对话框打开设置窗口（主窗口不可见时以无所有者方式弹出）
     private void ShowSettings()
     {
         using var settings = new SettingsForm(historyStore, hotKeyManager, services.Browser);
         settings.ShowDialog(mainForm.Visible ? mainForm : null);
+    }
+
+    // 打开新界面宿主（Phase 5 预览）：Web UI + App Bridge；独立 Profile 与互联网浏览器隔离；
+    // 下载协调器事件经 Bridge 推送（随窗体生命周期挂接）
+    private void ShowAppShell()
+    {
+        // Runtime 缺失时降级为旧界面（现代界面依赖 WebView2）
+        if (!webView2Available)
+        {
+            ShowMainWindow();
+            return;
+        }
+
+        if (appShell is null || appShell.IsDisposed)
+        {
+            // 局部捕获：委托解析时闭包引用本方法内的 shell（字段赋值晚于构造）
+            AppShellForm shell = null!;
+            shell = new AppShellForm(
+                new AppBridge(
+                    historyStore,
+                    updatesService,
+                    services.Media.ResolveCoordinator,
+                    services.Media.DownloadCoordinator,
+                    services.Media.State,
+                    services.Media.Preview,
+                    new MediaSizeProbe(services.Media.RequestSender, services.Media.BrowserSessions))
+                {
+                    HotKeyManager = services.HotKeys,
+                    // 浏览器会话惰性初始化（幂等）：与旧界面媒体页同模式，
+                    // 解析前确保浏览器兜底可用，挂接失败时解析给出真实原因而非「尚未启用」
+                    EnsureBrowserInitialized = () => services.Media.EnsureBrowserInitializedAsync(shell),
+                },
+                services.Browser,
+                AppPaths.Default.AppUiProfileDirectory,
+                services.Media.DownloadCoordinator);
+            appShell = shell;
+        }
+
+        appShell.Show();
+        appShell.Activate();
     }
 
     // 呼出历史面板：记录当前前台窗口句柄，作为稍后粘贴的目标
@@ -256,7 +350,10 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
         try
         {
-            // 主窗体仍存活：释放服务并关闭浏览器
+            // 先关闭新界面宿主（WebView2 进程随窗体释放），再释放服务
+            appShell?.Close();
+            appShell = null;
+            // 释放全部服务：媒体先取消下载，浏览器宿主最后释放
             await services.DisposeAsync();
             historyPanel.CloseForExit();
             mainForm.CloseForExit();

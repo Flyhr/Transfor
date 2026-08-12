@@ -222,6 +222,21 @@ internal static class DouyinPageParser
         return true;
     }
 
+    // 视频封面（首帧画面）：video.cover.url_list[0]；仅作预览展示，不参与下载
+    private static string? GetCoverUrl(JsonElement video)
+    {
+        if (!video.TryGetProperty("cover", out var cover) || cover.ValueKind != JsonValueKind.Object
+            || !cover.TryGetProperty("url_list", out var urls)
+            || urls.ValueKind != JsonValueKind.Array
+            || urls.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        var text = urls[0].GetString();
+        return Uri.TryCreate(text, UriKind.Absolute, out var uri) && uri.Scheme is ("http" or "https") ? text : null;
+    }
+
     // 逐图解析：每张图产出静态照片（url_list）与动态视频（image.video）配对资产；
     // 是否为实况图以存在可播放视频地址为最终依据，live_photo_type/clip_type 仅作辅助
     private static void ParseImageItems(
@@ -237,6 +252,9 @@ internal static class DouyinPageParser
 
             var stillVariants = CollectImageVariants(image);
             var motionVariants = CollectImageMotionVariants(image);
+            var motionCover = image.TryGetProperty("video", out var motionVideo) && motionVideo.ValueKind == JsonValueKind.Object
+                ? GetCoverUrl(motionVideo)
+                : null;
 
             // 有真实可播放的动态视频地址才算实况图（音乐链接已被过滤）
             var isLivePhoto = motionVariants.Count > 0;
@@ -260,7 +278,8 @@ internal static class DouyinPageParser
                     motionVariants,
                     sourceIndex,
                     MediaAssetRole.LivePhotoMotion,
-                    pairId));
+                    pairId,
+                    motionCover));
             }
 
             sourceIndex++;
@@ -343,14 +362,16 @@ internal static class DouyinPageParser
                     GetInt(playAddress, "fps"),
                     MediaVariantSource.StructuredData,
                     variants,
-                    GetInt(bitRate, "bit_rate"));
+                    GetInt(bitRate, "bit_rate"),
+                    GetInt64(bitRate, "data_size"));
             }
         }
 
         return variants
             .Where(v => !IsMusicUrl(v.Url))
             .GroupBy(v => v.Url, StringComparer.Ordinal)
-            .Select(group => group.First())
+            // 同 URL 多档（play_addr 与 bit_rate 可能同 URL）：优先保留带真实大小的变体
+            .Select(group => group.OrderByDescending(v => v.ContentLength).First())
             .ToList();
     }
 
@@ -367,10 +388,10 @@ internal static class DouyinPageParser
 
         if (video.TryGetProperty("play_addr", out var playAddr))
         {
-            CollectUrlList(playAddr, "url_list", "video/mp4", width, height, fps, MediaVariantSource.StructuredData, variants);
+            CollectUrlList(playAddr, "url_list", "video/mp4", width, height, fps, MediaVariantSource.StructuredData, variants, dataSize: GetInt64(video, "data_size"));
         }
 
-        // 高清档位：bit_rate 数组每项含 play_addr（带该档分辨率/码率）
+        // 高清档位：bit_rate 数组每项含 play_addr（带该档分辨率/码率/大小）
         if (video.TryGetProperty("bit_rate", out var bitRates) && bitRates.ValueKind == JsonValueKind.Array)
         {
             foreach (var bitRate in bitRates.EnumerateArray())
@@ -383,7 +404,7 @@ internal static class DouyinPageParser
                     CollectUrlList(
                         bitRatePlayAddr, "url_list", "video/mp4",
                         bitRateWidth, bitRateHeight, fps, MediaVariantSource.StructuredData, variants,
-                        bitrateValue);
+                        bitrateValue, GetInt64(bitRate, "data_size"));
                 }
             }
         }
@@ -395,7 +416,7 @@ internal static class DouyinPageParser
 
         if (variants.Count > 0)
         {
-            assets.Add(new DouyinAssetCandidate(0, MediaKind.Video, variants));
+            assets.Add(new DouyinAssetCandidate(0, MediaKind.Video, variants, CoverUrl: GetCoverUrl(video)));
         }
     }
 
@@ -527,7 +548,8 @@ internal static class DouyinPageParser
         int? fps,
         MediaVariantSource source,
         List<DouyinVariantCandidate> variants,
-        long? bitrate = null)
+        long? bitrate = null,
+        long? dataSize = null)
     {
         if (!container.TryGetProperty(propertyName, out var urls) || urls.ValueKind != JsonValueKind.Array)
         {
@@ -538,7 +560,7 @@ internal static class DouyinPageParser
         {
             if (url.GetString() is { Length: > 0 } text)
             {
-                variants.Add(new DouyinVariantCandidate(text, contentType, width, height, fps, bitrate, null, null, source));
+                variants.Add(new DouyinVariantCandidate(text, contentType, width, height, fps, bitrate, dataSize, null, source));
             }
         }
     }
@@ -548,6 +570,9 @@ internal static class DouyinPageParser
 
     private static int? GetInt(JsonElement element, string property)
         => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number ? value.GetInt32() : null;
+
+    private static long? GetInt64(JsonElement element, string property)
+        => element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt64(out var result) ? result : null;
 
     private static int? GetNestedInt(JsonElement element, string container, string property)
         => element.TryGetProperty(container, out var inner) ? GetInt(inner, property) : null;

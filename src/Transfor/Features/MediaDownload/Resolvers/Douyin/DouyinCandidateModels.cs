@@ -19,7 +19,8 @@ internal sealed record DouyinAssetCandidate(
     IReadOnlyList<DouyinVariantCandidate> Variants,
     int SourceIndex = 0,
     MediaAssetRole Role = MediaAssetRole.Normal,
-    string? PairId = null);
+    string? PairId = null,
+    string? CoverUrl = null);
 
 internal sealed record DouyinPageData(
     string? PostId,

@@ -151,6 +151,25 @@ internal static class DownloadFileNameBuilder
             || full.StartsWith(dir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
+    // 作品资产的文件名（与媒体资产角色配对）：
+    // 实况图同一序号 _still 静态照片 + _motion 动态视频；多图带序号；首图不加序号
+    public static string BuildFileName(ResolvedMediaPost post, MediaAsset asset, MediaVariant variant)
+    {
+        var baseName = string.IsNullOrWhiteSpace(post.Title)
+            ? "media"
+            : SanitizeFileName(StripHashtags(post.Title));
+        var ext = ResolveExtension(variant.ContentType, asset.Kind, variant.Uri.AbsolutePath);
+        var number = asset.SourceIndex + 1;
+
+        return asset.Role switch
+        {
+            MediaAssetRole.LivePhotoStill => $"{baseName}_{number:D2}_still{ext}",
+            MediaAssetRole.LivePhotoMotion => $"{baseName}_{number:D2}_motion{ext}",
+            MediaAssetRole.AlbumPreview => $"{baseName}_album_preview{ext}",
+            _ => asset.Index == 0 ? $"{baseName}{ext}" : $"{baseName}_{number:D2}{ext}",
+        };
+    }
+
     private static bool ContainsParentTraversal(string path)
     {
         foreach (var segment in path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))

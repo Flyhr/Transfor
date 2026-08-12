@@ -28,7 +28,13 @@ internal static class DouyinMediaNormalizer
 
                 if (!seen.Add(variantCandidate.Url))
                 {
-                    // 完全相同的候选 URL 去重
+                    // 完全相同的候选 URL 去重：若已有变体缺大小而新候选带 data_size，回填大小
+                    var existing = variants.FirstOrDefault(v => v.Uri.ToString() == variantCandidate.Url);
+                    if (existing is not null && existing.ContentLength is null && variantCandidate.ContentLength is not null)
+                    {
+                        variants[variants.IndexOf(existing)] = existing with { ContentLength = variantCandidate.ContentLength };
+                    }
+
                     continue;
                 }
 
@@ -60,7 +66,8 @@ internal static class DouyinMediaNormalizer
                     variants,
                     candidate.SourceIndex,
                     candidate.Role,
-                    candidate.PairId));
+                    candidate.PairId,
+                    candidate.CoverUrl));
             }
         }
 
