@@ -1110,10 +1110,9 @@ document.getElementById("setting-save").addEventListener("click", async () => {
       proxyAddress: document.getElementById("setting-proxy").value,
     }, 20000);
     const notice = result.restartRequired ? "网络设置将在重启应用后生效。" : "设置已保存。";
-    document.getElementById("settings-save-status").textContent = notice;
     toast(notice);
     loadSettingsUi();
-  } catch (e) { document.getElementById("settings-save-status").textContent = "保存失败：" + e.message; toast(e.message, "error"); }
+  } catch (e) { toast(e.message, "error"); }
 });
 
 document.getElementById("setting-browse").addEventListener("click", async () => {
