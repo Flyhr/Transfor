@@ -38,12 +38,11 @@ internal sealed class HistoryPanelForm : Form
         // 恢复上次查看的工具分类
         currentTool = historyStore.UiState.LastViewedTool;
 
-        // 面板样式：无任务栏入口的置顶工具窗口
-        // FixedSingle 与主窗体（Sizable）使用相同的标准系统标题栏渲染（背景/关闭叉号一致），
-        // 同时保持窗口不可缩放
+        // 面板样式：无边框置顶工具窗口（Focused Flow 白底圆角，无系统标题栏/按钮），
+        // 顶部自绘拖拽条；点击条目自动粘贴并关闭，Esc 隐藏
         Text = "Transfor 历史记录";
         StartPosition = FormStartPosition.Manual;
-        FormBorderStyle = FormBorderStyle.FixedSingle;
+        FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
         KeyPreview = true;
@@ -52,20 +51,35 @@ internal sealed class HistoryPanelForm : Form
         Font = new Font("Segoe UI Variable", 10F);
         Region = CreateRoundedRegion(new Rectangle(0, 0, ClientSize.Width, ClientSize.Height), 12);
 
-        // 布局：工具切换栏 / 历史列表 / 错误提示
+        // 布局：拖拽标题条 / 工具切换栏 / 历史列表 / 错误提示
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             BackColor = ColorBackground,
             Padding = new Padding(14),
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 4,
         };
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
 
-        // 顶部工具切换按钮（胶囊选中态）
+        // 顶部拖拽条（替代系统标题栏；无最小化/最大化/关闭按钮）
+        var titleBar = new Label
+        {
+            Dock = DockStyle.Fill,
+            BackColor = ColorBackground,
+            ForeColor = ColorFaint,
+            Font = new Font("Segoe UI Variable", 9F),
+            Text = "Transfor 历史记录",
+            TextAlign = ContentAlignment.MiddleLeft,
+            Cursor = Cursors.SizeAll,
+            Padding = new Padding(6, 0, 0, 0),
+        };
+        titleBar.MouseDown += TitleBar_MouseDown;
+
+        // 工具切换按钮（胶囊选中态）
         var nav = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, BackColor = ColorBackground, Padding = new Padding(0, 2, 0, 8) };
         quoteButton = CreateToolButton("引号转换");
         quoteButton.Click += (_, _) => SelectTool(TextToolId.QuoteConversion);
@@ -100,11 +114,24 @@ internal sealed class HistoryPanelForm : Form
             TextAlign = ContentAlignment.MiddleLeft,
         };
 
-        root.Controls.Add(nav, 0, 0);
-        root.Controls.Add(historyList, 0, 1);
-        root.Controls.Add(errorLabel, 0, 2);
+        root.Controls.Add(titleBar, 0, 0);
+        root.Controls.Add(nav, 0, 1);
+        root.Controls.Add(historyList, 0, 2);
+        root.Controls.Add(errorLabel, 0, 3);
         Controls.Add(root);
         FormClosing += HistoryPanelForm_FormClosing;
+    }
+
+    // 拖拽条按下：释放捕获并模拟标题栏拖动（无边框窗口仍可移动）
+    private void TitleBar_MouseDown(object? sender, MouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Left)
+        {
+            return;
+        }
+
+        WindowsNative.ReleaseCapture();
+        WindowsNative.SendMessage(Handle, WindowsNative.WmNcLButtonDown, new IntPtr(WindowsNative.HtCaption), IntPtr.Zero);
     }
 
     // 在鼠标附近显示面板；foregroundWindow 为呼出前的目标窗口
