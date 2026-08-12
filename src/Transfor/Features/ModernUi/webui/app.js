@@ -1067,20 +1067,16 @@ function collectHotKey() {
   return { modifiers: mods.join(","), key: document.getElementById("setting-key").value };
 }
 
-// 网络模式三态开关：关闭（直连，蓝）→ 系统代理（橙黄）→ 指定代理（绿，需已修改地址）
+// 网络模式三态分段开关：关闭（蓝，左）→ 系统代理（橙黄，中）→ 指定代理（绿，右）
 let networkState = "direct";
-let originalProxyAddress = "";
-const networkToggleLabels = { direct: "关闭", system: "系统代理", custom: "指定代理" };
 const networkToggle = document.getElementById("network-toggle");
-const networkToggleText = document.getElementById("network-toggle-text");
 function renderNetworkToggle() {
-  networkToggle.className = "network-toggle state-" + networkState + (networkState === "direct" ? "" : " state-on");
-  networkToggleText.textContent = networkToggleLabels[networkState];
+  networkToggle.className = "network-toggle state-" + networkState;
   networkToggle.setAttribute("aria-checked", String(networkState !== "direct"));
   document.getElementById("setting-network").value = networkState === "custom" ? "customproxy" : networkState;
+  // 仅指定代理档显示并启用代理地址输入框
   const custom = networkState === "custom";
-  document.getElementById("setting-proxy").disabled = !custom;
-  document.getElementById("setting-proxy").placeholder = custom ? "http://127.0.0.1:7897" : "仅指定代理模式下可编辑";
+  document.getElementById("setting-proxy-row").style.display = custom ? "flex" : "none";
 }
 function cycleNetwork() {
   networkState = networkState === "direct" ? "system" : networkState === "system" ? "custom" : "direct";
@@ -1105,7 +1101,6 @@ function loadSettingsUi() {
     document.getElementById("setting-open-folder").checked = media.openFolderAfterDownload;
     document.getElementById("setting-quality").value = media.qualityPreference;
     networkState = media.networkMode === "customproxy" ? "custom" : media.networkMode === "system" ? "system" : "direct";
-    originalProxyAddress = media.proxyAddress || "";
     document.getElementById("setting-proxy").value = media.proxyAddress;
     renderNetworkToggle();
     document.getElementById("setting-app-version").textContent = "v" + info.version.split("+")[0];
