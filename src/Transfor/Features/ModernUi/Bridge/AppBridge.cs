@@ -185,7 +185,7 @@ internal sealed class AppBridge
         var quoteText = request.GetString("quoteHistoryLimit");
         if (!string.IsNullOrWhiteSpace(quoteText))
         {
-            if (!int.TryParse(quoteText, out var quote) || quote is < 1 or > 500)
+            if (!int.TryParse(quoteText, out var quote) || quote is < AppSettings.MinimumHistoryLimit or > AppSettings.MaximumHistoryLimit)
             {
                 throw new ArgumentException($"非法引号转换历史上限：{quoteText}");
             }
@@ -196,7 +196,7 @@ internal sealed class AppBridge
         var spaceText = request.GetString("spaceHistoryLimit");
         if (!string.IsNullOrWhiteSpace(spaceText))
         {
-            if (!int.TryParse(spaceText, out var space) || space is < 1 or > 500)
+            if (!int.TryParse(spaceText, out var space) || space is < AppSettings.MinimumHistoryLimit or > AppSettings.MaximumHistoryLimit)
             {
                 throw new ArgumentException($"非法去除空格历史上限：{spaceText}");
             }

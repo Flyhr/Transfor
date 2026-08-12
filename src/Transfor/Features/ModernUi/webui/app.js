@@ -1067,9 +1067,28 @@ function collectHotKey() {
   return { modifiers: mods.join(","), key: document.getElementById("setting-key").value };
 }
 
-// 网络模式切换时显示/隐藏代理地址
-document.getElementById("setting-network").addEventListener("change", (e) => {
-  document.getElementById("setting-proxy-row").style.display = e.target.value === "customproxy" ? "flex" : "none";
+// 网络模式三态开关：关闭（直连，蓝）→ 系统代理（橙黄）→ 指定代理（绿，需已修改地址）
+let networkState = "direct";
+let originalProxyAddress = "";
+const networkToggleLabels = { direct: "关闭", system: "系统代理", custom: "指定代理" };
+const networkToggle = document.getElementById("network-toggle");
+const networkToggleText = document.getElementById("network-toggle-text");
+function renderNetworkToggle() {
+  networkToggle.className = "network-toggle state-" + networkState + (networkState === "direct" ? "" : " state-on");
+  networkToggleText.textContent = networkToggleLabels[networkState];
+  networkToggle.setAttribute("aria-checked", String(networkState !== "direct"));
+  document.getElementById("setting-network").value = networkState === "custom" ? "customproxy" : networkState;
+  const custom = networkState === "custom";
+  document.getElementById("setting-proxy").disabled = !custom;
+  document.getElementById("setting-proxy").placeholder = custom ? "http://127.0.0.1:7897" : "仅指定代理模式下可编辑";
+}
+function cycleNetwork() {
+  networkState = networkState === "direct" ? "system" : networkState === "system" ? "custom" : "direct";
+  renderNetworkToggle();
+}
+networkToggle.addEventListener("click", cycleNetwork);
+networkToggle.addEventListener("keydown", (e) => {
+  if (e.key === " " || e.key === "Enter") { e.preventDefault(); cycleNetwork(); }
 });
 
 function loadSettingsUi() {
@@ -1085,21 +1104,23 @@ function loadSettingsUi() {
     document.getElementById("setting-select-all").checked = media.defaultSelectAll;
     document.getElementById("setting-open-folder").checked = media.openFolderAfterDownload;
     document.getElementById("setting-quality").value = media.qualityPreference;
-    document.getElementById("setting-network").value = media.networkMode;
+    networkState = media.networkMode === "customproxy" ? "custom" : media.networkMode === "system" ? "system" : "direct";
+    originalProxyAddress = media.proxyAddress || "";
     document.getElementById("setting-proxy").value = media.proxyAddress;
-    document.getElementById("setting-proxy-row").style.display = media.networkMode === "customproxy" ? "flex" : "none";
+    renderNetworkToggle();
     document.getElementById("setting-app-version").textContent = "v" + info.version.split("+")[0];
   }).catch((e) => settingResult.textContent = "设置加载失败：" + e.message);
 }
 
 document.getElementById("setting-save").addEventListener("click", async () => {
-  // 保存前本地校验：历史上限 1–500、并发 1–8，非法值提前提示不发起请求
+  // 保存前本地校验：历史上限 1–10000、并发 1–8，非法值提前提示不发起请求
   const quoteLimit = Number(document.getElementById("setting-quote-limit").value);
   const spaceLimit = Number(document.getElementById("setting-space-limit").value);
   const concurrency = Number(document.getElementById("setting-concurrency").value);
-  if (!Number.isInteger(quoteLimit) || quoteLimit < 1 || quoteLimit > 500) { toast("引用历史上限需在 1–500 之间。", "error"); return; }
-  if (!Number.isInteger(spaceLimit) || spaceLimit < 1 || spaceLimit > 500) { toast("空格历史上限需在 1–500 之间。", "error"); return; }
-  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) { toast("同时下载任务数需在 1–8 之间。", "error"); return; }
+  if (!Number.isInteger(quoteLimit) || quoteLimit < 1 || quoteLimit > 10000) { toast("引用历史上限最高10000。", "error"); return; }
+  if (!Number.isInteger(spaceLimit) || spaceLimit < 1 || spaceLimit > 10000) { toast("空格历史上限最高10000。", "error"); return; }
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) { toast("同时下载任务数最高8", "error"); return; }
+  if (networkState === "custom" && !document.getElementById("setting-proxy").value.trim()) { toast("指定代理模式下请填写代理地址。", "error"); return; }
 
   const hotKey = collectHotKey();
   try {

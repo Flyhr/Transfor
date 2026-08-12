@@ -169,12 +169,12 @@
         <div class="setting-row">
           <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="12" cy="18" r="2"/></svg></span>
           <span class="label">引用历史上限</span>
-          <input class="input" id="setting-quote-limit" type="number" min="1" max="500" style="width:120px">
+          <input class="input" id="setting-quote-limit" type="number" min="1" max="10000" style="width:120px">
         </div>
         <div class="setting-row">
           <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="12" cy="18" r="2"/></svg></span>
           <span class="label">空格历史上限</span>
-          <input class="input" id="setting-space-limit" type="number" min="1" max="500" style="width:120px">
+          <input class="input" id="setting-space-limit" type="number" min="1" max="10000" style="width:120px">
         </div>
       </div>
       <div class="card settings-card" id="settings-download-card">
@@ -213,17 +213,21 @@
         <h3>网络</h3>
         <div class="setting-row">
           <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
-          <span class="label">代理模式</span>
-          <select class="input" id="setting-network" style="padding:5px">
-            <option value="direct">强制直连</option>
-            <option value="system">系统代理</option>
-            <option value="customproxy">指定代理</option>
+          <span class="label">网络模式</span>
+          <button type="button" class="network-toggle state-direct" id="network-toggle" role="switch" aria-checked="false" aria-label="网络模式开关">
+            <span class="network-toggle-knob"></span>
+            <span class="network-toggle-text" id="network-toggle-text">关闭</span>
+          </button>
+          <select id="setting-network" style="display:none">
+            <option value="direct">direct</option>
+            <option value="system">system</option>
+            <option value="customproxy">customproxy</option>
           </select>
         </div>
         <div class="setting-row" id="setting-proxy-row">
           <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
-          <span class="label">自定义代理地址</span>
-          <input class="input" id="setting-proxy" placeholder="http://127.0.0.1:7897" style="flex:1">
+          <span class="label">指定代理地址</span>
+          <input class="input" id="setting-proxy" placeholder="http://127.0.0.1:7897" style="flex:1" disabled>
         </div>
         <div style="color:var(--text-secondary);font-size:12px;margin-top:4px">网络设置将在重启应用后生效。</div>
       </div>
