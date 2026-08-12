@@ -31,6 +31,37 @@ internal sealed class TransforApplicationContext : ApplicationContext
         historyStore = services.State;
         hotKeyManager = services.HotKeys;
         updatesService = services.Updates;
+
+        // 新界面是浏览器唯一 UI 锚点：先创建并显式建立句柄，避免后台浏览器操作
+        // 在 InvokeRequired 尚未可靠前落到错误线程。旧界面仅保留作本阶段 Runtime 回退。
+        appShell = CreateAppShell();
+        _ = appShell.Handle;
+        services.Browser.UiAnchor = appShell;
+
+        // 隐藏宿主必须在 AppShell 的 UI 线程上预初始化；失败不阻断启动，
+        // 后续浏览器兜底会给出明确错误。
+        try
+        {
+            services.Browser.EnsureHostCoreAsync(CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception hostEx)
+        {
+            var category = ErrorClassifier.Classify(hostEx, ErrorCategory.Browser);
+            AppLog.Browser.Warn($"[{category}] 浏览器隐藏宿主初始化失败：{hostEx.Message}");
+        }
+
+        // 启动即挂接浏览器会话（只挂接不启动，首次使用时惰性启动专用 Edge）。
+        // 置于隐藏宿主之后，确保自动解析的浏览器兜底共享同一 UI 锚点。
+        try
+        {
+            services.Media.EnsureBrowserInitializedAsync(appShell).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            var category = ErrorClassifier.Classify(ex, ErrorCategory.Browser);
+            AppLog.Browser.Error($"[{category}] 启动浏览器会话挂接失败：{ErrorChainFormatter.Format(ex)}");
+        }
+
         // 由页面集合构造主窗口外壳：文本转换 + 媒体下载 + 浏览器
         var pages = new IFeaturePage[]
         {
@@ -47,38 +78,6 @@ internal sealed class TransforApplicationContext : ApplicationContext
         historyPanel = new HistoryPanelForm(
             historyStore,
             services.PasteCoordinator);
-
-        // 启动预初始化隐藏宿主：统一线程锚点 = 主窗体，在构造器（STA 主线程 = UI 线程）
-        // 同步创建，消灭首次解析的懒初始化竞态与跨线程风险；
-        // 主窗体不再自动显示（新界面为主界面）——必须先创建句柄，否则后台线程的
-        // 浏览器调度（EnsureUiAnchorReady）会报「主窗口句柄未创建」；
-        // 失败不阻断启动（记录脱敏日志；解析/下载时给出明确提示）
-        _ = mainForm.Handle;
-
-        // 启动即挂接浏览器会话（只挂接不启动，首次使用时惰性启动专用 Edge），
-        // Automatic 解析的浏览器兜底无需用户先点击「打开真实 Edge 登录」；
-        // 在锚点句柄创建之后执行（先锚点后浏览器）；
-        // 挂接失败不阻断启动（记录日志；解析前经 AppBridge/媒体页重试并给出真实原因）
-        try
-        {
-            services.Media.EnsureBrowserInitializedAsync(mainForm).GetAwaiter().GetResult();
-        }
-        catch (Exception ex)
-        {
-            var category = ErrorClassifier.Classify(ex, ErrorCategory.Browser);
-            AppLog.Browser.Error($"[{category}] 启动浏览器会话挂接失败：{ErrorChainFormatter.Format(ex)}");
-        }
-
-        try
-        {
-            services.Browser.UiAnchor = mainForm;
-            services.Browser.EnsureHostCoreAsync(CancellationToken.None).GetAwaiter().GetResult();
-        }
-        catch (Exception hostEx)
-        {
-            var category = ErrorClassifier.Classify(hostEx, ErrorCategory.Browser);
-            AppLog.Browser.Warn($"[{category}] 浏览器隐藏宿主初始化失败：{hostEx.Message}");
-        }
 
         // 创建系统托盘图标：关闭主窗口后进程驻留托盘
         trayIcon = new NotifyIcon
@@ -288,31 +287,54 @@ internal sealed class TransforApplicationContext : ApplicationContext
 
         if (appShell is null || appShell.IsDisposed)
         {
-            // 局部捕获：委托解析时闭包引用本方法内的 shell（字段赋值晚于构造）
-            AppShellForm shell = null!;
-            shell = new AppShellForm(
-                new AppBridge(
-                    historyStore,
-                    updatesService,
-                    services.Media.ResolveCoordinator,
-                    services.Media.DownloadCoordinator,
-                    services.Media.State,
-                    services.Media.Preview,
-                    new MediaSizeProbe(services.Media.RequestSender, services.Media.BrowserSessions))
-                {
-                    HotKeyManager = services.HotKeys,
-                    // 浏览器会话惰性初始化（幂等）：与旧界面媒体页同模式，
-                    // 解析前确保浏览器兜底可用，挂接失败时解析给出真实原因而非「尚未启用」
-                    EnsureBrowserInitialized = () => services.Media.EnsureBrowserInitializedAsync(shell),
-                },
-                services.Browser,
-                AppPaths.Default.AppUiProfileDirectory,
-                services.Media.DownloadCoordinator);
-            appShell = shell;
+            appShell = CreateAppShell();
+            _ = appShell.Handle;
         }
+
+        // 若新界面被意外释放后重建，必须立即恢复浏览器 UI 锚点。
+        services.Browser.UiAnchor = appShell;
 
         appShell.Show();
         appShell.Activate();
+    }
+
+    private AppShellForm CreateAppShell()
+    {
+        // 局部捕获：Bridge 的惰性初始化委托必须引用本次创建的 shell。
+        AppShellForm shell = null!;
+        shell = new AppShellForm(
+            new AppBridge(
+                historyStore,
+                updatesService,
+                services.Media.ResolveCoordinator,
+                services.Media.DownloadCoordinator,
+                services.Media.State,
+                services.Media.Preview,
+                new MediaSizeProbe(services.Media.RequestSender, services.Media.BrowserSessions))
+            {
+                HotKeyManager = services.HotKeys,
+                EnsureBrowserInitialized = () => services.Media.EnsureBrowserInitializedAsync(shell),
+            },
+            services.Browser,
+            AppPaths.Default.AppUiProfileDirectory,
+            services.Media.DownloadCoordinator);
+        shell.FormClosing += AppShell_FormClosing;
+        return shell;
+    }
+
+    // 用户关闭主界面时仅隐藏到托盘；显式「退出」会先设置 exiting，允许真正释放窗体。
+    private void AppShell_FormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (exiting || e.CloseReason != CloseReason.UserClosing)
+        {
+            return;
+        }
+
+        e.Cancel = true;
+        if (appShell is { IsDisposed: false })
+        {
+            appShell.Hide();
+        }
     }
 
     // 呼出历史面板：记录当前前台窗口句柄，作为稍后粘贴的目标
