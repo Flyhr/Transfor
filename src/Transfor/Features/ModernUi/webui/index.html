@@ -10,49 +10,26 @@
 
 <div class="content">
   <section class="page active" id="page-home">
-    <p class="eyebrow">文本处理</p><h1>工作台</h1><p class="placeholder">把输入、处理与结果留在同一个专注工作区。</p>
+    <p class="eyebrow">文本处理</p><h1>工作台</h1>
     <div class="card">
       <div style="display:flex;gap:6px;margin-bottom:12px">
-        <button class="btn btn-primary" id="tab-quote" data-panel="panel-quote">引号转换</button>
-        <button class="btn" id="tab-space" data-panel="panel-space">去除空格</button>
+        <button class="btn btn-primary" id="tab-quote" data-tool="quote">引号转换</button>
+        <button class="btn" id="tab-space" data-tool="space">去除空格</button>
       </div>
-      <div id="panel-quote">
+      <div id="panel-text">
         <div style="display:flex;gap:12px;align-items:stretch">
           <div style="flex:1;display:flex;flex-direction:column">
-            <textarea id="quote-input" class="input" style="width:100%;min-height:160px;flex:1;resize:vertical" placeholder="输入包含英文或中文双引号的文本…"></textarea>
+            <textarea id="text-input" class="input" style="width:100%;height:141px;resize:none" placeholder="输入包含英文或中文双引号的文本…"></textarea>
           </div>
           <div style="flex:1;display:flex;flex-direction:column;gap:8px">
-            <div style="color:var(--text-secondary)">转换结果</div>
-            <div id="quote-output" style="white-space:pre-wrap;background:var(--hover);border-radius:6px;padding:10px;min-height:160px;flex:1;overflow-y:auto"></div>
+            <div id="text-output" style="white-space:pre-wrap;background:var(--hover);border-radius:6px;padding:10px;height:141px;overflow-y:auto"></div>
+            <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px">
+              <span id="text-status" style="color:var(--text-secondary)"></span>
+              <button class="btn btn-primary" id="text-copy">复制结果</button>
+            </div>
           </div>
         </div>
-        <div style="margin-top:10px">
-          <button class="btn btn-primary" id="quote-copy">复制结果</button>
-          <span id="quote-status" style="color:var(--text-secondary);margin-left:8px"></span>
-        </div>
       </div>
-      <div id="panel-space" style="display:none">
-        <div style="display:flex;gap:12px;align-items:stretch">
-          <div style="flex:1;display:flex;flex-direction:column">
-            <textarea id="space-input" class="input" style="width:100%;min-height:160px;flex:1;resize:vertical" placeholder="输入包含半角/全角空格的文本…"></textarea>
-          </div>
-          <div style="flex:1;display:flex;flex-direction:column;gap:8px">
-            <div style="color:var(--text-secondary)">转换结果</div>
-            <div id="space-output" style="white-space:pre-wrap;background:var(--hover);border-radius:6px;padding:10px;min-height:160px;flex:1;overflow-y:auto"></div>
-          </div>
-        </div>
-        <div style="margin-top:10px">
-          <button class="btn btn-primary" id="space-copy">复制结果</button>
-          <span id="space-status" style="color:var(--text-secondary);margin-left:8px"></span>
-        </div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="row" style="margin-bottom:4px">
-        <h3 style="margin:0">最近文本</h3>
-        <span id="home-version-status" style="margin-left:auto;color:var(--text-secondary);font-size:12px"></span>
-      </div>
-      <div id="home-recent-text" style="color:var(--text-secondary);font-size:12px">加载中…</div>
     </div>
   </section>
 
@@ -178,78 +155,129 @@
 
   <section class="page" id="page-settings">
     <p class="eyebrow">偏好</p><h1>设置</h1>
-    <div class="settings-layout"><nav class="settings-categories"><button class="active" data-setting-panel="general">常规</button><button data-setting-panel="download">下载</button><button data-setting-panel="network">网络</button><button data-setting-panel="shortcut">快捷键</button><button data-setting-panel="browser">浏览器数据</button><button data-setting-panel="update">更新</button></nav><div class="settings-content">
-    <div class="card setting-panel" data-setting-content="general">
-      <h3>常规</h3>
-      <div class="row"><span class="label">更新通道</span>
-        <select class="input" id="setting-channel" style="padding:5px">
-          <option value="stable">Stable 稳定版</option>
-          <option value="beta">Beta 测试版</option>
-        </select>
+    <div class="settings-grid">
+      <div class="card settings-card" id="settings-general-card">
+        <h3>常规</h3>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="12" cy="18" r="2"/></svg></span>
+          <span class="label">更新通道</span>
+          <select class="input" id="setting-channel" style="padding:5px">
+            <option value="stable">Stable 稳定版</option>
+            <option value="beta">Beta 测试版</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="12" cy="18" r="2"/></svg></span>
+          <span class="label">引用历史上限</span>
+          <input class="input" id="setting-quote-limit" type="number" min="1" max="500" style="width:120px">
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="12" cy="18" r="2"/></svg></span>
+          <span class="label">空格历史上限</span>
+          <input class="input" id="setting-space-limit" type="number" min="1" max="500" style="width:120px">
+        </div>
       </div>
-      <div class="row"><span class="label">引号历史上限</span><input class="input" id="setting-quote-limit" type="number" min="1" max="500" style="width:120px"></div>
-      <div class="row"><span class="label">空格历史上限</span><input class="input" id="setting-space-limit" type="number" min="1" max="500" style="width:120px"></div>
+      <div class="card settings-card" id="settings-download-card">
+        <h3>下载</h3>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+          <span class="label">默认保存位置</span>
+          <input class="input" id="setting-directory" style="flex:1">
+          <button class="btn" id="setting-browse">更改</button>
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+          <span class="label">同时下载任务数</span>
+          <input class="input" id="setting-concurrency" type="number" min="1" max="8" style="width:120px">
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></span>
+          <span class="label">下载质量</span>
+          <select class="input" id="setting-quality" style="padding:5px">
+            <option value="highest">最高质量</option>
+            <option value="balanced">Balanced（至少 720p）</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+          <span class="label">解析后默认全选</span>
+          <input type="checkbox" id="setting-select-all" style="transform:scale(1.2)">
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+          <span class="label">下载完成后打开文件夹</span>
+          <input type="checkbox" id="setting-open-folder" style="transform:scale(1.2)">
+        </div>
+      </div>
+      <div class="card settings-card" id="settings-network-card">
+        <h3>网络</h3>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+          <span class="label">代理模式</span>
+          <select class="input" id="setting-network" style="padding:5px">
+            <option value="direct">强制直连</option>
+            <option value="system">系统代理</option>
+            <option value="customproxy">指定代理</option>
+          </select>
+        </div>
+        <div class="setting-row" id="setting-proxy-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+          <span class="label">自定义代理地址</span>
+          <input class="input" id="setting-proxy" placeholder="http://127.0.0.1:7897" style="flex:1">
+        </div>
+        <div style="color:var(--text-secondary);font-size:12px;margin-top:4px">网络设置将在重启应用后生效。</div>
+      </div>
+      <div class="card settings-card" id="settings-shortcut-card">
+        <h3>快捷键</h3>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><line x1="6" y1="10" x2="6.01" y2="10"/><line x1="10" y1="10" x2="10.01" y2="10"/><line x1="14" y1="10" x2="14.01" y2="10"/><line x1="18" y1="10" x2="18.01" y2="10"/><line x1="9" y1="14" x2="15" y2="14"/></svg></span>
+          <span class="label">历史面板快捷键</span>
+          <span style="display:flex;gap:10px;align-items:center;margin-left:auto">
+            <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-ctrl"> Ctrl</label>
+            <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-alt"> Alt</label>
+            <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-shift"> Shift</label>
+            <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-win"> Win</label>
+            <select class="input" id="setting-key" style="padding:5px"></select>
+          </span>
+        </div>
+        <div style="color:var(--text-secondary);font-size:12px;margin-top:4px">修改后立即生效；被其他程序占用时保存会报错。</div>
+      </div>
+      <div class="card settings-card" id="settings-browser-card">
+        <h3>浏览器数据</h3>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></span>
+          <button class="btn" id="setting-clear-cookies">清除 Cookie</button>
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></span>
+          <button class="btn" id="setting-clear-cache">清除缓存</button>
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></span>
+          <button class="btn btn-danger-soft" id="setting-clear-all">清除全部浏览器数据</button>
+        </div>
+        <div id="setting-browser-result" style="color:var(--text-secondary);font-size:12px;margin-top:4px"></div>
+      </div>
+      <div class="card settings-card" id="settings-update-card">
+        <h3>更新</h3>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></span>
+          <span class="label">当前更新通道</span>
+          <span id="setting-update-channel" style="color:var(--text-secondary)"></span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></span>
+          <span class="label">当前版本</span>
+          <span id="setting-app-version" style="color:var(--text-secondary)"></span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></span>
+          <button class="btn" id="setting-check-update">检查更新</button>
+          <span id="setting-result" style="color:var(--text-secondary)"></span>
+        </div>
+      </div>
     </div>
-    <div class="card setting-panel" data-setting-content="download" hidden>
-      <h3>下载</h3>
-      <div class="row">
-        <span class="label">下载目录</span>
-        <input class="input" id="setting-directory" style="flex:1">
-        <button class="btn" id="setting-browse">浏览…</button>
-      </div>
-      <div class="row"><span class="label">最大并发</span><input class="input" id="setting-concurrency" type="number" min="1" max="8" style="width:120px"></div>
-      <div class="row"><span class="label">默认全选</span><input type="checkbox" id="setting-select-all" style="transform:scale(1.2)"></div>
-      <div class="row"><span class="label">下载后打开目录</span><input type="checkbox" id="setting-open-folder" style="transform:scale(1.2)"></div>
-      <div class="row"><span class="label">质量偏好</span>
-        <select class="input" id="setting-quality" style="padding:5px">
-          <option value="highest">最高质量</option>
-          <option value="balanced">Balanced（至少 720p）</option>
-        </select>
-      </div>
-    </div>
-    <div class="card setting-panel" data-setting-content="network" hidden>
-      <h3>网络</h3>
-      <div class="row"><span class="label">网络模式</span>
-        <select class="input" id="setting-network" style="padding:5px">
-          <option value="direct">强制直连</option>
-          <option value="system">系统代理</option>
-          <option value="customproxy">指定代理</option>
-        </select>
-      </div>
-      <div class="row" id="setting-proxy-row"><span class="label">代理地址</span><input class="input" id="setting-proxy" placeholder="http://127.0.0.1:7897" style="flex:1"></div>
-    </div>
-    <div class="card setting-panel" data-setting-content="shortcut" hidden>
-      <h3>快捷键</h3>
-      <div class="row">
-        <span class="label">历史面板快捷键</span>
-        <span style="display:flex;gap:10px;align-items:center">
-          <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-ctrl"> Ctrl</label>
-          <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-alt"> Alt</label>
-          <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-shift"> Shift</label>
-          <label style="display:flex;align-items:center;gap:4px"><input type="checkbox" id="setting-mod-win"> Win</label>
-          <select class="input" id="setting-key" style="padding:5px"></select>
-        </span>
-      </div>
-      <div style="color:var(--text-secondary);font-size:12px">修改后立即生效；被其他程序占用时保存会报错。</div>
-    </div>
-    <div class="card setting-panel" data-setting-content="browser" hidden>
-      <h3>浏览器数据</h3>
-      <div class="row" style="margin-bottom:0">
-        <button class="btn" id="setting-clear-cookies">清除 Cookie</button>
-        <button class="btn" id="setting-clear-cache">清除缓存</button>
-        <button class="btn" id="setting-clear-all">清除全部浏览器数据</button>
-        <span id="setting-browser-result" style="color:var(--text-secondary)"></span>
-      </div>
-    </div>
-    <div class="card setting-panel" data-setting-content="update" hidden>
-      <h3>更新与外观</h3>
-      <div class="row">
-        <button class="btn" id="setting-check-update">检查更新</button>
-        <span id="setting-result" style="color:var(--text-secondary)"></span>
-      </div>
-      <div style="color:var(--text-secondary);font-size:12px;margin-top:6px">更新通道决定收到稳定版还是测试版更新。</div>
-    </div>
-    </div></div><div class="settings-save-bar" id="settings-save-bar"><span id="settings-save-status"></span><button class="btn btn-primary" id="setting-save">保存设置</button></div>
+    <div class="settings-save-bar" id="settings-save-bar"><span id="settings-save-status"></span><button class="btn btn-primary" id="setting-save">保存设置</button></div>
   </section>
 </div>
 

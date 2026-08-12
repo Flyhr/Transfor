@@ -79,10 +79,9 @@ function navigateTo(page) {
   document.querySelectorAll(".page").forEach((p) => p.classList.remove("active"));
   const target = document.getElementById("page-" + page);
   if (target) target.classList.add("active");
-  // 媒体页展示下载快照；历史页自动刷新；工作台仅刷新低权重文本记录。
+  // 媒体页展示下载快照；历史页自动刷新。
   if (page === "media") refreshDownloads();
   if (page === "history") loadHistory();
-  if (page === "home") loadHomeSummary();
   // 浏览器页激活时显示浏览器控件（其余页面隐藏）；通知宿主同步侧边栏高亮
   Bridge.invoke("setBrowserVisible", { visible: page === "browser" }).catch(() => {});
   Bridge.invoke("setActiveNav", { page }).catch(() => {});
@@ -98,70 +97,50 @@ function toast(message, type = "") {
   setTimeout(() => el.remove(), 3000);
 }
 
-/* ===== 文本工具（引号转换/去除空格，点击切换） ===== */
-document.querySelectorAll("#page-home [data-panel]").forEach((tab) => {
+/* ===== 文本工具（引号转换/去除空格，点击切换，共用输入/结果框） ===== */
+let currentTextTool = "quote";
+const textInput = document.getElementById("text-input");
+const textOutput = document.getElementById("text-output");
+const textStatus = document.getElementById("text-status");
+const textPlaceholders = {
+  quote: "输入包含英文或中文双引号的文本…",
+  space: "输入包含半角/全角空格的文本…",
+};
+document.querySelectorAll("#page-home [data-tool]").forEach((tab) => {
   tab.addEventListener("click", () => {
-    document.querySelectorAll("#page-home [data-panel]").forEach((t) => {
+    currentTextTool = tab.dataset.tool;
+    document.querySelectorAll("#page-home [data-tool]").forEach((t) => {
       t.classList.toggle("btn-primary", t === tab);
       t.classList.toggle("btn", t !== tab);
     });
-    document.getElementById("panel-quote").style.display = tab.dataset.panel === "panel-quote" ? "block" : "none";
-    document.getElementById("panel-space").style.display = tab.dataset.panel === "panel-space" ? "block" : "none";
+    textInput.placeholder = textPlaceholders[currentTextTool];
+    convertTextNow();
   });
 });
 
-function setupTextTool(prefix, tool) {
-  const input = document.getElementById(prefix + "-input");
-  const output = document.getElementById(prefix + "-output");
-  const status = document.getElementById(prefix + "-status");
-  let timer = null;
-  input.addEventListener("input", () => {
-    clearTimeout(timer);
-    timer = setTimeout(async () => {
-      try {
-        const { output: text } = await Bridge.invoke("convertText", { tool, input: input.value }, 10000);
-        output.textContent = text;
-      } catch (e) {
-        output.textContent = "";
-        status.textContent = "转换失败：" + e.message;
-      }
-    }, 200);
-  });
-  document.getElementById(prefix + "-copy").addEventListener("click", async () => {
-    const text = output.textContent;
-    if (!text) { status.textContent = "没有可复制的内容。"; return; }
-    try {
-      await Bridge.invoke("copyTextWithHistory", { tool, input: input.value, output: text });
-      status.textContent = "已复制并记录历史。";
-      toast("已复制结果");
-    } catch (e) { status.textContent = e.message; }
-  });
+let textTimer = null;
+async function convertTextNow() {
+  try {
+    const { output: text } = await Bridge.invoke("convertText", { tool: currentTextTool, input: textInput.value }, 10000);
+    textOutput.textContent = text;
+  } catch (e) {
+    textOutput.textContent = "";
+    textStatus.textContent = "转换失败：" + e.message;
+  }
 }
-setupTextTool("quote", "quote");
-setupTextTool("space", "space");
-
-/* ===== 首页：快捷操作/最近记录/版本与更新状态（Phase 6.1 收尾） ===== */
-document.querySelectorAll("#page-home [data-goto]").forEach((btn) => {
-  btn.addEventListener("click", () => navigateTo(btn.dataset.goto));
+textInput.addEventListener("input", () => {
+  clearTimeout(textTimer);
+  textTimer = setTimeout(convertTextNow, 200);
 });
-
-function loadHomeSummary() {
-  return Promise.all([Bridge.invoke("getRecent"), Bridge.invoke("getAppInfo")])
-    .then(([recent, info]) => {
-      const textParts = [];
-      recent.text.quote.slice().reverse().forEach((h) => textParts.push(`引号：${h.input.slice(0, 30)} → ${h.output.slice(0, 30)}`));
-      recent.text.space.slice().reverse().forEach((h) => textParts.push(`空格：${h.input.slice(0, 30)} → ${h.output.slice(0, 30)}`));
-      document.getElementById("home-recent-text").textContent = textParts.length > 0
-        ? textParts.map((t) => "• " + t).join("\n")
-        : "暂无文本转换记录。";
-      const channel = info.channel === "beta" ? "Beta" : "Stable";
-      const version = document.getElementById("home-version-status");
-      if (version) version.textContent = `Transfor v${info.version} · ${channel}`;
-    })
-    .catch(() => {
-      document.getElementById("home-recent-text").textContent = "最近记录加载失败。";
-    });
-}
+document.getElementById("text-copy").addEventListener("click", async () => {
+  const text = textOutput.textContent;
+  if (!text) { textStatus.textContent = "没有可复制的内容。"; return; }
+  try {
+    await Bridge.invoke("copyTextWithHistory", { tool: currentTextTool, input: textInput.value, output: text });
+    textStatus.textContent = "已复制并记录历史。";
+    toast("已复制结果");
+  } catch (e) { textStatus.textContent = e.message; }
+});
 
 /* ===== 媒体下载页（Phase 6.2） ===== */
 const mediaLink = document.getElementById("media-link");
@@ -1094,7 +1073,7 @@ document.getElementById("setting-network").addEventListener("change", (e) => {
 });
 
 function loadSettingsUi() {
-  return Bridge.invoke("getSettings").then((settings) => {
+  return Promise.all([Bridge.invoke("getSettings"), Bridge.invoke("getAppInfo")]).then(([settings, info]) => {
     defaultSelectAllSetting = settings.media.defaultSelectAll;
     document.getElementById("setting-channel").value = settings.updateChannel;
     document.getElementById("setting-quote-limit").value = settings.quoteHistoryLimit;
@@ -1109,6 +1088,8 @@ function loadSettingsUi() {
     document.getElementById("setting-network").value = media.networkMode;
     document.getElementById("setting-proxy").value = media.proxyAddress;
     document.getElementById("setting-proxy-row").style.display = media.networkMode === "customproxy" ? "flex" : "none";
+    document.getElementById("setting-update-channel").textContent = settings.updateChannel === "beta" ? "Beta 测试版" : "Stable 稳定版";
+    document.getElementById("setting-app-version").textContent = "v" + info.version;
   }).catch((e) => settingResult.textContent = "设置加载失败：" + e.message);
 }
 
@@ -1130,10 +1111,10 @@ document.getElementById("setting-save").addEventListener("click", async () => {
       proxyAddress: document.getElementById("setting-proxy").value,
     }, 20000);
     const notice = result.restartRequired ? "网络设置将在重启应用后生效。" : "设置已保存。";
-    settingResult.textContent = notice;
+    document.getElementById("settings-save-status").textContent = notice;
     toast(notice);
     loadSettingsUi();
-  } catch (e) { settingResult.textContent = e.message; toast(e.message, "error"); }
+  } catch (e) { document.getElementById("settings-save-status").textContent = "保存失败：" + e.message; toast(e.message, "error"); }
 });
 
 document.getElementById("setting-browse").addEventListener("click", async () => {
@@ -1176,13 +1157,6 @@ document.querySelectorAll("[data-history-tab]").forEach((button) => {
     document.querySelectorAll("[data-history-tab]").forEach((item) => item.classList.toggle("btn-primary", item === button));
   });
 });
-document.querySelectorAll("[data-setting-panel]").forEach((button) => {
-  button.addEventListener("click", () => {
-    const panel = button.dataset.settingPanel;
-    document.querySelectorAll("[data-setting-panel]").forEach((item) => item.classList.toggle("active", item === button));
-    document.querySelectorAll("[data-setting-content]").forEach((item) => { item.hidden = item.dataset.settingContent !== panel; });
-  });
-});
 document.getElementById("queue-toggle").addEventListener("click", (event) => {
   const content = document.getElementById("queue-content");
   const expanded = event.currentTarget.getAttribute("aria-expanded") === "true";
@@ -1190,11 +1164,10 @@ document.getElementById("queue-toggle").addEventListener("click", (event) => {
   content.hidden = expanded;
 });
 
-/* ===== 初始化（版本/通道信息由宿主侧边栏显示；此处回填设置页与首页） ===== */
+/* ===== 初始化（版本/通道信息由宿主侧边栏显示；此处回填设置页） ===== */
 (async () => {
   try {
     await loadSettingsUi();
-    loadHomeSummary();
   } catch (e) {
     settingResult.textContent = "Bridge 不可用：" + e.message;
   }
