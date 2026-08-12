@@ -1112,7 +1112,11 @@ document.getElementById("setting-save").addEventListener("click", async () => {
     const notice = result.restartRequired ? "网络设置将在重启应用后生效。" : "设置已保存。";
     toast(notice);
     loadSettingsUi();
-  } catch (e) { toast(e.message, "error"); }
+  } catch (e) {
+    toast(e.message, "error");
+    // 保存失败（如快捷键被占用）：重新加载已保存的真实设置，控件恢复修改前的值
+    loadSettingsUi();
+  }
 });
 
 document.getElementById("setting-browse").addEventListener("click", async () => {
