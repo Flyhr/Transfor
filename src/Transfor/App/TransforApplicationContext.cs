@@ -107,16 +107,23 @@ internal sealed class TransforApplicationContext : ApplicationContext
     private async Task ShowAfterStartupCheckAsync()
     {
         var (result, timedOut) = await WaitStartupCheckAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(true);
+        var status = result?.Status ?? UpdateStatus.CheckFailed;
         if (mainForm.IsDisposed)
         {
             return;
         }
 
-        if (!timedOut && result?.Status == UpdateStatus.RequiredUpdate)
+        if (!timedOut && status == UpdateStatus.RequiredUpdate)
         {
             // 强制更新：仅在用户重新检查确认不再强制时才能进入业务界面；
             // 退出或更新重启都不允许回落到主界面。
-            if (!await RunRequiredUpdateLoopAsync(result).ConfigureAwait(true) || mainForm.IsDisposed)
+            var requiredUpdateResolved = await RunRequiredUpdateLoopAsync(result!).ConfigureAwait(true);
+            if (!AppShellLifecyclePolicy.ShouldShowStartupInterface(
+                    status,
+                    timedOut,
+                    requiredUpdateResolved,
+                    mainForm.IsDisposed,
+                    exiting))
             {
                 return;
             }
@@ -130,7 +137,12 @@ internal sealed class TransforApplicationContext : ApplicationContext
             await HandleUpdateResultAsync(result, manual: false).ConfigureAwait(true);
         }
 
-        if (!mainForm.IsDisposed && !exiting)
+        if (AppShellLifecyclePolicy.ShouldShowStartupInterface(
+                status,
+                timedOut,
+                requiredUpdateResolved: false,
+                mainForm.IsDisposed,
+                exiting))
         {
             ShowStartupInterface();
         }
@@ -341,13 +353,17 @@ internal sealed class TransforApplicationContext : ApplicationContext
     {
         // AppShell 初始化失败会在 Close 前显式授权本次程序性关闭，
         // 不能仅依赖 CloseReason（Form.Close 也可能报告为 UserClosing）。
-        if (ReferenceEquals(sender, appShellAllowedToClose))
+        var initializationFailureClose = ReferenceEquals(sender, appShellAllowedToClose);
+        if (initializationFailureClose)
         {
             appShellAllowedToClose = null;
-            return;
         }
 
-        if (exiting || e.CloseReason != CloseReason.UserClosing)
+        var decision = AppShellLifecyclePolicy.DecideClose(
+            initializationFailureClose,
+            exiting,
+            e.CloseReason == CloseReason.UserClosing);
+        if (decision == AppShellCloseDecision.AllowClose)
         {
             return;
         }
