@@ -27,6 +27,7 @@ internal sealed class UpdateDownloadForm : Form
     private readonly TaskCompletionSource<Result> decision = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly CancellationTokenSource cancellation = new();
     private bool completed;
+    private bool failed;
 
     private UpdateDownloadForm(UpdateCheckResult result, bool required)
     {
@@ -109,7 +110,9 @@ internal sealed class UpdateDownloadForm : Form
         catch (Exception ex)
         {
             form.OnFailed(ex.Message);
-            return Result.Failed;
+            // 失败原因在窗口内可见：等待用户确认（点「确定」或关闭窗口）后再返回，
+            // 避免下载失败时窗口闪退、用户看不到任何错误提示
+            return await form.decision.Task.ConfigureAwait(true);
         }
         finally
         {
@@ -160,18 +163,27 @@ internal sealed class UpdateDownloadForm : Form
         }
     }
 
+    // 下载失败（UI 线程）：窗口内展示失败原因并等待用户确认，不自动关闭
     private void OnFailed(string message)
     {
-        if (!IsDisposed)
+        if (IsDisposed)
         {
-            statusLabel.Text = $"下载失败：{message}";
+            return;
         }
+
+        failed = true;
+        statusLabel.Text = $"下载失败：{message}";
+        cancelButton.Text = "确定";
     }
 
-    // 下载中取消：中断下载；下载完成后点「稍后重启」则暂存更新
+    // 下载中取消；失败后点「确定」确认；下载完成后点「稍后重启」则暂存更新
     private void CancelRequested()
     {
-        if (!completed)
+        if (failed)
+        {
+            decision.TrySetResult(Result.Failed);
+        }
+        else if (!completed)
         {
             cancellation.Cancel();
         }
@@ -181,10 +193,14 @@ internal sealed class UpdateDownloadForm : Form
         }
     }
 
-    // 关闭窗体：下载中视为取消；已完成的可选更新视为稍后重启（更新已暂存，下次启动自动应用）
+    // 关闭窗体：失败视为已确认；下载中视为取消；已完成的可选更新视为稍后重启（更新已暂存，下次启动自动应用）
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
-        if (!completed)
+        if (failed)
+        {
+            decision.TrySetResult(Result.Failed);
+        }
+        else if (!completed)
         {
             cancellation.Cancel();
             decision.TrySetResult(Result.Cancelled);
