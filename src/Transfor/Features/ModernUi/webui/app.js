@@ -1092,6 +1092,23 @@ function loadSettingsUi() {
   }).catch((e) => settingResult.textContent = "设置加载失败：" + e.message);
 }
 
+/* ===== 错误对话框：阻断性错误（如快捷键被占用）弹出提示，不崩溃不静默 ===== */
+const HOTKEY_CONFLICT_MARKER = "注册全局快捷键失败";
+function showErrorDialog(message) {
+  document.getElementById("error-dialog-message").textContent = message;
+  document.getElementById("error-dialog").classList.add("open");
+}
+function closeErrorDialog() {
+  document.getElementById("error-dialog").classList.remove("open");
+}
+document.getElementById("error-dialog-close").addEventListener("click", closeErrorDialog);
+document.getElementById("error-dialog").addEventListener("click", (e) => {
+  if (e.target.id === "error-dialog") closeErrorDialog();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeErrorDialog();
+});
+
 document.getElementById("setting-save").addEventListener("click", async () => {
   const hotKey = collectHotKey();
   try {
@@ -1113,7 +1130,15 @@ document.getElementById("setting-save").addEventListener("click", async () => {
     document.getElementById("settings-save-status").textContent = notice;
     toast(notice);
     loadSettingsUi();
-  } catch (e) { document.getElementById("settings-save-status").textContent = "保存失败：" + e.message; toast(e.message, "error"); }
+  } catch (e) {
+    const message = "保存失败：" + e.message;
+    document.getElementById("settings-save-status").textContent = message;
+    toast(e.message, "error");
+    // 快捷键被其他程序占用：弹出错误提示（保存失败不崩溃、不静默）
+    if (e.message.includes(HOTKEY_CONFLICT_MARKER)) {
+      showErrorDialog("快捷键「" + collectHotKey().key + "」已被其他程序占用，无法注册。\n请更换按键组合后重试。");
+    }
+  }
 });
 
 document.getElementById("setting-browse").addEventListener("click", async () => {
