@@ -1088,8 +1088,7 @@ function loadSettingsUi() {
     document.getElementById("setting-network").value = media.networkMode;
     document.getElementById("setting-proxy").value = media.proxyAddress;
     document.getElementById("setting-proxy-row").style.display = media.networkMode === "customproxy" ? "flex" : "none";
-    document.getElementById("setting-update-channel").textContent = settings.updateChannel === "beta" ? "Beta 测试版" : "Stable 稳定版";
-    document.getElementById("setting-app-version").textContent = "v" + info.version;
+    document.getElementById("setting-app-version").textContent = "v" + info.version.split("+")[0];
   }).catch((e) => settingResult.textContent = "设置加载失败：" + e.message);
 }
 
