@@ -1132,7 +1132,7 @@ networkToggle.addEventListener("keydown", (e) => {
 });
 
 function loadSettingsUi() {
-  return Promise.all([Bridge.invoke("getSettings"), Bridge.invoke("getAppInfo")]).then(([settings, info]) => {
+  return Promise.all([Bridge.invoke("getSettings"), Bridge.invoke("getAppInfo"), Bridge.invoke("getEriseSettings")]).then(([settings, info, erise]) => {
     defaultSelectAllSetting = settings.media.defaultSelectAll;
     document.getElementById("setting-channel").value = settings.updateChannel;
     document.getElementById("setting-quote-limit").value = settings.quoteHistoryLimit;
@@ -1149,8 +1149,31 @@ function loadSettingsUi() {
     document.getElementById("setting-proxy").value = media.proxyAddress;
     renderNetworkToggle();
     document.getElementById("setting-app-version").textContent = "v" + info.version.split("+")[0];
+    const eriseOrigin = erise.serverOrigin || "";
+    document.getElementById("setting-erise-origin").value = eriseOrigin;
+    document.getElementById("setting-erise-current").textContent = eriseOrigin || "未配置";
+    const eriseStatus = document.getElementById("setting-erise-status");
+    eriseStatus.textContent = "";
+    eriseStatus.classList.remove("setting-error");
   }).catch((e) => settingResult.textContent = "设置加载失败：" + e.message);
 }
+
+/* ===== Erise 服务器设置（规范化 Origin，仅保存服务器地址） ===== */
+document.getElementById("setting-erise-save").addEventListener("click", async () => {
+  const statusEl = document.getElementById("setting-erise-status");
+  try {
+    const result = await Bridge.invoke("saveEriseSettings", {
+      serverOrigin: document.getElementById("setting-erise-origin").value.trim(),
+    }, 20000);
+    document.getElementById("setting-erise-current").textContent = result.serverOrigin || "未配置";
+    statusEl.textContent = "已保存";
+    statusEl.classList.remove("setting-error");
+    toast("服务器地址已保存。");
+  } catch (e) {
+    statusEl.textContent = e.message;
+    statusEl.classList.add("setting-error");
+  }
+});
 
 /* ===== 通用对话框（确认/提醒，整体风格统一） ===== */
 function showAppDialog(title, message, buttons) {

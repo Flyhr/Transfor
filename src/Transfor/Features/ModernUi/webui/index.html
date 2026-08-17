@@ -177,6 +177,24 @@
           <input class="input" id="setting-space-limit" type="number" min="1" max="10000" style="width:120px">
         </div>
       </div>
+      <div class="card settings-card" id="settings-erise-card">
+        <h3>Erise 服务器</h3>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg></span>
+          <span class="label">服务器地址</span>
+          <input class="input" id="setting-erise-origin" placeholder="https://erise.example.com 或 http://127.0.0.1:6480" style="flex:1">
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
+          <span class="label">当前服务器</span>
+          <span id="setting-erise-current" class="muted">未配置</span>
+        </div>
+        <div class="setting-row">
+          <span class="setting-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg></span>
+          <button class="btn btn-primary" id="setting-erise-save">保存</button>
+          <span id="setting-erise-status" class="muted"></span>
+        </div>
+      </div>
       <div class="card settings-card" id="settings-download-card">
         <h3>下载</h3>
         <div class="setting-row">

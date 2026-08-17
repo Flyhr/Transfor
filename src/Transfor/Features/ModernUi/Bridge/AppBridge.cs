@@ -48,6 +48,9 @@ internal sealed class AppBridge
     // 浏览器数据清除回调（AppShell 提供；scope=cookies/cache/all）
     public Func<string, Task>? ClearBrowserData { get; set; }
 
+    // Erise 服务器设置（应用注入）；未注入时 getEriseSettings 返回空、saveEriseSettings 报错
+    public EriseSettingsStore? EriseSettings { get; set; }
+
     public AppBridge(
         TextStateStore stateStore,
         IUpdateService updateService,
@@ -113,6 +116,8 @@ internal sealed class AppBridge
                 "browseDirectory" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowseDirectoryState()),
                 "clearBrowserData" => await ClearBrowserDataAsync(request).ConfigureAwait(false),
                 "getRecent" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetRecent()),
+                "getEriseSettings" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetEriseSettings()),
+                "saveEriseSettings" => SaveEriseSettings(request),
                 // 安全：未知方法不回显方法名，统一通用错误
                 _ => AppBridgeProtocol.CreateErrorResponse(request.Id, BridgeGenericError),
             };
@@ -131,6 +136,31 @@ internal sealed class AppBridge
         version = AppVersion.Current,
         channel = stateStore.Settings.UpdateChannel.ToString().ToLowerInvariant(),
     };
+
+    private object GetEriseSettings() => new
+    {
+        serverOrigin = EriseSettings?.Current.ServerOrigin,
+    };
+
+    private string SaveEriseSettings(BridgeRequest request)
+    {
+        if (EriseSettings is null)
+        {
+            return AppBridgeProtocol.CreateErrorResponse(request.Id, "Erise 设置服务未初始化。");
+        }
+
+        var origin = request.GetString("serverOrigin");
+        if (!EriseSettings.TrySetOrigin(origin, out var error))
+        {
+            return AppBridgeProtocol.CreateErrorResponse(request.Id, error ?? "服务器地址无效");
+        }
+
+        return AppBridgeProtocol.CreateSuccessResponse(request.Id, new
+        {
+            saved = true,
+            serverOrigin = EriseSettings.Current.ServerOrigin,
+        });
+    }
 
     private object GetSettings() => new
     {

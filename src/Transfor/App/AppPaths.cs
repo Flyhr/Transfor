@@ -32,6 +32,9 @@ internal sealed class AppPaths
     // 媒体下载批次历史（独立于文本历史）
     public string MediaDownloadHistoryFile => Path.Combine(ApplicationDirectory, "download-history.json");
 
+    // Erise 服务器设置（仅规范化 Origin 等非敏感 UI 设置；凭据不落盘）
+    public string EriseSettingsFile => Path.Combine(ApplicationDirectory, "erise-settings.json");
+
     // 专用 Edge 持久化配置目录（登录态/Cookie/缓存只存于此，不写入普通 JSON）
     public string EdgeProfileDirectory => Path.Combine(ApplicationDirectory, "Edge", "Douyin");
 
