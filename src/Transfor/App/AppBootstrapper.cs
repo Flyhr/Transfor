@@ -13,6 +13,8 @@ internal static class AppBootstrapper
         var textState = TextStateStore.Load(paths);
         // 媒体状态独立加载（media-settings.json 与 download-history.json）
         var mediaState = MediaStateStore.Load(paths);
+        // Erise 服务器设置（erise-settings.json；损坏回退未配置，凭据不落盘）
+        var eriseSettings = EriseSettingsStore.Load(paths);
         // 网络模式：默认强制直连（抖音为 CN 服务）；System 用系统代理；CustomProxy 用指定地址
         var networkMode = mediaState.Settings.NetworkMode;
         var proxyAddress = mediaState.Settings.ProxyAddress;
@@ -64,6 +66,7 @@ internal static class AppBootstrapper
         return new AppServices
         {
             State = textState,
+            EriseSettings = eriseSettings,
             Updates = updateService,
             Browser = browserService,
             // 更新安装器工厂：按当前通道创建（Velopack GitHub 源，Beta 读取预发布）

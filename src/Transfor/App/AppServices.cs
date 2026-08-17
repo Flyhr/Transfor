@@ -24,6 +24,9 @@ internal sealed class AppServices : IDisposable, IAsyncDisposable
     // 媒体模块服务组合
     public required MediaServices Media { get; init; }
 
+    // Erise 服务器设置（规范化 Origin 等非敏感 UI 设置；凭据按 Origin 隔离不落盘）
+    public required EriseSettingsStore EriseSettings { get; init; }
+
     // 退出释放顺序（计划要求）：
     // 热键 → 媒体（取消并等待下载 → 协调器/浏览器会话 → HttpClient）→ 浏览器服务；
     // 浏览器服务（WebView2 隐藏宿主）必须最后释放——下载任务仍在使用它

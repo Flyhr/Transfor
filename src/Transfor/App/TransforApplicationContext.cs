@@ -261,6 +261,7 @@ internal sealed class TransforApplicationContext : ApplicationContext
                 new MediaSizeProbe(services.Media.RequestSender, services.Media.BrowserSessions))
             {
                 HotKeyManager = services.HotKeys,
+                EriseSettings = services.EriseSettings,
                 EnsureBrowserInitialized = () => services.Media.EnsureBrowserInitializedAsync(shell),
             },
             services.Browser,
