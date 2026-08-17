@@ -113,14 +113,18 @@ internal sealed class AppBridge
                 "browseDirectory" => AppBridgeProtocol.CreateSuccessResponse(request.Id, BrowseDirectoryState()),
                 "clearBrowserData" => await ClearBrowserDataAsync(request).ConfigureAwait(false),
                 "getRecent" => AppBridgeProtocol.CreateSuccessResponse(request.Id, GetRecent()),
-                _ => AppBridgeProtocol.CreateErrorResponse(request.Id, $"未知方法：{request.Method}"),
+                // 安全：未知方法不回显方法名，统一通用错误
+                _ => AppBridgeProtocol.CreateErrorResponse(request.Id, BridgeGenericError),
             };
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            return AppBridgeProtocol.CreateErrorResponse(request.Id, ex.Message);
+            // 安全：异常不回显原始请求或内部消息，统一通用错误
+            return AppBridgeProtocol.CreateErrorResponse(request.Id, BridgeGenericError);
         }
     }
+
+    private const string BridgeGenericError = "Bridge Error";
 
     private object GetAppInfo() => new
     {

@@ -10,7 +10,7 @@ const Bridge = (() => {
     return new Promise((resolve, reject) => {
       const id = nextId++;
       pending.set(id, { resolve, reject });
-      webview.postMessage(JSON.stringify({ id, method, params }));
+      webview.postMessage(JSON.stringify({ protocolVersion: "1.0", id, method, params }));
       setTimeout(() => { if (pending.delete(id)) reject(new Error("调用超时")); }, timeoutMs);
     });
   }

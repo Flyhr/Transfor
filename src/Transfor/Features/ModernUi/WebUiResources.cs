@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Security.AccessControl;
+using System.Security.Principal;
 
 namespace Transfor;
 
@@ -42,4 +44,41 @@ internal static class WebUiResources
 
     internal static bool ContainsAppScript() =>
         typeof(WebUiResources).Assembly.GetManifestResourceNames().Contains(AppScriptResourceName, StringComparer.Ordinal);
+
+    // Phase 5B 加固：为虚拟主机映射创建一次性随机目录（%TEMP%\Transfor\WebUi\{guid}），
+    // 仅保留当前用户 FullControl（移除继承）；进程退出/窗体关闭时调用 DeleteServingDirectory 清理
+    public static string CreateServingDirectory()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "Transfor", "WebUi", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        var identity = WindowsIdentity.GetCurrent().User
+            ?? throw new InvalidOperationException("无法获取当前用户标识。");
+        var security = new DirectorySecurity();
+        security.SetAccessRuleProtection(true, false);
+        security.AddAccessRule(new FileSystemAccessRule(
+            identity,
+            FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None,
+            AccessControlType.Allow));
+        new DirectoryInfo(root).SetAccessControl(security);
+        return root;
+    }
+
+    // Phase 5B 加固：清理临时目录（WebView2 可能仍在异步读取，删除失败静默忽略）
+    public static void DeleteServingDirectory(string directory)
+    {
+        try
+        {
+            if (directory is not null && Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+        catch
+        {
+            // 清理失败不影响主流程
+        }
+    }
 }

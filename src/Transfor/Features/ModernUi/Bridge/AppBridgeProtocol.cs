@@ -1,14 +1,47 @@
+using System.Text;
 using System.Text.Json;
 
 namespace Transfor;
 
-// App Bridge JSON 协议（Phase 5B）：Web UI ↔ C# 应用服务的消息模型；
-// 请求（JS → C#）：{ "id": n, "method": "xxx", "params": {...} }
+// App Bridge JSON 协议（Phase 5B + 5B 加固）：Web UI ↔ C# 应用服务的消息模型；
+// 请求（JS → C#）：{ "protocolVersion": "1.0", "id": n, "method": "xxx", "params": {...} }
 // 响应（C# → JS）：{ "id": n, "result": {...} } 或 { "id": n, "error": "消息" }
 // 推送事件（C# → JS）：{ "event": "xxx", "data": {...} }
 internal static class AppBridgeProtocol
 {
-    // 解析请求；非法消息返回 null（调用方忽略）
+    // 当前支持的协议版本（仅接受此版本）
+    private const string CurrentProtocolVersion = "1.0";
+
+    // UTF-8 编码后请求体上限（1 MiB）
+    internal const int MaxPayloadBytes = 1024 * 1024;
+
+    // WebMessageReceived 可信源：仅本地 UI 虚拟主机（https://appassets.transfor）
+    public static bool IsTrustedMessageSource(string? source)
+    {
+        if (string.IsNullOrWhiteSpace(source)
+            || !Uri.TryCreate(source, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (!string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(uri.UserInfo))
+        {
+            return false;
+        }
+
+        return string.Equals(uri.Host, "appassets.transfor", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // UTF-8 编码后请求体是否在 1 MiB 上限内
+    public static bool IsPayloadWithinLimit(string json) =>
+        Encoding.UTF8.GetByteCount(json) <= MaxPayloadBytes;
+
+    // 解析请求；非法消息（含 protocolVersion 缺失或不支持）返回 null（调用方忽略）
     public static BridgeRequest? ParseRequest(string json)
     {
         try
@@ -24,6 +57,13 @@ internal static class AppBridgeProtocol
 
             var method = methodElement.GetString();
             if (string.IsNullOrWhiteSpace(method))
+            {
+                return null;
+            }
+
+            if (!root.TryGetProperty("protocolVersion", out var versionElement)
+                || versionElement.ValueKind != JsonValueKind.String
+                || !string.Equals(versionElement.GetString(), CurrentProtocolVersion, StringComparison.Ordinal))
             {
                 return null;
             }

@@ -118,6 +118,7 @@ internal sealed class AppShellForm : Form
     private long navigationVersion;
     private Panel? sidebar;
     private string? activeNavPage;
+    private string? webServingDirectory;
     private bool sidebarDark;
 
     // 新界面资源或 WebView2 初始化失败时，在 Close 前通知宿主解除“关闭隐藏到托盘”的拦截。
@@ -329,9 +330,10 @@ internal sealed class AppShellForm : Form
 
             var core = webView.CoreWebView2!;
             // 本地 UI 以虚拟主机映射加载（https 上下文）：data: URI 页面下
-            // C# → JS 的 postMessage 响应会丢失（实测）；嵌入资源先落盘到临时目录
-            var webRoot = Path.Combine(Path.GetTempPath(), "Transfor", "WebUi");
-            Directory.CreateDirectory(webRoot);
+            // C# → JS 的 postMessage 响应会丢失（实测）；嵌入资源先落盘到一次性随机临时目录
+            // （随机化 + 当前用户受限 ACL；窗体关闭时清理）
+            var webRoot = WebUiResources.CreateServingDirectory();
+            webServingDirectory = webRoot;
             File.WriteAllText(Path.Combine(webRoot, "index.html"), html);
             File.WriteAllText(Path.Combine(webRoot, "styles.css"), styles);
             File.WriteAllText(Path.Combine(webRoot, "app.js"), script);
@@ -472,23 +474,39 @@ internal sealed class AppShellForm : Form
     private void PushEvent(string eventName, object? data) =>
         PushEventJson(AppBridgeProtocol.CreateEvent(eventName, data));
 
-    // 窗体关闭时摘除事件推送（协调器事件不再转发）
+    // 窗体关闭时摘除事件推送（协调器事件不再转发）并清理 webui 临时目录
     protected override void Dispose(bool disposing)
     {
         if (disposing)
         {
             events?.Dispose();
             events = null;
+            if (webServingDirectory is not null)
+            {
+                WebUiResources.DeleteServingDirectory(webServingDirectory);
+                webServingDirectory = null;
+            }
         }
 
         base.Dispose(disposing);
     }
 
-    // 消息桥接：请求分发到 AppBridge，响应经 ExecuteScriptAsync 注入回发 Web UI
+    // 消息桥接：请求分发到 AppBridge，响应经 ExecuteScriptAsync 注入回发 Web UI；
+    // 加固：仅接受 AppWebView 自身的本地虚拟主机消息（拒绝浏览器控件/陌生源），且请求体 ≤ 1 MiB
     private void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
+        if (!ReferenceEquals(sender, webView))
+        {
+            return;
+        }
+
+        if (!AppBridgeProtocol.IsTrustedMessageSource(e.Source))
+        {
+            return;
+        }
+
         var requestJson = e.TryGetWebMessageAsString();
-        if (requestJson is null)
+        if (requestJson is null || !AppBridgeProtocol.IsPayloadWithinLimit(requestJson))
         {
             return;
         }
