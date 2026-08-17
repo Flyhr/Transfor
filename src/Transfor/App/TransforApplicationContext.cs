@@ -29,6 +29,9 @@ internal sealed class TransforApplicationContext : ApplicationContext
         hotKeyManager = services.HotKeys;
         updatesService = services.Updates;
 
+        // Server 切换前清理内存 Access Token 与在途刷新（凭据清理契约）
+        services.Erise.Settings.OriginChanged += _ => services.Erise.Auth.ResetSession();
+
         historyPanel = new HistoryPanelForm(
             historyStore,
             services.PasteCoordinator);

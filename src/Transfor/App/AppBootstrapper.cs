@@ -15,6 +15,19 @@ internal static class AppBootstrapper
         var mediaState = MediaStateStore.Load(paths);
         // Erise 服务器设置（erise-settings.json；损坏回退未配置，凭据不落盘）
         var eriseSettings = EriseSettingsStore.Load(paths);
+        // Erise 模块：独立 HttpClient（不复用媒体请求链；30 秒超时，手动跟随重定向）
+        var eriseHttpClient = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+        {
+            Timeout = TimeSpan.FromSeconds(30),
+        };
+        // Access Token 仅存内存（经委托读取）；Refresh Token 仅经 Credential Manager 持久化
+        EriseAuthSession? eriseAuth = null;
+        var eriseClient = new EriseClient(
+            eriseSettings,
+            eriseHttpClient,
+            () => eriseAuth?.CurrentAccessToken,
+            $"Transfor/{AppVersion.Current}");
+        eriseAuth = new EriseAuthSession(eriseClient, new WindowsEriseCredentialStore(), eriseSettings);
         // 网络模式：默认强制直连（抖音为 CN 服务）；System 用系统代理；CustomProxy 用指定地址
         var networkMode = mediaState.Settings.NetworkMode;
         var proxyAddress = mediaState.Settings.ProxyAddress;
@@ -67,6 +80,13 @@ internal static class AppBootstrapper
         {
             State = textState,
             EriseSettings = eriseSettings,
+            Erise = new EriseServices
+            {
+                Settings = eriseSettings,
+                Credentials = new WindowsEriseCredentialStore(),
+                Client = eriseClient,
+                Auth = eriseAuth,
+            },
             Updates = updateService,
             Browser = browserService,
             // 更新安装器工厂：按当前通道创建（Velopack GitHub 源，Beta 读取预发布）
