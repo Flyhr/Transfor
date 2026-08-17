@@ -22,12 +22,13 @@ internal static class AppBootstrapper
         };
         // Access Token 仅存内存（经委托读取）；Refresh Token 仅经 Credential Manager 持久化
         EriseAuthSession? eriseAuth = null;
+        var eriseCredentials = new WindowsEriseCredentialStore();
         var eriseClient = new EriseClient(
             eriseSettings,
             eriseHttpClient,
             () => eriseAuth?.CurrentAccessToken,
             $"Transfor/{AppVersion.Current}");
-        eriseAuth = new EriseAuthSession(eriseClient, new WindowsEriseCredentialStore(), eriseSettings);
+        eriseAuth = new EriseAuthSession(eriseClient, eriseCredentials, eriseSettings);
         // 网络模式：默认强制直连（抖音为 CN 服务）；System 用系统代理；CustomProxy 用指定地址
         var networkMode = mediaState.Settings.NetworkMode;
         var proxyAddress = mediaState.Settings.ProxyAddress;
@@ -83,7 +84,7 @@ internal static class AppBootstrapper
             Erise = new EriseServices
             {
                 Settings = eriseSettings,
-                Credentials = new WindowsEriseCredentialStore(),
+                Credentials = eriseCredentials,
                 Client = eriseClient,
                 Auth = eriseAuth,
             },

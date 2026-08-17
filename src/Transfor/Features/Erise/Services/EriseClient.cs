@@ -139,7 +139,17 @@ internal sealed class EriseClient : IEriseClient
             }
 
             var original = request;
-            request = BuildRedirectRequest(original, location);
+            var redirectUri = new Uri(original.RequestUri!, location);
+            var sameOrigin = IsSameOrigin(original.RequestUri!, redirectUri);
+            if (!sameOrigin && original.Method != HttpMethod.Get && original.Method != HttpMethod.Head)
+            {
+                original.Dispose();
+                response.Dispose();
+                throw new EriseApiException(500000, "跨 Origin 重定向已拒绝");
+            }
+
+            request = await BuildRedirectRequestAsync(original, redirectUri, sameOrigin, cancellationToken)
+                .ConfigureAwait(false);
             original.Dispose();
             response.Dispose();
         }
@@ -147,7 +157,11 @@ internal sealed class EriseClient : IEriseClient
         throw new EriseApiException(500000, "重定向次数过多");
     }
 
-    private static HttpRequestMessage BuildRedirectRequest(HttpRequestMessage original, Uri location)
+    private static async Task<HttpRequestMessage> BuildRedirectRequestAsync(
+        HttpRequestMessage original,
+        Uri location,
+        bool sameOrigin,
+        CancellationToken cancellationToken)
     {
         var next = new HttpRequestMessage(original.Method, location);
         foreach (var (key, values) in original.Headers)
@@ -160,9 +174,21 @@ internal sealed class EriseClient : IEriseClient
         }
 
         // 同 Origin 才保留 Authorization（跨 Origin 重定向一律移除）
-        if (original.Headers.Authorization is not null && IsSameOrigin(original.RequestUri!, location))
+        if (original.Headers.Authorization is not null && sameOrigin)
         {
             next.Headers.Authorization = original.Headers.Authorization;
+        }
+
+        // 同 Origin POST/PUT 等请求复制 body 与 Content headers；跨 Origin 敏感方法已在调用方拒绝
+        if (sameOrigin && original.Content is not null)
+        {
+            var bytes = await original.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+            var content = new ByteArrayContent(bytes);
+            foreach (var (key, values) in original.Content.Headers)
+            {
+                content.Headers.TryAddWithoutValidation(key, values);
+            }
+            next.Content = content;
         }
         return next;
     }
