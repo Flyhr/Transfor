@@ -47,32 +47,31 @@ internal sealed class EriseAuthSession : IEriseClient
         string captchaCode,
         CancellationToken cancellationToken)
     {
-        var tokens = await inner.LoginAsync(username, password, captchaId, captchaCode, cancellationToken).ConfigureAwait(false);
-        var origin = settings.Current.ServerOrigin
-            ?? throw new InvalidOperationException("未配置服务器地址");
+        string origin;
         long generation;
         lock (gate)
         {
+            origin = settings.Current.ServerOrigin
+                ?? throw new InvalidOperationException("未配置服务器地址");
             sessionGeneration++;
             refreshInFlight = null;
+            accessToken = null;
+            accessTokenGeneration++;
             generation = sessionGeneration;
         }
 
-        await credentials.SaveRefreshTokenAsync(origin, tokens.RefreshToken).ConfigureAwait(false);
-        lock (gate)
-        {
-            if (generation == sessionGeneration
-                && string.Equals(settings.Current.ServerOrigin, origin, StringComparison.Ordinal))
-            {
-                accessToken = tokens.AccessToken;
-                accessTokenGeneration++;
-            }
-        }
+        var tokens = await inner.LoginAsync(username, password, captchaId, captchaCode, cancellationToken).ConfigureAwait(false);
+        await ApplyTokensAsync(tokens, origin, generation).ConfigureAwait(false);
         return tokens;
     }
 
-    public Task<EriseAuthTokens> RefreshAsync(string refreshToken, CancellationToken cancellationToken) =>
-        inner.RefreshAsync(refreshToken, cancellationToken);
+    public async Task<EriseAuthTokens> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
+    {
+        var (origin, generation) = CaptureSession();
+        var tokens = await inner.RefreshAsync(refreshToken, cancellationToken).ConfigureAwait(false);
+        await ApplyTokensAsync(tokens, origin, generation).ConfigureAwait(false);
+        return tokens;
+    }
 
     public async Task LogoutAsync(string refreshToken, CancellationToken cancellationToken)
     {
@@ -183,15 +182,10 @@ internal sealed class EriseAuthSession : IEriseClient
                 return false;
             }
 
-            await credentials.SaveRefreshTokenAsync(origin!, tokens.RefreshToken).ConfigureAwait(false);
-            lock (gate)
+            await ApplyTokensAsync(tokens, origin!, generation).ConfigureAwait(false);
+            if (!IsCurrentSession(origin, generation))
             {
-                if (!IsCurrentSessionUnsafe(origin, generation))
-                {
-                    return false;
-                }
-                accessToken = tokens.AccessToken;
-                accessTokenGeneration++;
+                return false;
             }
             return true;
         }
@@ -228,6 +222,33 @@ internal sealed class EriseAuthSession : IEriseClient
     private bool IsCurrentSessionUnsafe(string? origin, long generation) =>
         generation == sessionGeneration
         && string.Equals(settings.Current.ServerOrigin, origin, StringComparison.Ordinal);
+
+    private (string Origin, long Generation) CaptureSession()
+    {
+        lock (gate)
+        {
+            return (settings.Current.ServerOrigin
+                ?? throw new InvalidOperationException("未配置服务器地址"), sessionGeneration);
+        }
+    }
+
+    private async Task ApplyTokensAsync(EriseAuthTokens tokens, string origin, long generation)
+    {
+        if (!IsCurrentSession(origin, generation))
+        {
+            return;
+        }
+
+        await credentials.SaveRefreshTokenAsync(origin, tokens.RefreshToken).ConfigureAwait(false);
+        lock (gate)
+        {
+            if (IsCurrentSessionUnsafe(origin, generation))
+            {
+                accessToken = tokens.AccessToken;
+                accessTokenGeneration++;
+            }
+        }
+    }
 
     private long GetAccessTokenGeneration()
     {

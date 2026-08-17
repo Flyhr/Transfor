@@ -97,6 +97,14 @@ internal sealed class EriseClient : IEriseClient
         var request = BuildRequest(method, new Uri(origin, path.TrimStart('/')), body, authenticated);
         using var response = await SendWithRedirectsAsync(request, cancellationToken).ConfigureAwait(false);
         var raw = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
+        {
+            throw new EriseUnauthorizedException(401000, ExtractMessage(raw) ?? "未授权");
+        }
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new EriseApiException(500000, ExtractMessage(raw) ?? $"HTTP {(int)response.StatusCode}");
+        }
         return ParseEnvelope(raw);
     }
 
@@ -238,6 +246,23 @@ internal sealed class EriseClient : IEriseClient
         catch (JsonException)
         {
             throw new EriseApiException(500000, "响应格式无效");
+        }
+    }
+
+    private static string? ExtractMessage(string raw)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            return doc.RootElement.ValueKind == JsonValueKind.Object
+                && doc.RootElement.TryGetProperty("message", out var message)
+                && message.ValueKind == JsonValueKind.String
+                ? message.GetString()
+                : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 }
